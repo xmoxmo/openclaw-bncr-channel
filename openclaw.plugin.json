@@ -1,0 +1,9 @@
+{
+  "id": "bncr-channel",
+  "channels": ["bncr"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

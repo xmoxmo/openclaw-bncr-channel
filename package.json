@@ -1,0 +1,8 @@
+{
+  "name": "bncr-channel",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
