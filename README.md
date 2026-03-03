@@ -9,7 +9,7 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件。
 ## 标准安装（OpenClaw）
 
 ```bash
-openclaw plugins install @xmoxmo/bncr
+openclaw plugins install @xmoxmo/openclaw-bncr-channel
 openclaw gateway restart
 openclaw plugins doctor
 ```
