@@ -1,5 +1,5 @@
 {
-  "id": "bncr-channel",
+  "id": "Bncr",
   "channels": ["bncr"],
   "configSchema": {
     "type": "object",

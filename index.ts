@@ -6,9 +6,9 @@ import {
 import { createBncrBridge, createBncrChannelPlugin } from "./src/channel.js";
 
 const plugin = {
-  id: "bncr-channel",
-  name: "Bncr Channel",
-  description: "WS bridge channel for Bncr",
+  id: "Bncr",
+  name: "Bncr",
+  description: "Bncr channel plugin",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     const bridge = createBncrBridge(api);

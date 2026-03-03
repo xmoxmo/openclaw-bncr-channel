@@ -1,16 +1,16 @@
 {
-  "name": "@xmoxmo/openclaw-bncr-channel",
+  "name": "@xmoxmo/bncr",
   "version": "0.0.1",
   "private": false,
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xmoxmo/openclaw-bncr-channel.git"
+    "url": "git+https://github.com/xmoxmo/bncr.git"
   },
-  "homepage": "https://github.com/xmoxmo/openclaw-bncr-channel#readme",
+  "homepage": "https://github.com/xmoxmo/bncr#readme",
   "bugs": {
-    "url": "https://github.com/xmoxmo/openclaw-bncr-channel/issues"
+    "url": "https://github.com/xmoxmo/bncr/issues"
   },
   "publishConfig": {
     "access": "public"
