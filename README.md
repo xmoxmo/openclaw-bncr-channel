@@ -6,6 +6,20 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件。
 - **Bridge Version:** `2`
 - **Push Event:** `bncr.push`
 
+## 标准安装（OpenClaw）
+
+```bash
+openclaw plugins install @xmoxmo/openclaw-bncr-channel
+openclaw gateway restart
+openclaw plugins doctor
+```
+
+更新：
+
+```bash
+openclaw plugins update bncr-channel
+```
+
 ## 当前工作模式（已切换为 push-only）
 
 - 出站消息采用 **push-only**：
