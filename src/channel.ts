@@ -134,6 +134,93 @@ function parseRouteFromHexScope(scopeHex: string): BncrRoute | null {
   }
 }
 
+function parseRouteLike(input: unknown): BncrRoute | null {
+  const platform = asString((input as any)?.platform || "").trim();
+  const groupId = asString((input as any)?.groupId || "").trim();
+  const userId = asString((input as any)?.userId || "").trim();
+  if (!platform || !groupId || !userId) return null;
+  return { platform, groupId, userId };
+}
+
+function parseLegacySessionKeyToStrict(input: string): string | null {
+  const raw = asString(input).trim();
+  if (!raw) return null;
+
+  const directLegacy = raw.match(/^agent:main:bncr:direct:([0-9a-fA-F]+):0$/);
+  if (directLegacy?.[1]) {
+    const route = parseRouteFromHexScope(directLegacy[1].toLowerCase());
+    if (route) return buildFallbackSessionKey(route);
+  }
+
+  const bncrLegacy = raw.match(/^bncr:([0-9a-fA-F]+):0$/);
+  if (bncrLegacy?.[1]) {
+    const route = parseRouteFromHexScope(bncrLegacy[1].toLowerCase());
+    if (route) return buildFallbackSessionKey(route);
+  }
+
+  const agentLegacy = raw.match(/^agent:main:bncr:([0-9a-fA-F]+):0$/);
+  if (agentLegacy?.[1]) {
+    const route = parseRouteFromHexScope(agentLegacy[1].toLowerCase());
+    if (route) return buildFallbackSessionKey(route);
+  }
+
+  if (isLowerHex(raw.toLowerCase())) {
+    const route = parseRouteFromHexScope(raw.toLowerCase());
+    if (route) return buildFallbackSessionKey(route);
+  }
+
+  return null;
+}
+
+function isLegacyNoiseRoute(route: BncrRoute): boolean {
+  const platform = asString(route.platform).trim().toLowerCase();
+  const groupId = asString(route.groupId).trim().toLowerCase();
+  const userId = asString(route.userId).trim().toLowerCase();
+
+  // 明确排除历史污染：agent:main:bncr（不是实际外部会话路由）
+  if (platform === "agent" && groupId === "main" && userId === "bncr") return true;
+
+  // 明确排除嵌套遗留：bncr:<hex>:0（非真实外部 peer）
+  if (platform === "bncr" && userId === "0" && isLowerHex(groupId)) return true;
+
+  return false;
+}
+
+function normalizeStoredSessionKey(input: string): { sessionKey: string; route: BncrRoute } | null {
+  const raw = asString(input).trim();
+  if (!raw) return null;
+
+  let taskKey: string | null = null;
+  let base = raw;
+
+  const taskTagged = raw.match(/^(.*):task:([a-z0-9_-]{1,32})$/i);
+  if (taskTagged) {
+    base = asString(taskTagged[1]).trim();
+    taskKey = normalizeTaskKey(taskTagged[2]);
+  }
+
+  const strict = parseStrictBncrSessionKey(base);
+  if (strict) {
+    if (isLegacyNoiseRoute(strict.route)) return null;
+    return {
+      sessionKey: taskKey ? `${strict.sessionKey}:task:${taskKey}` : strict.sessionKey,
+      route: strict.route,
+    };
+  }
+
+  const migrated = parseLegacySessionKeyToStrict(base);
+  if (!migrated) return null;
+
+  const parsed = parseStrictBncrSessionKey(migrated);
+  if (!parsed) return null;
+  if (isLegacyNoiseRoute(parsed.route)) return null;
+
+  return {
+    sessionKey: taskKey ? `${parsed.sessionKey}:task:${taskKey}` : parsed.sessionKey,
+    route: parsed.route,
+  };
+}
+
 const BNCR_SESSION_KEY_PREFIX = "agent:main:bncr:direct:";
 
 function hex2utf8SessionKey(str: string): { sessionKey: string; scope: string } {
@@ -342,35 +429,96 @@ class BncrBridgeRuntime {
 
     this.outbox.clear();
     for (const entry of data.outbox || []) {
-      this.outbox.set(entry.messageId, entry);
+      if (!entry?.messageId) continue;
+      const accountId = normalizeAccountId(entry.accountId);
+      const sessionKey = asString(entry.sessionKey || "").trim();
+      const normalized = normalizeStoredSessionKey(sessionKey);
+      if (!normalized) continue;
+
+      const route = parseRouteLike(entry.route) || normalized.route;
+      const payload = (entry.payload && typeof entry.payload === "object") ? { ...entry.payload } : {};
+      (payload as any).sessionKey = normalized.sessionKey;
+      (payload as any).platform = route.platform;
+      (payload as any).groupId = route.groupId;
+      (payload as any).userId = route.userId;
+
+      const migratedEntry: OutboxEntry = {
+        ...entry,
+        accountId,
+        sessionKey: normalized.sessionKey,
+        route,
+        payload,
+        createdAt: Number(entry.createdAt || now()),
+        retryCount: Number(entry.retryCount || 0),
+        nextAttemptAt: Number(entry.nextAttemptAt || now()),
+        lastAttemptAt: entry.lastAttemptAt ? Number(entry.lastAttemptAt) : undefined,
+        lastError: entry.lastError ? asString(entry.lastError) : undefined,
+      };
+
+      this.outbox.set(migratedEntry.messageId, migratedEntry);
     }
 
-    this.deadLetter = Array.isArray(data.deadLetter) ? data.deadLetter : [];
+    this.deadLetter = [];
+    for (const entry of Array.isArray(data.deadLetter) ? data.deadLetter : []) {
+      if (!entry?.messageId) continue;
+      const accountId = normalizeAccountId(entry.accountId);
+      const sessionKey = asString(entry.sessionKey || "").trim();
+      const normalized = normalizeStoredSessionKey(sessionKey);
+      if (!normalized) continue;
+
+      const route = parseRouteLike(entry.route) || normalized.route;
+      const payload = (entry.payload && typeof entry.payload === "object") ? { ...entry.payload } : {};
+      (payload as any).sessionKey = normalized.sessionKey;
+      (payload as any).platform = route.platform;
+      (payload as any).groupId = route.groupId;
+      (payload as any).userId = route.userId;
+
+      this.deadLetter.push({
+        ...entry,
+        accountId,
+        sessionKey: normalized.sessionKey,
+        route,
+        payload,
+        createdAt: Number(entry.createdAt || now()),
+        retryCount: Number(entry.retryCount || 0),
+        nextAttemptAt: Number(entry.nextAttemptAt || now()),
+        lastAttemptAt: entry.lastAttemptAt ? Number(entry.lastAttemptAt) : undefined,
+        lastError: entry.lastError ? asString(entry.lastError) : undefined,
+      });
+    }
 
     this.sessionRoutes.clear();
     this.routeAliases.clear();
     for (const item of data.sessionRoutes || []) {
-      if (!item?.sessionKey || !item?.route) continue;
-      this.sessionRoutes.set(item.sessionKey, {
-        accountId: normalizeAccountId(item.accountId),
-        route: item.route,
-        updatedAt: Number(item.updatedAt || now()),
-      });
-      this.routeAliases.set(routeKey(normalizeAccountId(item.accountId), item.route), {
-        accountId: normalizeAccountId(item.accountId),
-        route: item.route,
-        updatedAt: Number(item.updatedAt || now()),
-      });
+      const normalized = normalizeStoredSessionKey(asString(item?.sessionKey || ""));
+      if (!normalized) continue;
+
+      const route = parseRouteLike(item?.route) || normalized.route;
+      const accountId = normalizeAccountId(item?.accountId);
+      const updatedAt = Number(item?.updatedAt || now());
+
+      const info = {
+        accountId,
+        route,
+        updatedAt,
+      };
+
+      this.sessionRoutes.set(normalized.sessionKey, info);
+      this.routeAliases.set(routeKey(accountId, route), info);
     }
 
     this.lastSessionByAccount.clear();
     for (const item of data.lastSessionByAccount || []) {
       const accountId = normalizeAccountId(item?.accountId);
-      const sessionKey = asString(item?.sessionKey || "").trim();
-      const scope = asString(item?.scope || "").trim();
+      const normalized = normalizeStoredSessionKey(asString(item?.sessionKey || ""));
       const updatedAt = Number(item?.updatedAt || 0);
-      if (!sessionKey || !scope || !Number.isFinite(updatedAt) || updatedAt <= 0) continue;
-      this.lastSessionByAccount.set(accountId, { sessionKey, scope, updatedAt });
+      if (!normalized || !Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+
+      this.lastSessionByAccount.set(accountId, {
+        sessionKey: normalized.sessionKey,
+        scope: `${normalized.route.platform}:${normalized.route.groupId}:${normalized.route.userId}`,
+        updatedAt,
+      });
     }
 
     this.lastActivityByAccount.clear();
@@ -600,7 +748,6 @@ class BncrBridgeRuntime {
 
   private markSeen(accountId: string, connId: string, clientId?: string) {
     this.gcTransientState();
-    this.markActivity(accountId);
 
     const acc = normalizeAccountId(accountId);
     const key = this.connectionKey(acc, clientId);
@@ -746,7 +893,8 @@ class BncrBridgeRuntime {
       connected,
       linked: connected,
       lastEventAt,
-      mode: connected ? "ws-online" : "ws-offline",
+      // 状态映射：在线=linked，离线=configured
+      mode: connected ? "linked" : "configured",
       meta: this.buildStatusMeta(acc),
     };
   }
@@ -1140,6 +1288,10 @@ class BncrBridgeRuntime {
           },
         });
 
+        // 记录真正的业务活动时间（入站已完成解析并落会话）
+        this.markActivity(accountId);
+        this.scheduleSave();
+
         await this.api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
           ctx: ctxPayload,
           cfg,
@@ -1187,7 +1339,8 @@ class BncrBridgeRuntime {
         running: true,
         connected,
         lastEventAt: lastActAt,
-        mode: connected ? "ws-online" : "ws-offline",
+        // 状态映射：在线=linked，离线=configured
+        mode: connected ? "linked" : "configured",
         lastError: previous?.lastError ?? null,
         meta: this.buildStatusMeta(accountId),
       });
@@ -1259,9 +1412,11 @@ class BncrBridgeRuntime {
 function resolveAccount(cfg: any, accountId?: string | null) {
   const key = normalizeAccountId(accountId);
   const account = cfg?.channels?.[CHANNEL_ID]?.accounts?.[key] || {};
+  const rawName = asString(account?.name || "").trim();
   return {
     accountId: key,
-    name: asString(account?.name || ""),
+    // 清理缺省展示：当 name 与 accountId 一致时视为未命名
+    name: rawName === key ? "" : rawName,
     enabled: account?.enabled !== false,
   };
 }
@@ -1348,9 +1503,9 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       buildAccountSnapshot: async ({ account, runtime }: any) => {
         const rt = runtime || bridge.getAccountRuntimeSnapshot(account?.accountId);
         const meta = rt?.meta || {};
-        const normalizedMode = rt?.mode === "ws-online" || rt?.mode === "ws-offline"
+        const normalizedMode = rt?.mode === "linked" || rt?.mode === "configured"
           ? rt?.mode
-          : (rt?.connected ? "ws-online" : "ws-offline");
+          : (rt?.connected ? "linked" : "configured");
 
         return {
           accountId: account.accountId,
