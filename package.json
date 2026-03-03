@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xmoxmo/bncr.git"
+    "url": "git+https://github.com/xmoxmo/openclaw-bncr-channel.git"
   },
-  "homepage": "https://github.com/xmoxmo/bncr#readme",
+  "homepage": "https://github.com/xmoxmo/openclaw-bncr-channel#readme",
   "bugs": {
-    "url": "https://github.com/xmoxmo/bncr/issues"
+    "url": "https://github.com/xmoxmo/openclaw-bncr-channel/issues"
   },
   "publishConfig": {
     "access": "public"
