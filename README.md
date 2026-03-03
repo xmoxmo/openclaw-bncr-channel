@@ -1,6 +1,6 @@
 # Bncr
 
-OpenClaw 的 Bncr WebSocket Bridge 频道插件。
+OpenClaw 的 Bncr 频道插件。
 
 - **Channel ID:** `bncr`
 - **Bridge Version:** `2`
