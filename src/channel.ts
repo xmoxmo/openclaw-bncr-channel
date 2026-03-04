@@ -1042,20 +1042,48 @@ class BncrBridgeRuntime {
       for (const mediaUrl of mediaList) {
         const media = await this.payloadMediaToBase64(mediaUrl, mediaLocalRoots);
         const messageId = randomUUID();
+        const mediaMsg = first ? asString(payload.text || '') : '';
         const frame = {
+          // bncr 主通道事件
           type: 'message.outbound',
           messageId,
+          idempotencyKey: messageId,
           sessionKey,
+
+          // 新结构（当前推荐）
           message: {
             platform: route.platform,
             groupId: route.groupId,
             userId: route.userId,
             type: media.mimeType,
-            msg: first ? asString(payload.text || '') : '',
+            msg: mediaMsg,
             path: mediaUrl,
             base64: media.mediaBase64,
             fileName: media.fileName,
           },
+
+          // 兼容平铺结构（便于旧客户端直接消费）
+          platform: route.platform,
+          groupId: route.groupId,
+          userId: route.userId,
+          messageType: 'media',
+          mediaType: media.mimeType,
+          mimeType: media.mimeType,
+          msg: mediaMsg,
+          text: mediaMsg,
+          path: mediaUrl,
+          mediaBase64: media.mediaBase64,
+          base64: media.mediaBase64,
+          fileName: media.fileName,
+
+          // 模拟 webchat 的 final assistant 语义（不改变 bncr.push 事件名）
+          stream: 'assistant',
+          state: 'final',
+          data: {
+            text: mediaMsg,
+            message: mediaMsg,
+          },
+
           ts: now(),
         };
 
@@ -1079,9 +1107,13 @@ class BncrBridgeRuntime {
 
     const messageId = randomUUID();
     const frame = {
+      // bncr 主通道事件
       type: 'message.outbound',
       messageId,
+      idempotencyKey: messageId,
       sessionKey,
+
+      // 新结构（当前推荐）
       message: {
         platform: route.platform,
         groupId: route.groupId,
@@ -1092,6 +1124,29 @@ class BncrBridgeRuntime {
         base64: '',
         fileName: '',
       },
+
+      // 兼容平铺结构（便于旧客户端直接消费）
+      platform: route.platform,
+      groupId: route.groupId,
+      userId: route.userId,
+      messageType: 'text',
+      mediaType: '',
+      mimeType: '',
+      msg: text,
+      text,
+      path: '',
+      mediaBase64: '',
+      base64: '',
+      fileName: '',
+
+      // 模拟 webchat 的 final assistant 语义（不改变 bncr.push 事件名）
+      stream: 'assistant',
+      state: 'final',
+      data: {
+        text,
+        message: text,
+      },
+
       ts: now(),
     };
 
