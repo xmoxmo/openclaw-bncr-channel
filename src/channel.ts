@@ -1522,18 +1522,28 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       nativeCommands: false,
     },
     messaging: {
-      // 仅支持 strict sessionKey 直发，不兼容 platform:group:user
+      // 支持 strict sessionKey 与 platform:group:user（自动归一化为 strict sessionKey）
       normalizeTarget: (raw: string) => {
-        const parsed = parseStrictBncrSessionKey(asString(raw).trim());
-        return parsed?.sessionKey;
+        const input = asString(raw).trim();
+        const strict = parseStrictBncrSessionKey(input);
+        if (strict) return strict.sessionKey;
+
+        const route = parseRouteFromScope(input);
+        if (route) return buildFallbackSessionKey(route);
+
+        return undefined;
       },
       targetResolver: {
         looksLikeId: (raw: string, normalized?: string) => {
           const v1 = asString(raw).trim();
           const v2 = asString(normalized || '').trim();
-          return Boolean(parseStrictBncrSessionKey(v1) || (v2 && parseStrictBncrSessionKey(v2)));
+          return Boolean(
+            parseStrictBncrSessionKey(v1)
+            || parseRouteFromScope(v1)
+            || (v2 && (parseStrictBncrSessionKey(v2) || parseRouteFromScope(v2))),
+          );
         },
-        hint: 'Use strict sessionKey target: agent:main:bncr:direct:<hexScope>',
+        hint: 'Use target: agent:main:bncr:direct:<hexScope> or platform:group:user',
       },
     },
     configSchema: BncrConfigSchema,
