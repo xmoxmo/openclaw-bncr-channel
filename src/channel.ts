@@ -1335,6 +1335,7 @@ class BncrBridgeRuntime {
           body: rawBody,
         });
 
+        const displayTo = formatDisplayScope(route);
         const ctxPayload = this.api.runtime.channel.reply.finalizeInboundContext({
           Body: body,
           BodyForAgent: rawBody,
@@ -1343,18 +1344,18 @@ class BncrBridgeRuntime {
           MediaPath: mediaPath,
           MediaType: mimeType,
           From: `${CHANNEL_ID}:${platform}:${groupId}:${userId}`,
-          To: `${CHANNEL_ID}:${platform}:${groupId}:${userId}`,
+          To: displayTo,
           SessionKey: sessionKey,
           AccountId: accountId,
           ChatType: peer.kind,
-          ConversationLabel: `${platform}:${groupId}:${userId}`,
+          ConversationLabel: displayTo,
           SenderId: userId,
           Provider: CHANNEL_ID,
           Surface: CHANNEL_ID,
           MessageSid: msgId,
           Timestamp: Date.now(),
           OriginatingChannel: CHANNEL_ID,
-          OriginatingTo: `${platform}:${groupId}:${userId}`,
+          OriginatingTo: displayTo,
         });
 
         await this.api.runtime.channel.session.recordInboundSession({
