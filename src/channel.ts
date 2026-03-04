@@ -526,8 +526,8 @@ class BncrBridgeRuntime {
 
       this.lastSessionByAccount.set(accountId, {
         sessionKey: normalized.sessionKey,
-        // 展示与直发目标统一：显示 strict sessionKey
-        scope: normalized.sessionKey,
+        // 展示统一为 platform:group:user（由 strict sessionKey 反解得到）
+        scope: `${normalized.route.platform}:${normalized.route.groupId}:${normalized.route.userId}`,
         updatedAt,
       });
     }
@@ -567,8 +567,8 @@ class BncrBridgeRuntime {
         if (!current || updatedAt >= current.updatedAt) {
           this.lastSessionByAccount.set(acc, {
             sessionKey,
-            // 回填时同样统一展示 strict sessionKey
-            scope: sessionKey,
+            // 回填时统一展示为 platform:group:user
+            scope: `${info.route.platform}:${info.route.groupId}:${info.route.userId}`,
             updatedAt,
           });
         }
@@ -871,8 +871,8 @@ class BncrBridgeRuntime {
     this.routeAliases.set(routeKey(acc, route), info);
     this.lastSessionByAccount.set(acc, {
       sessionKey: key,
-      // 状态显示与 message.send 直发目标保持一致
-      scope: key,
+      // 状态展示统一为 platform:group:user
+      scope: `${route.platform}:${route.groupId}:${route.userId}`,
       updatedAt: t,
     });
     this.markActivity(acc, t);
