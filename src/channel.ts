@@ -906,6 +906,58 @@ class BncrBridgeRuntime {
     return alias?.route || parsed.route;
   }
 
+  // 严谨目标解析：
+  // 1) 先接受任意标签输入（strict / platform:group:user / Bncr-platform:group:user）
+  // 2) 再通过已知会话路由反查“真实 sessionKey”
+  // 3) 若反查不到或不属于 bncr，会直接失败（禁止拼凑 key 发送）
+  private resolveVerifiedTarget(rawTarget: string, accountId: string): { sessionKey: string; route: BncrRoute; displayScope: string } {
+    const acc = normalizeAccountId(accountId);
+    const raw = asString(rawTarget).trim();
+    if (!raw) throw new Error('bncr invalid target(empty)');
+
+    let route: BncrRoute | null = null;
+
+    const strict = parseStrictBncrSessionKey(raw);
+    if (strict) {
+      route = strict.route;
+    } else {
+      route = parseRouteFromDisplayScope(raw);
+    }
+
+    if (!route) {
+      throw new Error(`bncr invalid target(label/sessionKey required): ${raw}`);
+    }
+
+    const wantedRouteKey = routeKey(acc, route);
+    let best: { sessionKey: string; route: BncrRoute; updatedAt: number } | null = null;
+
+    for (const [key, info] of this.sessionRoutes.entries()) {
+      if (normalizeAccountId(info.accountId) !== acc) continue;
+      const parsed = parseStrictBncrSessionKey(key);
+      if (!parsed) continue;
+      if (routeKey(acc, parsed.route) !== wantedRouteKey) continue;
+
+      const updatedAt = Number(info.updatedAt || 0);
+      if (!best || updatedAt >= best.updatedAt) {
+        best = {
+          sessionKey: parsed.sessionKey,
+          route: parsed.route,
+          updatedAt,
+        };
+      }
+    }
+
+    if (!best) {
+      throw new Error(`bncr target not found in known sessions: ${raw}`);
+    }
+
+    return {
+      sessionKey: best.sessionKey,
+      route: best.route,
+      displayScope: formatDisplayScope(best.route),
+    };
+  }
+
   private markActivity(accountId: string, at = now()) {
     this.lastActivityByAccount.set(normalizeAccountId(accountId), at);
   }
@@ -1444,41 +1496,35 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
 
-    const parsed = parseStrictBncrSessionKey(to);
-    if (!parsed) {
-      throw new Error(`bncr invalid target(sessionKey required): ${to}`);
-    }
+    const verified = this.resolveVerifiedTarget(to, accountId);
 
-    this.rememberSessionRoute(parsed.sessionKey, accountId, parsed.route);
+    this.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
 
     await this.enqueueFromReply({
       accountId,
-      sessionKey: parsed.sessionKey,
-      route: parsed.route,
+      sessionKey: verified.sessionKey,
+      route: verified.route,
       payload: {
         text: asString(ctx.text || ''),
       },
       mediaLocalRoots: ctx.mediaLocalRoots,
     });
 
-    return { channel: CHANNEL_ID, messageId: randomUUID(), chatId: parsed.sessionKey };
+    return { channel: CHANNEL_ID, messageId: randomUUID(), chatId: verified.sessionKey };
   };
 
   channelSendMedia = async (ctx: any) => {
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
 
-    const parsed = parseStrictBncrSessionKey(to);
-    if (!parsed) {
-      throw new Error(`bncr invalid target(sessionKey required): ${to}`);
-    }
+    const verified = this.resolveVerifiedTarget(to, accountId);
 
-    this.rememberSessionRoute(parsed.sessionKey, accountId, parsed.route);
+    this.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
 
     await this.enqueueFromReply({
       accountId,
-      sessionKey: parsed.sessionKey,
-      route: parsed.route,
+      sessionKey: verified.sessionKey,
+      route: verified.route,
       payload: {
         text: asString(ctx.text || ''),
         mediaUrl: asString(ctx.mediaUrl || ''),
@@ -1486,7 +1532,7 @@ class BncrBridgeRuntime {
       mediaLocalRoots: ctx.mediaLocalRoots,
     });
 
-    return { channel: CHANNEL_ID, messageId: randomUUID(), chatId: parsed.sessionKey };
+    return { channel: CHANNEL_ID, messageId: randomUUID(), chatId: verified.sessionKey };
   };
 }
 
