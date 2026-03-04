@@ -225,16 +225,12 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 - `messageType`（`text` / `media`）
 - `ts`
 
-兼容说明（2026-03-04）：
+说明（2026-03-04）：
 
-- 事件仍为 `bncr.push`，主类型仍为 `type="message.outbound"`。
-- 同时携带两套字段：
-  - 新结构：`message.{ platform,groupId,userId,type,msg,path,base64,fileName }`
-  - 平铺结构：`platform/groupId/userId/msg/text/messageType/mediaBase64...`
-- 额外附带 webchat 风格 final 语义字段（便于统一客户端消费逻辑）：
-  - `stream: "assistant"`
-  - `state: "final"`
-  - `data: { text, message }`
+- 事件为 `bncr.push`，主类型为 `type="message.outbound"`。
+- 仅输出标准嵌套结构：`message.{ platform,groupId,userId,type,msg,path,base64,fileName }`。
+- 不再输出平铺兼容字段。
+- 不再附带 webchat 风格语义字段（`stream/state/data`）。
 
 ---
 
