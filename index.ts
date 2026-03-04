@@ -6,7 +6,7 @@ import {
 import { createBncrBridge, createBncrChannelPlugin } from "./src/channel.js";
 
 const plugin = {
-  id: "Bncr",
+  id: "bncr",
   name: "Bncr",
   description: "Bncr channel plugin",
   configSchema: emptyPluginConfigSchema(),
@@ -30,8 +30,8 @@ const plugin = {
       (opts: GatewayRequestHandlerOptions) => bridge.handleInbound(opts),
     );
     api.registerGatewayMethod(
-      "bncr.pull",
-      (opts: GatewayRequestHandlerOptions) => bridge.handlePull(opts),
+      "bncr.activity",
+      (opts: GatewayRequestHandlerOptions) => bridge.handleActivity(opts),
     );
     api.registerGatewayMethod(
       "bncr.ack",

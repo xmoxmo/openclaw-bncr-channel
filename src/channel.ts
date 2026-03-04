@@ -7,7 +7,6 @@ import type {
   ChatType,
 } from "openclaw/plugin-sdk";
 import {
-  DEFAULT_ACCOUNT_ID,
   createDefaultChannelRuntimeState,
   setAccountEnabledInConfigSection,
   applyAccountNameToChannelSection,
@@ -16,9 +15,10 @@ import {
 } from "openclaw/plugin-sdk";
 
 const CHANNEL_ID = "bncr";
+const BNCR_DEFAULT_ACCOUNT_ID = "primary";
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = "bncr.push";
-const CONNECT_TTL_MS = 45_000;
+const CONNECT_TTL_MS = 120_000;
 const MAX_RETRY = 10;
 
 const BncrConfigSchema = {
@@ -87,6 +87,14 @@ type PersistedState = {
     accountId: string;
     updatedAt: number;
   }>;
+  lastInboundByAccount?: Array<{
+    accountId: string;
+    updatedAt: number;
+  }>;
+  lastOutboundByAccount?: Array<{
+    accountId: string;
+    updatedAt: number;
+  }>;
 };
 
 function now() {
@@ -101,7 +109,7 @@ function asString(v: unknown, fallback = ""): string {
 
 function normalizeAccountId(accountId?: string | null): string {
   const v = asString(accountId || "").trim();
-  return v || DEFAULT_ACCOUNT_ID;
+  return v || BNCR_DEFAULT_ACCOUNT_ID;
 }
 
 function parseRouteFromScope(scope: string): BncrRoute | null {
@@ -385,6 +393,8 @@ class BncrBridgeRuntime {
   private recentInbound = new Map<string, number>();
   private lastSessionByAccount = new Map<string, { sessionKey: string; scope: string; updatedAt: number }>();
   private lastActivityByAccount = new Map<string, number>();
+  private lastInboundByAccount = new Map<string, number>();
+  private lastOutboundByAccount = new Map<string, number>();
 
   private saveTimer: NodeJS.Timeout | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
@@ -529,6 +539,22 @@ class BncrBridgeRuntime {
       this.lastActivityByAccount.set(accountId, updatedAt);
     }
 
+    this.lastInboundByAccount.clear();
+    for (const item of data.lastInboundByAccount || []) {
+      const accountId = normalizeAccountId(item?.accountId);
+      const updatedAt = Number(item?.updatedAt || 0);
+      if (!Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+      this.lastInboundByAccount.set(accountId, updatedAt);
+    }
+
+    this.lastOutboundByAccount.clear();
+    for (const item of data.lastOutboundByAccount || []) {
+      const accountId = normalizeAccountId(item?.accountId);
+      const updatedAt = Number(item?.updatedAt || 0);
+      if (!Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+      this.lastOutboundByAccount.set(accountId, updatedAt);
+    }
+
     // 兼容旧状态文件：若尚未持久化 lastSession*/lastActivity*，从 sessionRoutes 回填。
     if (this.lastSessionByAccount.size === 0 && this.sessionRoutes.size > 0) {
       for (const [sessionKey, info] of this.sessionRoutes.entries()) {
@@ -547,6 +573,9 @@ class BncrBridgeRuntime {
 
         const lastAct = this.lastActivityByAccount.get(acc) || 0;
         if (updatedAt > lastAct) this.lastActivityByAccount.set(acc, updatedAt);
+
+        const lastIn = this.lastInboundByAccount.get(acc) || 0;
+        if (updatedAt > lastIn) this.lastInboundByAccount.set(acc, updatedAt);
       }
     }
   }
@@ -574,6 +603,14 @@ class BncrBridgeRuntime {
         updatedAt: v.updatedAt,
       })),
       lastActivityByAccount: Array.from(this.lastActivityByAccount.entries()).map(([accountId, updatedAt]) => ({
+        accountId,
+        updatedAt,
+      })),
+      lastInboundByAccount: Array.from(this.lastInboundByAccount.entries()).map(([accountId, updatedAt]) => ({
+        accountId,
+        updatedAt,
+      })),
+      lastOutboundByAccount: Array.from(this.lastOutboundByAccount.entries()).map(([accountId, updatedAt]) => ({
         accountId,
         updatedAt,
       })),
@@ -634,6 +671,9 @@ class BncrBridgeRuntime {
 
       ctx.broadcastToConnIds(BNCR_PUSH_EVENT, payload, connIds);
       this.outbox.delete(entry.messageId);
+      this.lastOutboundByAccount.set(entry.accountId, now());
+      this.markActivity(entry.accountId);
+      this.scheduleSave();
       return true;
     } catch (error) {
       entry.lastError = asString((error as any)?.message || error || "push-error");
@@ -870,6 +910,13 @@ class BncrBridgeRuntime {
     const dead = this.deadLetter.filter((v) => v.accountId === acc).length;
     const last = this.lastSessionByAccount.get(acc);
     const lastActAt = this.lastActivityByAccount.get(acc) || null;
+    const lastInboundAt = this.lastInboundByAccount.get(acc) || null;
+    const lastOutboundAt = this.lastOutboundByAccount.get(acc) || null;
+
+    const lastSessionAgo = this.fmtAgo(last?.updatedAt || null);
+    const lastActivityAgo = this.fmtAgo(lastActAt);
+    const lastInboundAgo = this.fmtAgo(lastInboundAt);
+    const lastOutboundAgo = this.fmtAgo(lastOutboundAt);
 
     return {
       pending,
@@ -877,9 +924,13 @@ class BncrBridgeRuntime {
       lastSessionKey: last?.sessionKey || null,
       lastSessionScope: last?.scope || null,
       lastSessionAt: last?.updatedAt || null,
-      lastSessionAgo: this.fmtAgo(last?.updatedAt || null),
+      lastSessionAgo,
       lastActivityAt: lastActAt,
-      lastActivityAgo: this.fmtAgo(lastActAt),
+      lastActivityAgo,
+      lastInboundAt,
+      lastInboundAgo,
+      lastOutboundAt,
+      lastOutboundAgo,
     };
   }
 
@@ -887,12 +938,16 @@ class BncrBridgeRuntime {
     const acc = normalizeAccountId(accountId);
     const connected = this.isOnline(acc);
     const lastEventAt = this.lastActivityByAccount.get(acc) || null;
+    const lastInboundAt = this.lastInboundByAccount.get(acc) || null;
+    const lastOutboundAt = this.lastOutboundByAccount.get(acc) || null;
     return {
       accountId: acc,
       running: true,
       connected,
       linked: connected,
       lastEventAt,
+      lastInboundAt,
+      lastOutboundAt,
       // 状态映射：在线=linked，离线=configured
       mode: connected ? "linked" : "configured",
       meta: this.buildStatusMeta(acc),
@@ -1122,20 +1177,21 @@ class BncrBridgeRuntime {
     respond(true, { ok: true, willRetry: true });
   };
 
-  handlePull = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+  handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
     const accountId = normalizeAccountId(asString(params?.accountId || ""));
     const connId = asString(client?.connId || "").trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || "").trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
 
-    // 新策略：push-only（在线直推，离线积压；上线后自动冲队列）
-    // 为兼容旧客户端，保留方法但固定返回空。
+    // 轻量活动心跳：仅刷新在线活跃状态，不承担拉取职责。
     respond(true, {
       accountId,
-      items: [],
-      count: 0,
-      disabled: "push-only-mode",
+      ok: true,
+      event: "activity",
+      activeConnections: this.activeConnectionCount(accountId),
+      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === accountId).length,
+      deadLetter: this.deadLetter.filter((v) => v.accountId === accountId).length,
       now: now(),
     });
   };
@@ -1289,7 +1345,9 @@ class BncrBridgeRuntime {
         });
 
         // 记录真正的业务活动时间（入站已完成解析并落会话）
-        this.markActivity(accountId);
+        const inboundAt = now();
+        this.lastInboundByAccount.set(accountId, inboundAt);
+        this.markActivity(accountId, inboundAt);
         this.scheduleSave();
 
         await this.api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -1409,21 +1467,28 @@ class BncrBridgeRuntime {
   };
 }
 
+function resolveDefaultDisplayName(rawName: unknown, accountId: string): string {
+  const raw = asString(rawName || "").trim();
+  // 统一兜底：空名 / 与 accountId 重复 / 历史默认名 => Monitor
+  if (!raw || raw === accountId || /^bncr$/i.test(raw) || /^status$/i.test(raw) || /^runtime$/i.test(raw)) return "Monitor";
+  return raw;
+}
+
 function resolveAccount(cfg: any, accountId?: string | null) {
   const key = normalizeAccountId(accountId);
   const account = cfg?.channels?.[CHANNEL_ID]?.accounts?.[key] || {};
-  const rawName = asString(account?.name || "").trim();
+  const displayName = resolveDefaultDisplayName(account?.name, key);
   return {
     accountId: key,
-    // 清理缺省展示：当 name 与 accountId 一致时视为未命名
-    name: rawName === key ? "" : rawName,
+    // accountId(default) 无法隐藏时，给稳定默认名，避免空名或 default(default)
+    name: displayName,
     enabled: account?.enabled !== false,
   };
 }
 
 function listAccountIds(cfg: any): string[] {
   const ids = Object.keys(cfg?.channels?.[CHANNEL_ID]?.accounts || {});
-  return ids.length ? ids : [DEFAULT_ACCOUNT_ID];
+  return ids.length ? ids : [BNCR_DEFAULT_ACCOUNT_ID];
 }
 
 export function createBncrBridge(api: OpenClawPluginApi) {
@@ -1461,13 +1526,15 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         }),
       isEnabled: (account: any) => account?.enabled !== false,
       isConfigured: () => true,
-      describeAccount: (account: any) => ({
-        accountId: account.accountId,
-        // 避免 channels/status 第一行显示 default (default)
-        name: asString(account.name || "").trim() === account.accountId ? "" : account.name,
-        enabled: account.enabled !== false,
-        configured: true,
-      }),
+      describeAccount: (account: any) => {
+        const displayName = resolveDefaultDisplayName(account?.name, account?.accountId);
+        return {
+          accountId: account.accountId,
+          name: displayName,
+          enabled: account.enabled !== false,
+          configured: true,
+        };
+      },
     },
     setup: {
       applyAccountName: ({ cfg, accountId, name }: any) =>
@@ -1497,20 +1564,36 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       sendMedia: bridge.channelSendMedia,
     },
     status: {
-      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
+      defaultRuntime: createDefaultChannelRuntimeState(BNCR_DEFAULT_ACCOUNT_ID, {
         mode: "ws-offline",
       }),
       buildAccountSnapshot: async ({ account, runtime }: any) => {
         const rt = runtime || bridge.getAccountRuntimeSnapshot(account?.accountId);
         const meta = rt?.meta || {};
-        const normalizedMode = rt?.mode === "linked" || rt?.mode === "configured"
-          ? rt?.mode
-          : (rt?.connected ? "linked" : "configured");
+
+        const pending = Number(rt?.pending ?? meta.pending ?? 0);
+        const deadLetter = Number(rt?.deadLetter ?? meta.deadLetter ?? 0);
+        const lastSessionKey = rt?.lastSessionKey ?? meta.lastSessionKey ?? null;
+        const lastSessionScope = rt?.lastSessionScope ?? meta.lastSessionScope ?? null;
+        const lastSessionAt = rt?.lastSessionAt ?? meta.lastSessionAt ?? null;
+        const lastSessionAgo = rt?.lastSessionAgo ?? meta.lastSessionAgo ?? "-";
+        const lastActivityAt = rt?.lastActivityAt ?? meta.lastActivityAt ?? null;
+        const lastActivityAgo = rt?.lastActivityAgo ?? meta.lastActivityAgo ?? "-";
+        const lastInboundAt = rt?.lastInboundAt ?? meta.lastInboundAt ?? null;
+        const lastInboundAgo = rt?.lastInboundAgo ?? meta.lastInboundAgo ?? "-";
+        const lastOutboundAt = rt?.lastOutboundAt ?? meta.lastOutboundAt ?? null;
+        const lastOutboundAgo = rt?.lastOutboundAgo ?? meta.lastOutboundAgo ?? "-";
+        // 右侧状态字段统一：离线时也显示 Status（避免出现 configured 文案）
+        const normalizedMode = rt?.mode === "linked"
+          ? "linked"
+          : "Status";
+
+        const displayName = resolveDefaultDisplayName(account?.name, account?.accountId);
 
         return {
           accountId: account.accountId,
-          // 清理第一行显示：避免 status-all 出现 default (default)
-          name: asString(account.name || "").trim() === account.accountId ? "" : account.name,
+          // default 名不可隐藏时，统一展示稳定默认值
+          name: displayName,
           enabled: account.enabled !== false,
           configured: true,
           linked: Boolean(rt?.connected),
@@ -1519,22 +1602,18 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
           lastEventAt: rt?.lastEventAt ?? null,
           lastError: rt?.lastError ?? null,
           mode: normalizedMode,
-          lastSessionKey: meta.lastSessionKey || null,
-          lastSessionScope: meta.lastSessionScope || null,
-          lastSessionAt: meta.lastSessionAt || null,
-          lastActivityAt: meta.lastActivityAt || null,
-          lastActivityAgo: meta.lastActivityAgo || "-",
-          meta: {
-            ...meta,
-            pending: Number(meta.pending || 0),
-            deadLetter: Number(meta.deadLetter || 0),
-            lastSessionKey: meta.lastSessionKey || null,
-            lastSessionScope: meta.lastSessionScope || null,
-            lastSessionAt: meta.lastSessionAt || null,
-            lastSessionAgo: meta.lastSessionAgo || "-",
-            lastActivityAt: meta.lastActivityAt || null,
-            lastActivityAgo: meta.lastActivityAgo || "-",
-          },
+          pending,
+          deadLetter,
+          lastSessionKey,
+          lastSessionScope,
+          lastSessionAt,
+          lastSessionAgo,
+          lastActivityAt,
+          lastActivityAgo,
+          lastInboundAt,
+          lastInboundAgo,
+          lastOutboundAt,
+          lastOutboundAgo,
         };
       },
       resolveAccountState: ({ enabled, configured, account, cfg, runtime }: any) => {
@@ -1545,7 +1624,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         return rt?.connected ? "linked" : "configured";
       },
     },
-    gatewayMethods: ["bncr.connect", "bncr.inbound", "bncr.pull", "bncr.ack"],
+    gatewayMethods: ["bncr.connect", "bncr.inbound", "bncr.activity", "bncr.ack"],
     gateway: {
       startAccount: bridge.channelStartAccount,
       stopAccount: bridge.channelStopAccount,
