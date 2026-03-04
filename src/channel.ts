@@ -1518,6 +1518,21 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       reply: true,
       nativeCommands: false,
     },
+    messaging: {
+      // 仅支持 strict sessionKey 直发，不兼容 platform:group:user
+      normalizeTarget: (raw: string) => {
+        const parsed = parseStrictBncrSessionKey(asString(raw).trim());
+        return parsed?.sessionKey;
+      },
+      targetResolver: {
+        looksLikeId: (raw: string, normalized?: string) => {
+          const v1 = asString(raw).trim();
+          const v2 = asString(normalized || '').trim();
+          return Boolean(parseStrictBncrSessionKey(v1) || (v2 && parseStrictBncrSessionKey(v2)));
+        },
+        hint: 'Use strict sessionKey target: agent:main:bncr:direct:<hexScope>',
+      },
+    },
     configSchema: BncrConfigSchema,
     config: {
       listAccountIds,
