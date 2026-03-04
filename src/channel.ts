@@ -120,6 +120,19 @@ function parseRouteFromScope(scope: string): BncrRoute | null {
   return { platform, groupId, userId };
 }
 
+function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
+  const raw = asString(scope).trim();
+  if (!raw) return null;
+
+  // 支持展示标签：Bncr-platform:group:user
+  const stripped = raw.replace(/^Bncr-/i, '');
+  return parseRouteFromScope(stripped);
+}
+
+function formatDisplayScope(route: BncrRoute): string {
+  return `Bncr-${route.platform}:${route.groupId}:${route.userId}`;
+}
+
 function isLowerHex(input: string): boolean {
   const raw = asString(input).trim();
   return !!raw && /^[0-9a-f]+$/.test(raw) && raw.length % 2 === 0;
@@ -526,8 +539,8 @@ class BncrBridgeRuntime {
 
       this.lastSessionByAccount.set(accountId, {
         sessionKey: normalized.sessionKey,
-        // 展示统一为 platform:group:user（由 strict sessionKey 反解得到）
-        scope: `${normalized.route.platform}:${normalized.route.groupId}:${normalized.route.userId}`,
+        // 展示统一为 Bncr-platform:group:user
+        scope: formatDisplayScope(normalized.route),
         updatedAt,
       });
     }
@@ -567,8 +580,8 @@ class BncrBridgeRuntime {
         if (!current || updatedAt >= current.updatedAt) {
           this.lastSessionByAccount.set(acc, {
             sessionKey,
-            // 回填时统一展示为 platform:group:user
-            scope: `${info.route.platform}:${info.route.groupId}:${info.route.userId}`,
+            // 回填时统一展示为 Bncr-platform:group:user
+            scope: formatDisplayScope(info.route),
             updatedAt,
           });
         }
@@ -871,8 +884,8 @@ class BncrBridgeRuntime {
     this.routeAliases.set(routeKey(acc, route), info);
     this.lastSessionByAccount.set(acc, {
       sessionKey: key,
-      // 状态展示统一为 platform:group:user
-      scope: `${route.platform}:${route.groupId}:${route.userId}`,
+      // 状态展示统一为 Bncr-platform:group:user
+      scope: formatDisplayScope(route),
       updatedAt: t,
     });
     this.markActivity(acc, t);
@@ -1522,13 +1535,13 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       nativeCommands: false,
     },
     messaging: {
-      // 支持 strict sessionKey 与 platform:group:user（自动归一化为 strict sessionKey）
+      // 支持 strict sessionKey、platform:group:user、Bncr-platform:group:user（统一归一化 strict sessionKey）
       normalizeTarget: (raw: string) => {
         const input = asString(raw).trim();
         const strict = parseStrictBncrSessionKey(input);
         if (strict) return strict.sessionKey;
 
-        const route = parseRouteFromScope(input);
+        const route = parseRouteFromDisplayScope(input);
         if (route) return buildFallbackSessionKey(route);
 
         return undefined;
@@ -1539,11 +1552,11 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
           const v2 = asString(normalized || '').trim();
           return Boolean(
             parseStrictBncrSessionKey(v1)
-            || parseRouteFromScope(v1)
-            || (v2 && (parseStrictBncrSessionKey(v2) || parseRouteFromScope(v2))),
+            || parseRouteFromDisplayScope(v1)
+            || (v2 && (parseStrictBncrSessionKey(v2) || parseRouteFromDisplayScope(v2))),
           );
         },
-        hint: 'Use target: agent:main:bncr:direct:<hexScope> or platform:group:user',
+        hint: 'Use target: Bncr-platform:group:user (or strict sessionKey)',
       },
     },
     configSchema: BncrConfigSchema,
