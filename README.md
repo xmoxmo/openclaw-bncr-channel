@@ -234,13 +234,24 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 - `scope`：可选，建议传严格 sessionKey（见第 3 节）
 - `msgId`：建议传（便于短窗口去重）
 - `type`：`text/image/video/file/...`
-- `msg`：文本
+- `msg`（或兼容 `text`）：文本
 - `mediaBase64`：媒体 base64
 - `mimeType` / `fileName`：媒体元数据（可选）
 
 校验失败常见错误：
 
 - `platform/userId required`
+
+#### 6.1.1 openclawclient.js（发送端）对齐说明
+
+基于你当前附件版本（`openclawclient` 注释版本 `0.0.2`）核对结果：
+
+- 当前 `inboundSend()` 上行字段是 `sessionKey`；插件入站读取字段是 `scope`。
+  - 现状仍可工作（未传 `scope` 时会按 `platform/groupId/userId` 回退路由）。
+  - 若要与 strict key 完全对齐，建议把 `sessionKey` 改成 `scope`（值保持 strict sessionKey）。
+- 当前 `inboundSend()` 里有 `base64/path/fileName` 占位；插件媒体入站识别字段是 `mediaBase64`。
+  - 文本消息不受影响；若后续要上行媒体，请改为 `mediaBase64(+mimeType/fileName)`。
+- 当前发送端默认账号写的是 `Primary`（首字母大写）；请确保与网关账户 ID 大小写一致。
 
 ### 6.2 OpenClaw -> Bncr（`bncr.push`）
 
