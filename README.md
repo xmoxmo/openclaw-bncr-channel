@@ -6,33 +6,33 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件（`channelId=bncr`）。
 
 ---
 
-## 1. 你会得到什么
+## 1. 概览
 
 - **OpenClaw Channel ID**：`bncr`
 - **Bridge Version**：`2`
 - **出站事件名**：`bncr.push`
-- **出站模式**：`push-only`（不再依赖 pull 轮询）
-- **活动心跳方法**：`bncr.activity`（用于轻量在线保活）
+- **出站模式**：`push-only`（不依赖 pull 轮询）
+- **活动心跳方法**：`bncr.activity`
 
 ---
 
 ## 2. 工作模式（重点）
 
-本插件当前是 **push-only**：
+当前是 **push-only**：
 
 - Bncr 在线：OpenClaw 通过 WS `event=bncr.push` 直接下发回复。
 - Bncr 离线：消息进入 outbox；重连后自动冲队列。
-- `bncr.activity` 用于活动心跳（刷新在线状态，不承载消息拉取）。
-- `bncr.ack` 兼容保留，**非必需**（当前为 fire-and-forget，不依赖 ack 出队）。
+- `bncr.activity` 仅用于在线保活，不承载拉取。
+- `bncr.ack` 兼容保留，当前不是必需链路（fire-and-forget）。
 
-> 结论：新客户端只需要做两件事：
-> 1) 发 `bncr.inbound` 上行消息；2) 消费 `bncr.push` 下行消息。
+> 结论：客户端最小实现只需两件事：
+> 1) 发 `bncr.inbound`；2) 监听 `bncr.push`。
 
 ---
 
 ## 3. SessionKey 规则（严格）
 
-仅接受一种格式：
+严格格式：
 
 ```text
 agent:main:bncr:direct:<hexScope>
@@ -40,40 +40,28 @@ agent:main:bncr:direct:<hexScope>
 
 其中：
 
-- `<hexScope>` 是 `platform:groupId:userId` 的 UTF-8 十六进制编码。
-- 仅允许小写十六进制字符（`0-9a-f`，且长度为偶数）。
-- **不兼容**旧格式（如 `...:<hexScope>:0`、`agent:main:bncr:<hexScope>:0` 等）。
+- `<hexScope>` = `platform:groupId:userId` 的 UTF-8 hex（小写）。
+- 仅允许 `0-9a-f` 且长度为偶数。
+- 旧格式（如 `...:<hexScope>:0`）不再作为标准形态。
 
-### 3.1 编码示例
-
-原始 scope：
+示例：
 
 ```text
-qq:123456:888888
-```
-
-hex 后（示例）：
-
-```text
-71713a3132333435363a383838383838
-```
-
-最终 sessionKey：
-
-```text
-agent:main:bncr:direct:71713a3132333435363a383838383838
+scope     = qq:0:888888
+hexScope  = 71713a303a383838383838
+sessionKey= agent:main:bncr:direct:71713a303a383838383838
 ```
 
 ---
 
 ## 4. Gateway Methods
 
-插件注册了以下网关方法：
+插件注册：
 
 - `bncr.connect`
 - `bncr.inbound`
-- `bncr.activity`（活动心跳，推荐客户端节流调用）
-- `bncr.ack`（兼容保留，非必需）
+- `bncr.activity`
+- `bncr.ack`
 
 ---
 
@@ -81,7 +69,7 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 
 ### Step A：建立 WS 并发送 `bncr.connect`
 
-请求（示例）：
+请求示例：
 
 ```json
 {
@@ -95,7 +83,7 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 }
 ```
 
-成功响应（示例）：
+响应示例：
 
 ```json
 {
@@ -117,9 +105,11 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 }
 ```
 
+> `accountId` 示例是 `primary`，请按你实际配置替换；不传默认使用 `default`。
+
 ### Step B：上行消息用 `bncr.inbound`
 
-请求（文本示例）：
+文本请求示例（`msg` 形态）：
 
 ```json
 {
@@ -127,19 +117,62 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
   "id": "i1",
   "method": "bncr.inbound",
   "params": {
-    "accountId": "default",
+    "accountId": "primary",
     "platform": "qq",
     "groupId": "0",
     "userId": "888888",
     "scope": "agent:main:bncr:direct:71713a303a383838383838",
     "msgId": "msg-1001",
     "type": "text",
+    "msg": "你好"
+  }
+}
+```
+
+文本请求示例（`text` 别名，代码同样兼容）：
+
+```json
+{
+  "type": "req",
+  "id": "i1b",
+  "method": "bncr.inbound",
+  "params": {
+    "accountId": "primary",
+    "platform": "qq",
+    "groupId": "0",
+    "userId": "888888",
+    "scope": "agent:main:bncr:direct:71713a303a383838383838",
+    "msgId": "msg-1001b",
+    "type": "text",
     "text": "你好"
   }
 }
 ```
 
-成功响应（示例）：
+媒体请求示例（字段是 `mediaBase64`）：
+
+```json
+{
+  "type": "req",
+  "id": "i2",
+  "method": "bncr.inbound",
+  "params": {
+    "accountId": "primary",
+    "platform": "qq",
+    "groupId": "0",
+    "userId": "888888",
+    "scope": "agent:main:bncr:direct:71713a303a383838383838",
+    "msgId": "msg-1002",
+    "type": "image/png",
+    "msg": "",
+    "mediaBase64": "<BASE64_PAYLOAD>",
+    "mimeType": "image/png",
+    "fileName": "demo.png"
+  }
+}
+```
+
+响应示例：
 
 ```json
 {
@@ -148,7 +181,7 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
   "ok": true,
   "result": {
     "accepted": true,
-    "accountId": "default",
+    "accountId": "primary",
     "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
     "msgId": "msg-1001",
     "taskKey": null
@@ -156,11 +189,11 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 }
 ```
 
-> 说明：`bncr.inbound` 会先快速 ACK，再异步触发 OpenClaw 处理并经 `bncr.push` 回推结果。
+> `bncr.inbound` 先快速 ACK，再异步处理，最终回复经 `bncr.push` 回推。
 
 ### Step C：消费 `bncr.push`
 
-事件（文本示例）：
+事件示例：
 
 ```json
 {
@@ -171,23 +204,20 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
     "messageId": "3f8b1f9b-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "idempotencyKey": "3f8b1f9b-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
-    "platform": "qq",
-    "groupId": "0",
-    "userId": "888888",
-    "msg": "收到，已处理。",
-    "text": "收到，已处理。",
-    "mediaBase64": "",
-    "messageType": "text",
+    "message": {
+      "platform": "qq",
+      "groupId": "0",
+      "userId": "888888",
+      "type": "text",
+      "msg": "收到，已处理。",
+      "path": "",
+      "base64": "",
+      "fileName": ""
+    },
     "ts": 1772476801234
   }
 }
 ```
-
-媒体事件（示例字段差异）：
-
-- `messageType = "media"`
-- 包含 `mediaBase64`
-- 可能包含 `mimeType`、`fileName`、`mediaType`
 
 ---
 
@@ -197,18 +227,18 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 
 常用字段：
 
-- `accountId`：可选，默认 `default`
+- `accountId`：可选（默认 `default`）
 - `platform`：必填
-- `groupId`：建议必填；私聊可用 `"0"`
+- `groupId`：可选，默认 `"0"`（私聊）
 - `userId`：必填
-- `scope`：建议传严格 sessionKey（见第 3 节）
-- `msgId`：建议必填（用于去重）
+- `scope`：可选，建议传严格 sessionKey（见第 3 节）
+- `msgId`：建议传（便于短窗口去重）
 - `type`：`text/image/video/file/...`
-- `text` 或 `msg`：文本内容
-- `mediaBase64`：媒体内容（base64）
-- `mimeType` / `fileName`：媒体可选元数据
+- `msg`：文本
+- `mediaBase64`：媒体 base64
+- `mimeType` / `fileName`：媒体元数据（可选）
 
-校验失败时常见错误：
+校验失败常见错误：
 
 - `platform/userId required`
 
@@ -219,52 +249,68 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 - `messageId`
 - `idempotencyKey`（当前等于 `messageId`）
 - `sessionKey`
-- `platform` / `groupId` / `userId`
-- `msg` / `text`
-- `mediaBase64`（媒体时）
-- `messageType`（`text` / `media`）
+- `message.platform/groupId/userId`
+- `message.type/msg/path/base64/fileName`
 - `ts`
 
-说明（2026-03-04）：
+说明：
 
-- 事件为 `bncr.push`，主类型为 `type="message.outbound"`。
-- 仅输出标准嵌套结构：`message.{ platform,groupId,userId,type,msg,path,base64,fileName }`。
-- 不再输出平铺兼容字段。
-- 不再附带 webchat 风格语义字段（`stream/state/data`）。
+- 主类型固定为 `type="message.outbound"`。
+- 仅输出嵌套结构 `message.{...}`，不再输出平铺兼容字段。
+- 不附带 webchat 的 `stream/state/data` 语义字段。
 
 ---
 
-## 7. 重试与可靠性
+## 7. `message.send(channel=bncr)` 目标解析规则（重要）
+
+插件发送目标支持三种输入：
+
+1. 严格 `sessionKey`
+2. `platform:groupId:userId`
+3. `Bncr-platform:groupId:userId`
+
+但发送前会做**反查校验**：
+
+- 必须在已知会话路由里反查到真实 `sessionKey` 才会发送。
+- 禁止拼凑 key 直接发；查不到会报：`target not found in known sessions`。
+
+---
+
+## 8. 重试与可靠性
 
 - 离线入队 + 重连自动冲队列。
-- 指数退避：`1s, 2s, 4s, 8s...`
+- 指数退避：`1s,2s,4s,8s...`
 - 最大重试次数：`10`
 - 超限进入 dead-letter。
 
 ---
 
-## 8. 状态判定与观测
+## 9. 状态判定与观测
 
-- WS 在线且心跳有效：状态应为 **linked**。
-- 已配置但离线：状态应为 **configured**。
+- 实际链路在线：`linked`
+- 已配置但离线：`configured`
+- 账户卡片中离线模式会显示 `Status`（展示口径）
 
-状态快照常用字段：
+常用状态字段：
 
-- `lastSessionKey`
-- `lastSessionScope`
-- `lastSessionAt`
-- `lastActivityAt`
-- `lastActivityAgo`
 - `pending`
 - `deadLetter`
+- `lastSessionKey`
+- `lastSessionScope`（`Bncr-platform:group:user`）
+- `lastSessionAt`
+- `lastActivityAt`
+- `lastInboundAt`
+- `lastOutboundAt`
+
+> 已知现象：`openclaw status` 顶层与 `status --deep` 在个别版本可能出现口径不一致；排障时优先看 `status --deep` 的 Health。
 
 ---
 
-## 9. 兼容接口说明（旧客户端）
+## 10. 兼容接口说明
 
 ### `bncr.activity`
 
-用于客户端活动保活（刷新在线状态），推荐结合节流策略（例如 60s 一次）。
+用于活动保活，建议节流（例如 60s 一次）。
 
 请求示例：
 
@@ -281,64 +327,35 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
 }
 ```
 
-响应示例：
-
-```json
-{
-  "type": "res",
-  "id": "a1",
-  "ok": true,
-  "result": {
-    "accountId": "primary",
-    "ok": true,
-    "event": "activity",
-    "activeConnections": 1,
-    "pending": 0,
-    "deadLetter": 0,
-    "now": 1772476800000
-  }
-}
-```
+`reason` 为可选自定义字段，插件会忽略业务外字段。
 
 ### `bncr.ack`
 
-可调用，但在当前模式下不是必需链路。
+可调用，但当前模式下不是必需链路。
 
 ---
 
-## 10. 常见问题（FAQ）
+## 11. FAQ
 
 ### Q1：为什么看不到回复？
 
-先检查：
+1. 先确认 `bncr.connect` 成功。
+2. 客户端确认监听的是 `bncr.push`。
+3. `scope/sessionKey` 是否符合严格格式。
+4. 若用 `message.send`，目标是否能反查到已知会话。
 
-1. 是否先成功 `bncr.connect`。
-2. 客户端是否监听了 `bncr.push`（不是只监听 `chat` / `agent` 事件）。
-3. `scope/sessionKey` 是否严格符合 `agent:main:bncr:direct:<hexScope>`。
+### Q2：为什么不需要 `bncr.pull`？
 
-### Q2：为什么我不需要 `bncr.pull`？
+因为当前是 push-only，统一走 `bncr.push`。
 
-因为插件已切换 push-only，消息下发统一走 `bncr.push`。客户端如需维持在线状态，调用 `bncr.activity` 即可。
+### Q3：如何避免重复消息？
 
-### Q3：重复消息如何避免？
-
-- 入站建议总是带稳定的 `msgId`，插件有短窗口去重。
-- 出站可按 `idempotencyKey`（当前同 `messageId`）做幂等处理。
-
----
-
-## 11. 对接建议（生产）
-
-- 一个逻辑账号维持一个主连接，避免热重载拉起多个活跃连接。
-- 保留自动重连，并在重连后立即再次 `bncr.connect`。
-- 对 `bncr.push` 做幂等落地（按 `idempotencyKey`）。
-- 记录 `sessionKey -> 路由` 映射，便于排障。
+- 入站带稳定 `msgId`。
+- 出站按 `idempotencyKey` 幂等处理。
+- 客户端侧建议只消费 `message.outbound` 主链路。
 
 ---
 
 ## 12. 版本提示
 
-如果你在历史版本上对接过：
-
-- 现在请按本文档以 **push-only + strict sessionKey** 为准。
-- 旧 sessionKey 形态与 pull 主链路均不再作为当前标准用法。
+历史版本接入过的话，请以当前文档（push-only + strict sessionKey + 目标反查）为准。
