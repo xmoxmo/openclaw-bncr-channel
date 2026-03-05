@@ -89,7 +89,7 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
   "id": "c1",
   "method": "bncr.connect",
   "params": {
-    "accountId": "default",
+    "accountId": "primary",
     "clientId": "bncr-client-1"
   }
 }
@@ -104,7 +104,7 @@ agent:main:bncr:direct:71713a3132333435363a383838383838
   "ok": true,
   "result": {
     "channel": "bncr",
-    "accountId": "default",
+    "accountId": "primary",
     "bridgeVersion": 2,
     "pushEvent": "bncr.push",
     "online": true,
