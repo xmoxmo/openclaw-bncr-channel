@@ -15,7 +15,7 @@ import {
 } from 'openclaw/plugin-sdk';
 
 const CHANNEL_ID = 'bncr';
-const BNCR_DEFAULT_ACCOUNT_ID = 'primary';
+const BNCR_DEFAULT_ACCOUNT_ID = 'Primary';
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'bncr.push';
 const CONNECT_TTL_MS = 120_000;
