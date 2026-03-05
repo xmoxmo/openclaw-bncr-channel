@@ -1028,9 +1028,19 @@ class BncrBridgeRuntime {
 
   getChannelSummary(defaultAccountId: string) {
     const runtime = this.getAccountRuntimeSnapshot(defaultAccountId);
-    return {
-      linked: Boolean(runtime.connected),
-    };
+    if (runtime.connected) {
+      return { linked: true };
+    }
+
+    // 顶层汇总不绑定某个 accountId：任一账号在线都应显示 linked
+    const t = now();
+    for (const c of this.connections.values()) {
+      if (t - c.lastSeenAt <= CONNECT_TTL_MS) {
+        return { linked: true };
+      }
+    }
+
+    return { linked: false };
   }
 
   private enqueueOutbound(entry: OutboxEntry) {
@@ -1567,8 +1577,16 @@ function resolveDefaultDisplayName(rawName: unknown, accountId: string): string 
 }
 
 function resolveAccount(cfg: any, accountId?: string | null) {
-  const key = normalizeAccountId(accountId);
-  const account = cfg?.channels?.[CHANNEL_ID]?.accounts?.[key] || {};
+  const accounts = cfg?.channels?.[CHANNEL_ID]?.accounts || {};
+  let key = normalizeAccountId(accountId);
+
+  // 若请求的 accountId 不存在（例如框架仍传 default），回退到首个已配置账号
+  if (!accounts[key]) {
+    const first = Object.keys(accounts)[0];
+    if (first) key = first;
+  }
+
+  const account = accounts[key] || {};
   const displayName = resolveDefaultDisplayName(account?.name, key);
   return {
     accountId: key,
