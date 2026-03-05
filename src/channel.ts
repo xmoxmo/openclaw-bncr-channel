@@ -915,16 +915,19 @@ class BncrBridgeRuntime {
     const raw = asString(rawTarget).trim();
     if (!raw) throw new Error('bncr invalid target(empty)');
 
+    this.api.logger.info?.(`[bncr-target-incoming] raw=${raw} accountId=${acc}`);
+
     let route: BncrRoute | null = null;
 
     const strict = parseStrictBncrSessionKey(raw);
     if (strict) {
       route = strict.route;
     } else {
-      route = parseRouteFromDisplayScope(raw);
+      route = parseRouteFromDisplayScope(raw) || this.resolveRouteBySession(raw, acc);
     }
 
     if (!route) {
+      this.api.logger.warn?.(`[bncr-target-invalid] raw=${raw} accountId=${acc} reason=unparseable-or-unknown`);
       throw new Error(`bncr invalid target(label/sessionKey required): ${raw}`);
     }
 
@@ -948,6 +951,7 @@ class BncrBridgeRuntime {
     }
 
     if (!best) {
+      this.api.logger.warn?.(`[bncr-target-miss] raw=${raw} accountId=${acc} sessionRoutes=${this.sessionRoutes.size}`);
       throw new Error(`bncr target not found in known sessions: ${raw}`);
     }
 
@@ -1019,6 +1023,13 @@ class BncrBridgeRuntime {
       // 状态映射：在线=linked，离线=configured
       mode: connected ? 'linked' : 'configured',
       meta: this.buildStatusMeta(acc),
+    };
+  }
+
+  getChannelSummary(defaultAccountId: string) {
+    const runtime = this.getAccountRuntimeSnapshot(defaultAccountId);
+    return {
+      linked: Boolean(runtime.connected),
     };
   }
 
@@ -1185,6 +1196,7 @@ class BncrBridgeRuntime {
 
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
 
     respond(true, {
       channel: CHANNEL_ID,
@@ -1257,6 +1269,7 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
 
     // 轻量活动心跳：仅刷新在线活跃状态，不承担拉取职责。
     respond(true, {
@@ -1276,6 +1289,7 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
 
     const platform = asString(params?.platform || '').trim();
     const groupId = asString(params?.groupId || '0').trim() || '0';
@@ -1481,11 +1495,20 @@ class BncrBridgeRuntime {
 
     tick();
     const timer = setInterval(tick, 5_000);
-    ctx.abortSignal?.addEventListener?.('abort', () => clearInterval(timer));
 
-    return {
-      stop: () => clearInterval(timer),
-    };
+    await new Promise<void>((resolve) => {
+      const onAbort = () => {
+        clearInterval(timer);
+        resolve();
+      };
+
+      if (ctx.abortSignal?.aborted) {
+        onAbort();
+        return;
+      }
+
+      ctx.abortSignal?.addEventListener?.('abort', onAbort, { once: true });
+    });
   };
 
   channelStopAccount = async (_ctx: any) => {
@@ -1582,28 +1605,16 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       nativeCommands: false,
     },
     messaging: {
-      // 支持 strict sessionKey、platform:group:user、Bncr-platform:group:user（统一归一化 strict sessionKey）
+      // 接收任意标签输入；不在 normalize 阶段做格式门槛，统一下沉到发送前验证。
       normalizeTarget: (raw: string) => {
         const input = asString(raw).trim();
-        const strict = parseStrictBncrSessionKey(input);
-        if (strict) return strict.sessionKey;
-
-        const route = parseRouteFromDisplayScope(input);
-        if (route) return buildFallbackSessionKey(route);
-
-        return undefined;
+        return input || undefined;
       },
       targetResolver: {
         looksLikeId: (raw: string, normalized?: string) => {
-          const v1 = asString(raw).trim();
-          const v2 = asString(normalized || '').trim();
-          return Boolean(
-            parseStrictBncrSessionKey(v1)
-            || parseRouteFromDisplayScope(v1)
-            || (v2 && (parseStrictBncrSessionKey(v2) || parseRouteFromDisplayScope(v2))),
-          );
+          return Boolean(asString(normalized || raw).trim());
         },
-        hint: 'Use target: Bncr-platform:group:user (or strict sessionKey)',
+        hint: 'Any label accepted; will be validated against known bncr sessions before send',
       },
     },
     configSchema: BncrConfigSchema,
@@ -1661,6 +1672,9 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       defaultRuntime: createDefaultChannelRuntimeState(BNCR_DEFAULT_ACCOUNT_ID, {
         mode: 'ws-offline',
       }),
+      buildChannelSummary: async ({ defaultAccountId }: any) => {
+        return bridge.getChannelSummary(defaultAccountId || BNCR_DEFAULT_ACCOUNT_ID);
+      },
       buildAccountSnapshot: async ({ account, runtime }: any) => {
         const rt = runtime || bridge.getAccountRuntimeSnapshot(account?.accountId);
         const meta = rt?.meta || {};
