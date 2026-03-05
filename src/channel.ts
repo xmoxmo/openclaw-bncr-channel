@@ -1294,10 +1294,10 @@ class BncrBridgeRuntime {
     const platform = asString(params?.platform || '').trim();
     const groupId = asString(params?.groupId || '0').trim() || '0';
     const userId = asString(params?.userId || '').trim();
-    const scope = asString(params?.scope || '').trim();
+    const sessionKeyfromroute = asString(params?.sessionKey || '').trim();
 
-    if (!platform || !userId) {
-      respond(false, { error: 'platform/userId required' });
+    if (!platform || (!userId && !groupId)) {
+      respond(false, { error: 'platform/groupId/userId required' });
       return;
     }
 
@@ -1307,9 +1307,9 @@ class BncrBridgeRuntime {
       userId,
     };
 
-    const text = asString(params?.text || params?.msg || '');
+    const text = asString(params?.msg || '');
     const msgType = asString(params?.type || 'text') || 'text';
-    const mediaBase64 = asString(params?.mediaBase64 || '');
+    const mediaBase64 = asString(params?.base64 || '');
     const mimeType = asString(params?.mimeType || '').trim() || undefined;
     const fileName = asString(params?.fileName || '').trim() || undefined;
     const msgId = asString(params?.msgId || '').trim() || undefined;
@@ -1346,7 +1346,7 @@ class BncrBridgeRuntime {
       peer,
     });
 
-    const baseSessionKey = normalizeInboundSessionKey(scope, route) || resolvedRoute.sessionKey;
+    const baseSessionKey = normalizeInboundSessionKey(sessionKeyfromroute, route) || resolvedRoute.sessionKey;
 
     // 轻量任务拆分：允许在消息前缀中声明 task key，将任务分流到子会话，降低单会话上下文压力。
     // 支持：#task:foo / /task:foo / /task foo <正文>
