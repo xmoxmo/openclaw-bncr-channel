@@ -77,7 +77,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
   "id": "c1",
   "method": "bncr.connect",
   "params": {
-    "accountId": "primary",
+    "accountId": "Primary",
     "clientId": "bncr-client-1"
   }
 }
@@ -92,7 +92,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
   "ok": true,
   "result": {
     "channel": "bncr",
-    "accountId": "primary",
+    "accountId": "Primary",
     "bridgeVersion": 2,
     "pushEvent": "bncr.push",
     "online": true,
@@ -105,7 +105,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 }
 ```
 
-> `accountId` 示例是 `primary`，请按你实际配置替换；不传默认使用 `default`。
+> `accountId` 示例是 `Primary`，请按你实际配置替换；不传默认使用 `Primary`。
 
 ### Step B：上行消息用 `bncr.inbound`
 
@@ -117,11 +117,11 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
   "id": "i1",
   "method": "bncr.inbound",
   "params": {
-    "accountId": "primary",
+    "accountId": "Primary",
     "platform": "qq",
     "groupId": "0",
     "userId": "888888",
-    "scope": "agent:main:bncr:direct:71713a303a383838383838",
+    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
     "msgId": "msg-1001",
     "type": "text",
     "msg": "你好"
@@ -129,27 +129,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 }
 ```
 
-文本请求示例（`text` 别名，代码同样兼容）：
-
-```json
-{
-  "type": "req",
-  "id": "i1b",
-  "method": "bncr.inbound",
-  "params": {
-    "accountId": "primary",
-    "platform": "qq",
-    "groupId": "0",
-    "userId": "888888",
-    "scope": "agent:main:bncr:direct:71713a303a383838383838",
-    "msgId": "msg-1001b",
-    "type": "text",
-    "text": "你好"
-  }
-}
-```
-
-媒体请求示例（字段是 `mediaBase64`）：
+媒体请求示例（字段是 `base64`）：
 
 ```json
 {
@@ -157,15 +137,15 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
   "id": "i2",
   "method": "bncr.inbound",
   "params": {
-    "accountId": "primary",
+    "accountId": "Primary",
     "platform": "qq",
     "groupId": "0",
     "userId": "888888",
-    "scope": "agent:main:bncr:direct:71713a303a383838383838",
+    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
     "msgId": "msg-1002",
     "type": "image/png",
     "msg": "",
-    "mediaBase64": "<BASE64_PAYLOAD>",
+    "base64": "<BASE64_PAYLOAD>",
     "mimeType": "image/png",
     "fileName": "demo.png"
   }
@@ -181,7 +161,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
   "ok": true,
   "result": {
     "accepted": true,
-    "accountId": "primary",
+    "accountId": "Primary",
     "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
     "msgId": "msg-1001",
     "taskKey": null
@@ -227,31 +207,29 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 
 常用字段：
 
-- `accountId`：可选（默认 `default`）
+- `accountId`：可选（默认 `Primary`）
 - `platform`：必填
 - `groupId`：可选，默认 `"0"`（私聊）
-- `userId`：必填
-- `scope`：可选，建议传严格 sessionKey（见第 3 节）
+- `userId`：建议填写（私聊/群聊都建议带上）
+- `sessionKey`：可选，建议传严格 sessionKey（见第 3 节）
 - `msgId`：建议传（便于短窗口去重）
 - `type`：`text/image/video/file/...`
-- `msg`（或兼容 `text`）：文本
-- `mediaBase64`：媒体 base64
+- `msg`：文本
+- `base64`：媒体 base64
 - `mimeType` / `fileName`：媒体元数据（可选）
 
 校验失败常见错误：
 
-- `platform/userId required`
+- `platform/groupId/userId required`
 
 #### 6.1.1 openclawclient.js（发送端）对齐说明
 
 基于你当前附件版本（`openclawclient` 注释版本 `0.0.2`）核对结果：
 
-- 当前 `inboundSend()` 上行字段是 `sessionKey`；插件入站读取字段是 `scope`。
-  - 现状仍可工作（未传 `scope` 时会按 `platform/groupId/userId` 回退路由）。
-  - 若要与 strict key 完全对齐，建议把 `sessionKey` 改成 `scope`（值保持 strict sessionKey）。
-- 当前 `inboundSend()` 里有 `base64/path/fileName` 占位；插件媒体入站识别字段是 `mediaBase64`。
-  - 文本消息不受影响；若后续要上行媒体，请改为 `mediaBase64(+mimeType/fileName)`。
-- 当前发送端默认账号写的是 `Primary`（首字母大写）；请确保与网关账户 ID 大小写一致。
+- `inboundSend()` 使用 `sessionKey`，与当前插件入站字段一致。
+- 文本消息使用 `msg`，与当前插件读取一致。
+- 媒体字段使用 `base64`（可带 `mimeType/fileName`），与当前插件读取一致。
+- 默认账号建议使用 `Primary`，并与网关账户 ID 保持大小写一致。
 
 ### 6.2 OpenClaw -> Bncr（`bncr.push`）
 
@@ -331,7 +309,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
   "id": "a1",
   "method": "bncr.activity",
   "params": {
-    "accountId": "primary",
+    "accountId": "Primary",
     "clientId": "bncr-client-1",
     "reason": "heartbeat"
   }
@@ -352,7 +330,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 
 1. 先确认 `bncr.connect` 成功。
 2. 客户端确认监听的是 `bncr.push`。
-3. `scope/sessionKey` 是否符合严格格式。
+3. `sessionKey` 是否符合严格格式。
 4. 若用 `message.send`，目标是否能反查到已知会话。
 
 ### Q2：为什么不需要 `bncr.pull`？
