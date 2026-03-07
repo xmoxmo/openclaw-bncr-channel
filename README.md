@@ -4,6 +4,66 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件（`channelId=bncr`）。
 
 > 目标：只看这一份 README，就能完成接入、联调和排障。
 
+## 🚀 QuickStart（30 秒）
+
+1) 建立 WS 并发送 `bncr.connect`（拿到 `pushEvent=bncr.push`）  
+2) 用 `bncr.inbound` 上行（建议带 `msgId`）  
+3) 监听 `bncr.push`，只处理 `type=message.outbound`
+
+最小消息链路（可直接抄）：
+
+```json
+{
+  "type": "req",
+  "id": "c1",
+  "method": "bncr.connect",
+  "params": { "accountId": "Primary", "clientId": "demo-client" }
+}
+```
+
+```json
+{
+  "type": "req",
+  "id": "i1",
+  "method": "bncr.inbound",
+  "params": {
+    "accountId": "Primary",
+    "platform": "qq",
+    "groupId": "0",
+    "userId": "888888",
+    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
+    "msgId": "msg-1001",
+    "type": "text",
+    "msg": "你好"
+  }
+}
+```
+
+```json
+{
+  "type": "event",
+  "event": "bncr.push",
+  "payload": {
+    "type": "message.outbound",
+    "messageId": "...",
+    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
+    "message": {
+      "platform": "qq",
+      "groupId": "0",
+      "userId": "888888",
+      "type": "text",
+      "msg": "收到，已处理。"
+    }
+  }
+}
+```
+
+主动发送推荐写法（`message.send(channel=bncr)`）：
+
+- `to=bncr:<platform>:<groupId>:<userId>`
+
+> 注意：目标会做“已知会话反查”，若未建立过会话会报 `target not found in known sessions`。
+
 ---
 
 ## 1) 概览
