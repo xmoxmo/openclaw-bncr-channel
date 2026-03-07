@@ -41,6 +41,26 @@ const plugin = {
       "bncr.diagnostics",
       (opts: GatewayRequestHandlerOptions) => bridge.handleDiagnostics(opts),
     );
+    api.registerGatewayMethod(
+      "bncr.file.init",
+      (opts: GatewayRequestHandlerOptions) => bridge.handleFileInit(opts),
+    );
+    api.registerGatewayMethod(
+      "bncr.file.chunk",
+      (opts: GatewayRequestHandlerOptions) => bridge.handleFileChunk(opts),
+    );
+    api.registerGatewayMethod(
+      "bncr.file.complete",
+      (opts: GatewayRequestHandlerOptions) => bridge.handleFileComplete(opts),
+    );
+    api.registerGatewayMethod(
+      "bncr.file.abort",
+      (opts: GatewayRequestHandlerOptions) => bridge.handleFileAbort(opts),
+    );
+    api.registerGatewayMethod(
+      "bncr.file.ack",
+      (opts: GatewayRequestHandlerOptions) => bridge.handleFileAck(opts),
+    );
   },
 };
 

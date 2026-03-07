@@ -21,6 +21,14 @@ const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'bncr.push';
 const CONNECT_TTL_MS = 120_000;
 const MAX_RETRY = 10;
+const FILE_FORCE_CHUNK = true; // 统一走 WS 分块，保留 base64 仅作兜底
+const FILE_INLINE_THRESHOLD = 5 * 1024 * 1024; // fallback 阈值（仅 FILE_FORCE_CHUNK=false 时生效）
+const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
+const FILE_CHUNK_RETRY = 3;
+const FILE_ACK_TIMEOUT_MS = 30_000;
+const FILE_TRANSFER_ACK_TTL_MS = 30_000;
+const FILE_TRANSFER_KEEP_MS = 6 * 60 * 60 * 1000;
+const BNCR_DEBUG_VERBOSE = true; // 临时调试：打印发送入口完整请求体
 
 const BncrConfigSchema = {
   schema: {
@@ -67,6 +75,44 @@ type OutboxEntry = {
   nextAttemptAt: number;
   lastAttemptAt?: number;
   lastError?: string;
+};
+
+type FileSendTransferState = {
+  transferId: string;
+  accountId: string;
+  sessionKey: string;
+  route: BncrRoute;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  chunkSize: number;
+  totalChunks: number;
+  fileSha256: string;
+  startedAt: number;
+  status: 'init' | 'transferring' | 'completed' | 'aborted';
+  ackedChunks: Set<number>;
+  failedChunks: Map<number, string>;
+  completedPath?: string;
+  error?: string;
+};
+
+type FileRecvTransferState = {
+  transferId: string;
+  accountId: string;
+  sessionKey: string;
+  route: BncrRoute;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  chunkSize: number;
+  totalChunks: number;
+  fileSha256: string;
+  startedAt: number;
+  status: 'init' | 'transferring' | 'completed' | 'aborted';
+  bufferByChunk: Map<number, Buffer>;
+  receivedChunks: Set<number>;
+  completedPath?: string;
+  error?: string;
 };
 
 type PersistedState = {
@@ -129,32 +175,45 @@ function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
   const raw = asString(scope).trim();
   if (!raw) return null;
 
-  // 支持展示标签：
-  // 1) Bncr-platform:group:user
-  // 2) Bncr-platform:user   （当 groupId=0 且 userId!=0 的单聊简写）
-  const stripped = raw.replace(/^Bncr-/i, '');
-  const parts = stripped.split(':');
-  if (parts.length === 2) {
-    const [platform, userId] = parts;
-    if (!platform || !userId) return null;
-    return { platform, groupId: '0', userId };
+  // 终版兼容（6 种）：
+  // 1) bncr:g-<hex(scope)>
+  // 2) bncr:<hex(scope)>
+  // 3) bncr:<platform>:<groupId>:<userId>
+  // 4) bncr:g-<platform>:<groupId>:<userId>
+
+  // 1) bncr:g-<hex> 或 bncr:g-<scope>
+  const gPayload = raw.match(/^bncr:g-(.+)$/i)?.[1];
+  if (gPayload) {
+    if (isLowerHex(gPayload)) {
+      const route = parseRouteFromHexScope(gPayload);
+      if (route) return route;
+    }
+    return parseRouteFromScope(gPayload);
   }
-  return parseRouteFromScope(stripped);
+
+  // 2) / 3) bncr:<hex> or bncr:<scope>
+  const bPayload = raw.match(/^bncr:(.+)$/i)?.[1];
+  if (bPayload) {
+    if (isLowerHex(bPayload)) {
+      const route = parseRouteFromHexScope(bPayload);
+      if (route) return route;
+    }
+    return parseRouteFromScope(bPayload);
+  }
+
+  return null;
 }
 
 function formatDisplayScope(route: BncrRoute): string {
-  // 规则：
-  // - 单聊（groupId=0）：Bncr-platform:userId
-  // - 群聊（groupId!=0）：Bncr-platform:groupId:userId
-  if (route.groupId === '0') {
-    return `Bncr-${route.platform}:${route.userId}`;
-  }
-  return `Bncr-${route.platform}:${route.groupId}:${route.userId}`;
+  // 主推荐标签：bncr:<platform>:<groupId>:<userId>
+  // 保持原始大小写，不做平台名降级。
+  return `bncr:${route.platform}:${route.groupId}:${route.userId}`;
 }
 
 function isLowerHex(input: string): boolean {
   const raw = asString(input).trim();
-  return !!raw && /^[0-9a-f]+$/.test(raw) && raw.length % 2 === 0;
+  // 兼容大小写十六进制，不主动降级大小写
+  return !!raw && /^[0-9a-fA-F]+$/.test(raw) && raw.length % 2 === 0;
 }
 
 function routeScopeToHex(route: BncrRoute): string {
@@ -163,7 +222,7 @@ function routeScopeToHex(route: BncrRoute): string {
 }
 
 function parseRouteFromHexScope(scopeHex: string): BncrRoute | null {
-  const rawHex = asString(scopeHex).trim().toLowerCase();
+  const rawHex = asString(scopeHex).trim();
   if (!isLowerHex(rawHex)) return null;
 
   try {
@@ -296,24 +355,30 @@ function hex2utf8SessionKey(str: string): { sessionKey: string; scope: string } 
 function parseStrictBncrSessionKey(input: string): { sessionKey: string; scopeHex: string; route: BncrRoute } | null {
   const raw = asString(input).trim();
   if (!raw) return null;
-  if (!raw.startsWith(BNCR_SESSION_KEY_PREFIX)) return null;
 
-  const parts = raw.split(':');
-  // 仅接受：agent:main:bncr:direct:<hexScope>
-  if (parts.length !== 5) return null;
-  if (parts[0] !== 'agent' || parts[1] !== 'main' || parts[2] !== 'bncr' || parts[3] !== 'direct') {
-    return null;
+  // 终版兼容 sessionKey：
+  // 1) agent:main:bncr:direct:<hex(scope)>
+  // 2) agent:main:bncr:group:<hex(scope)>
+  // （统一归一成 direct:<hex(scope)>）
+  const m = raw.match(/^agent:main:bncr:(direct|group):(.+)$/);
+  if (!m?.[1] || !m?.[2]) return null;
+
+  const payload = asString(m[2]).trim();
+  let route: BncrRoute | null = null;
+  let scopeHex = '';
+
+  if (isLowerHex(payload)) {
+    scopeHex = payload;
+    route = parseRouteFromHexScope(payload);
+  } else {
+    route = parseRouteFromScope(payload);
+    if (route) scopeHex = routeScopeToHex(route);
   }
 
-  const scopeHex = asString(parts[4]).trim().toLowerCase();
-  if (!isLowerHex(scopeHex)) return null;
-
-  const decoded = hex2utf8SessionKey(raw);
-  const route = parseRouteFromScope(decoded.scope);
-  if (!route) return null;
+  if (!route || !scopeHex) return null;
 
   return {
-    sessionKey: raw,
+    sessionKey: `${BNCR_SESSION_KEY_PREFIX}${scopeHex}`,
     scopeHex,
     route,
   };
@@ -371,6 +436,7 @@ function withTaskSessionKey(sessionKey: string, taskKey?: string | null): string
 }
 
 function buildFallbackSessionKey(route: BncrRoute): string {
+  // 新主口径：sessionKey 使用 agent:main:bncr:direct:<hex(scope)>
   return `${BNCR_SESSION_KEY_PREFIX}${routeScopeToHex(route)}`;
 }
 
@@ -411,6 +477,76 @@ function routeKey(accountId: string, route: BncrRoute): string {
   return `${accountId}:${route.platform}:${route.groupId}:${route.userId}`.toLowerCase();
 }
 
+function fileExtFromMime(mimeType?: string): string {
+  const mt = asString(mimeType || '').toLowerCase();
+  const map: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'video/quicktime': '.mov',
+    'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a',
+    'application/pdf': '.pdf',
+    'text/plain': '.txt',
+  };
+  return map[mt] || '';
+}
+
+function sanitizeFileName(rawName?: string, fallback = 'file.bin'): string {
+  const name = asString(rawName || '').trim();
+  const base = name || fallback;
+  const cleaned = base.replace(/[\\/:*?"<>|\x00-\x1F]+/g, '_').replace(/\s+/g, ' ').trim();
+  return cleaned || fallback;
+}
+
+function buildTimestampFileName(mimeType?: string): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const ext = fileExtFromMime(mimeType) || '.bin';
+  return `bncr_${ts}_${Math.random().toString(16).slice(2, 8)}${ext}`;
+}
+
+function resolveOutboundFileName(params: { mediaUrl?: string; fileName?: string; mimeType?: string }): string {
+  const mediaUrl = asString(params.mediaUrl || '').trim();
+  const mimeType = asString(params.mimeType || '').trim();
+
+  // 线上下载的文件，统一用时间戳命名（避免超长/无意义文件名）
+  if (/^https?:\/\//i.test(mediaUrl)) {
+    return buildTimestampFileName(mimeType);
+  }
+
+  const candidate = sanitizeFileName(params.fileName, 'file.bin');
+  if (candidate.length <= 80) return candidate;
+
+  // 超长文件名做裁剪，尽量保留扩展名
+  const ext = path.extname(candidate);
+  const stem = candidate.slice(0, Math.max(1, 80 - ext.length));
+  return `${stem}${ext}`;
+}
+
+function resolveBncrOutboundMessageType(params: { mimeType?: string; fileName?: string; hintedType?: string }): 'text' | 'image' | 'video' | 'file' {
+  const hinted = asString(params.hintedType || '').toLowerCase();
+  // 优先使用可确定类型；“file”属于兜底，不覆盖更明确的 mime/扩展判断
+  if (hinted === 'text' || hinted === 'image' || hinted === 'video') return hinted as any;
+
+  const mt = asString(params.mimeType || '').toLowerCase();
+  const major = mt.split('/')[0] || '';
+  if (major === 'text') return 'text';
+  if (major === 'image') return 'image';
+  if (major === 'video') return 'video';
+
+  const fn = asString(params.fileName || '').toLowerCase();
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(fn)) return 'image';
+  if (/\.(mp4|mov|mkv|avi|webm)$/.test(fn)) return 'video';
+
+  return 'file';
+}
+
 class BncrBridgeRuntime {
   private api: OpenClawPluginApi;
   private statePath: string | null = null;
@@ -440,6 +576,15 @@ class BncrBridgeRuntime {
   private pushTimer: NodeJS.Timeout | null = null;
   private waiters = new Map<string, Array<() => void>>();
   private gatewayContext: GatewayRequestHandlerOptions['context'] | null = null;
+
+  // 文件互传状态（V1：尽力而为，重连不续传）
+  private fileSendTransfers = new Map<string, FileSendTransferState>(); // OpenClaw -> Bncr（服务端发起）
+  private fileRecvTransfers = new Map<string, FileRecvTransferState>(); // Bncr -> OpenClaw（客户端发起）
+  private fileAckWaiters = new Map<string, {
+    resolve: (payload: Record<string, unknown>) => void;
+    reject: (err: Error) => void;
+    timer: NodeJS.Timeout;
+  }>();
 
   constructor(api: OpenClawPluginApi) {
     this.api = api;
@@ -917,6 +1062,18 @@ class BncrBridgeRuntime {
     for (const [key, ts] of this.recentInbound.entries()) {
       if (t - ts > dedupWindowMs) this.recentInbound.delete(key);
     }
+
+    this.cleanupFileTransfers();
+  }
+
+  private cleanupFileTransfers() {
+    const t = now();
+    for (const [id, st] of this.fileSendTransfers.entries()) {
+      if (t - st.startedAt > FILE_TRANSFER_KEEP_MS) this.fileSendTransfers.delete(id);
+    }
+    for (const [id, st] of this.fileRecvTransfers.entries()) {
+      if (t - st.startedAt > FILE_TRANSFER_KEEP_MS) this.fileRecvTransfers.delete(id);
+    }
   }
 
   private markSeen(accountId: string, connId: string, clientId?: string) {
@@ -1024,10 +1181,10 @@ class BncrBridgeRuntime {
     return alias?.route || parsed.route;
   }
 
-  // 严谨目标解析：
-  // 1) 先接受任意标签输入（strict / platform:group:user / Bncr-platform:group:user）
-  // 2) 再通过已知会话路由反查“真实 sessionKey”
-  // 3) 若反查不到或不属于 bncr，会直接失败（禁止拼凑 key 发送）
+  // 严谨目标解析（终版兼容模式）：
+  // 1) 兼容 6 种输入格式（to/sessionKey）
+  // 2) 统一反查并归一为 sessionKey=agent:main:bncr:direct:<hex(scope)>
+  // 3) 非兼容格式直接失败，并输出标准格式提示日志
   private resolveVerifiedTarget(rawTarget: string, accountId: string): { sessionKey: string; route: BncrRoute; displayScope: string } {
     const acc = normalizeAccountId(accountId);
     const raw = asString(rawTarget).trim();
@@ -1045,8 +1202,10 @@ class BncrBridgeRuntime {
     }
 
     if (!route) {
-      this.api.logger.warn?.(`[bncr-target-invalid] raw=${raw} accountId=${acc} reason=unparseable-or-unknown`);
-      throw new Error(`bncr invalid target(label/sessionKey required): ${raw}`);
+      this.api.logger.warn?.(
+        `[bncr-target-invalid] raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=bncr:<platform>:<groupId>:<userId> standardSessionKey=agent:main:bncr:direct:<hex(scope)>`,
+      );
+      throw new Error(`bncr invalid target(standard: to=bncr:<platform>:<groupId>:<userId>): ${raw}`);
     }
 
     const wantedRouteKey = routeKey(acc, route);
@@ -1073,6 +1232,14 @@ class BncrBridgeRuntime {
       throw new Error(`bncr target not found in known sessions: ${raw}`);
     }
 
+    // 发送链路命中目标时，同步刷新 lastSession，避免状态页显示过期会话。
+    this.lastSessionByAccount.set(acc, {
+      sessionKey: best.sessionKey,
+      scope: formatDisplayScope(best.route),
+      updatedAt: now(),
+    });
+    this.scheduleSave();
+
     return {
       sessionKey: best.sessionKey,
       route: best.route,
@@ -1082,6 +1249,87 @@ class BncrBridgeRuntime {
 
   private markActivity(accountId: string, at = now()) {
     this.lastActivityByAccount.set(normalizeAccountId(accountId), at);
+  }
+
+  private fileAckKey(transferId: string, stage: string, chunkIndex?: number): string {
+    const idx = Number.isFinite(Number(chunkIndex)) ? String(Number(chunkIndex)) : '-';
+    return `${transferId}|${stage}|${idx}`;
+  }
+
+  private waitForFileAck(params: { transferId: string; stage: string; chunkIndex?: number; timeoutMs?: number }) {
+    const transferId = asString(params.transferId).trim();
+    const stage = asString(params.stage).trim();
+    const key = this.fileAckKey(transferId, stage, params.chunkIndex);
+    const timeoutMs = Math.max(1_000, Math.min(Number(params.timeoutMs || FILE_ACK_TIMEOUT_MS), 120_000));
+
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.fileAckWaiters.delete(key);
+        reject(new Error(`file ack timeout: ${key}`));
+      }, timeoutMs);
+      this.fileAckWaiters.set(key, { resolve, reject, timer });
+    });
+  }
+
+  private resolveFileAck(params: { transferId: string; stage: string; chunkIndex?: number; payload: Record<string, unknown>; ok: boolean }) {
+    const transferId = asString(params.transferId).trim();
+    const stage = asString(params.stage).trim();
+    const key = this.fileAckKey(transferId, stage, params.chunkIndex);
+    const waiter = this.fileAckWaiters.get(key);
+    if (!waiter) return false;
+    this.fileAckWaiters.delete(key);
+    clearTimeout(waiter.timer);
+    if (params.ok) waiter.resolve(params.payload);
+    else waiter.reject(new Error(asString(params.payload?.errorMessage || params.payload?.error || 'file ack failed')));
+    return true;
+  }
+
+  private pushFileEventToAccount(accountId: string, event: string, payload: Record<string, unknown>) {
+    const connIds = this.resolvePushConnIds(accountId);
+    if (!connIds.size || !this.gatewayContext) {
+      throw new Error(`no active bncr connection for account=${accountId}`);
+    }
+    this.gatewayContext.broadcastToConnIds(event, payload, connIds);
+  }
+
+  private resolveInboundFileType(mimeType: string, fileName: string): string {
+    const mt = asString(mimeType).toLowerCase();
+    const fn = asString(fileName).toLowerCase();
+    if (mt.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/.test(fn)) return 'image';
+    if (mt.startsWith('video/') || /\.(mp4|mov|mkv|avi|webm)$/.test(fn)) return 'video';
+    if (mt.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/.test(fn)) return 'audio';
+    return mt || 'file';
+  }
+
+  private resolveInboundFilesDir(): string {
+    const dir = path.join(process.cwd(), '.openclaw', 'media', 'inbound', 'bncr');
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  private async materializeRecvTransfer(st: FileRecvTransferState): Promise<{ path: string; fileSha256: string }> {
+    const dir = this.resolveInboundFilesDir();
+    const safeName = asString(st.fileName).trim() || `${st.transferId}.bin`;
+    const finalPath = path.join(dir, safeName);
+
+    const ordered: Buffer[] = [];
+    for (let i = 0; i < st.totalChunks; i++) {
+      const chunk = st.bufferByChunk.get(i);
+      if (!chunk) throw new Error(`missing chunk ${i}`);
+      ordered.push(chunk);
+    }
+    const merged = Buffer.concat(ordered);
+    if (Number(st.fileSize || 0) > 0 && merged.length !== Number(st.fileSize || 0)) {
+      throw new Error(`size mismatch expected=${st.fileSize} got=${merged.length}`);
+    }
+
+    const sha = createHash('sha256').update(merged).digest('hex');
+    if (st.fileSha256 && sha !== st.fileSha256) {
+      throw new Error(`sha256 mismatch expected=${st.fileSha256} got=${sha}`);
+    }
+
+    fs.writeFileSync(finalPath, merged);
+    return { path: finalPath, fileSha256: sha };
   }
 
   private fmtAgo(ts?: number | null): string {
@@ -1259,6 +1507,211 @@ class BncrBridgeRuntime {
     };
   }
 
+  private async sleepMs(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+  }
+
+  private waitChunkAck(params: {
+    transferId: string;
+    chunkIndex: number;
+    timeoutMs?: number;
+  }): Promise<void> {
+    const { transferId, chunkIndex } = params;
+    const timeoutMs = Math.max(1_000, Math.min(Number(params.timeoutMs || FILE_TRANSFER_ACK_TTL_MS), 60_000));
+    const started = now();
+
+    return new Promise<void>((resolve, reject) => {
+      const tick = async () => {
+        const st = this.fileSendTransfers.get(transferId);
+        if (!st) {
+          reject(new Error('transfer state missing'));
+          return;
+        }
+        if (st.failedChunks.has(chunkIndex)) {
+          reject(new Error(st.failedChunks.get(chunkIndex) || `chunk ${chunkIndex} failed`));
+          return;
+        }
+        if (st.ackedChunks.has(chunkIndex)) {
+          resolve();
+          return;
+        }
+        if (now() - started >= timeoutMs) {
+          reject(new Error(`chunk ack timeout index=${chunkIndex}`));
+          return;
+        }
+        await this.sleepMs(120);
+        void tick();
+      };
+      void tick();
+    });
+  }
+
+  private waitCompleteAck(params: {
+    transferId: string;
+    timeoutMs?: number;
+  }): Promise<{ path: string }> {
+    const { transferId } = params;
+    const timeoutMs = Math.max(2_000, Math.min(Number(params.timeoutMs || 60_000), 120_000));
+    const started = now();
+
+    return new Promise<{ path: string }>((resolve, reject) => {
+      const tick = async () => {
+        const st = this.fileSendTransfers.get(transferId);
+        if (!st) {
+          reject(new Error('transfer state missing'));
+          return;
+        }
+        if (st.status === 'aborted') {
+          reject(new Error(st.error || 'transfer aborted'));
+          return;
+        }
+        if (st.status === 'completed' && st.completedPath) {
+          resolve({ path: st.completedPath });
+          return;
+        }
+        if (now() - started >= timeoutMs) {
+          reject(new Error('complete ack timeout'));
+          return;
+        }
+        await this.sleepMs(150);
+        void tick();
+      };
+      void tick();
+    });
+  }
+
+  private async transferMediaToBncrClient(params: {
+    accountId: string;
+    sessionKey: string;
+    route: BncrRoute;
+    mediaUrl: string;
+    mediaLocalRoots?: readonly string[];
+  }): Promise<{ mode: 'base64' | 'chunk'; mimeType?: string; fileName?: string; mediaBase64?: string; path?: string }> {
+    const loaded = await this.api.runtime.media.loadWebMedia(params.mediaUrl, {
+      localRoots: params.mediaLocalRoots,
+      maxBytes: 50 * 1024 * 1024,
+    });
+
+    const size = loaded.buffer.byteLength;
+    const mimeType = loaded.contentType;
+    const fileName = resolveOutboundFileName({
+      mediaUrl: params.mediaUrl,
+      fileName: loaded.fileName,
+      mimeType,
+    });
+
+    if (!FILE_FORCE_CHUNK && size <= FILE_INLINE_THRESHOLD) {
+      return {
+        mode: 'base64',
+        mimeType,
+        fileName,
+        mediaBase64: loaded.buffer.toString('base64'),
+      };
+    }
+
+    const ctx = this.gatewayContext;
+    if (!ctx) throw new Error('gateway context unavailable');
+
+    const connIds = this.resolvePushConnIds(params.accountId);
+    if (!connIds.size) throw new Error('no active bncr client for file chunk transfer');
+
+    const transferId = randomUUID();
+    const chunkSize = 256 * 1024;
+    const totalChunks = Math.ceil(size / chunkSize);
+    const fileSha256 = createHash('sha256').update(loaded.buffer).digest('hex');
+
+    const st: FileSendTransferState = {
+      transferId,
+      accountId: normalizeAccountId(params.accountId),
+      sessionKey: params.sessionKey,
+      route: params.route,
+      fileName,
+      mimeType: mimeType || 'application/octet-stream',
+      fileSize: size,
+      chunkSize,
+      totalChunks,
+      fileSha256,
+      startedAt: now(),
+      status: 'init',
+      ackedChunks: new Set(),
+      failedChunks: new Map(),
+    };
+    this.fileSendTransfers.set(transferId, st);
+
+    ctx.broadcastToConnIds('bncr.file.init', {
+      transferId,
+      direction: 'oc2bncr',
+      sessionKey: params.sessionKey,
+      platform: params.route.platform,
+      groupId: params.route.groupId,
+      userId: params.route.userId,
+      fileName,
+      mimeType,
+      fileSize: size,
+      chunkSize,
+      totalChunks,
+      fileSha256,
+      ts: now(),
+    }, connIds);
+
+    // 逐块发送并等待 ACK
+    for (let idx = 0; idx < totalChunks; idx++) {
+      const start = idx * chunkSize;
+      const end = Math.min(start + chunkSize, size);
+      const slice = loaded.buffer.subarray(start, end);
+      const chunkSha256 = createHash('sha256').update(slice).digest('hex');
+
+      let ok = false;
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        ctx.broadcastToConnIds('bncr.file.chunk', {
+          transferId,
+          chunkIndex: idx,
+          offset: start,
+          size: slice.byteLength,
+          chunkSha256,
+          base64: slice.toString('base64'),
+          ts: now(),
+        }, connIds);
+
+        try {
+          await this.waitChunkAck({ transferId, chunkIndex: idx, timeoutMs: FILE_TRANSFER_ACK_TTL_MS });
+          ok = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          await this.sleepMs(150 * attempt);
+        }
+      }
+
+      if (!ok) {
+        st.status = 'aborted';
+        st.error = String((lastErr as any)?.message || lastErr || `chunk-${idx}-failed`);
+        this.fileSendTransfers.set(transferId, st);
+        ctx.broadcastToConnIds('bncr.file.abort', {
+          transferId,
+          reason: st.error,
+          ts: now(),
+        }, connIds);
+        throw new Error(st.error);
+      }
+    }
+
+    ctx.broadcastToConnIds('bncr.file.complete', {
+      transferId,
+      ts: now(),
+    }, connIds);
+
+    const done = await this.waitCompleteAck({ transferId, timeoutMs: 60_000 });
+
+    return {
+      mode: 'chunk',
+      mimeType,
+      fileName,
+      path: done.path,
+    };
+  }
+
   private async enqueueFromReply(params: {
     accountId: string;
     sessionKey: string;
@@ -1277,7 +1730,13 @@ class BncrBridgeRuntime {
     if (mediaList.length > 0) {
       let first = true;
       for (const mediaUrl of mediaList) {
-        const media = await this.payloadMediaToBase64(mediaUrl, mediaLocalRoots);
+        const media = await this.transferMediaToBncrClient({
+          accountId,
+          sessionKey,
+          route,
+          mediaUrl,
+          mediaLocalRoots,
+        });
         const messageId = randomUUID();
         const mediaMsg = first ? asString(payload.text || '') : '';
         const frame = {
@@ -1289,11 +1748,21 @@ class BncrBridgeRuntime {
             platform: route.platform,
             groupId: route.groupId,
             userId: route.userId,
-            type: media.mimeType,
+            type: resolveBncrOutboundMessageType({
+              mimeType: media.mimeType,
+              fileName: media.fileName,
+              hintedType: 'file',
+            }),
+            mimeType: media.mimeType || '',
             msg: mediaMsg,
-            path: mediaUrl,
-            base64: media.mediaBase64,
-            fileName: media.fileName,
+            path: media.path || mediaUrl,
+            base64: media.mediaBase64 || '',
+            fileName: resolveOutboundFileName({
+              mediaUrl,
+              fileName: media.fileName,
+              mimeType: media.mimeType,
+            }),
+            transferMode: media.mode,
           },
           ts: now(),
         };
@@ -1459,6 +1928,285 @@ class BncrBridgeRuntime {
     });
   };
 
+  handleFileInit = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
+    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    this.rememberGatewayContext(context);
+    this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
+
+    const transferId = asString(params?.transferId || '').trim();
+    const sessionKey = asString(params?.sessionKey || '').trim();
+    const fileName = asString(params?.fileName || '').trim() || 'file.bin';
+    const mimeType = asString(params?.mimeType || '').trim() || 'application/octet-stream';
+    const fileSize = Number(params?.fileSize || 0);
+    const chunkSize = Number(params?.chunkSize || 256 * 1024);
+    const totalChunks = Number(params?.totalChunks || 0);
+    const fileSha256 = asString(params?.fileSha256 || '').trim();
+
+    if (!transferId || !sessionKey || !fileSize || !chunkSize || !totalChunks) {
+      respond(false, { error: 'transferId/sessionKey/fileSize/chunkSize/totalChunks required' });
+      return;
+    }
+
+    const normalized = normalizeStoredSessionKey(sessionKey);
+    if (!normalized) {
+      respond(false, { error: 'invalid sessionKey' });
+      return;
+    }
+
+    const existing = this.fileRecvTransfers.get(transferId);
+    if (existing) {
+      respond(true, {
+        ok: true,
+        transferId,
+        status: existing.status,
+        duplicated: true,
+      });
+      return;
+    }
+
+    const route = parseRouteLike({
+      platform: asString(params?.platform || normalized.route.platform),
+      groupId: asString(params?.groupId || normalized.route.groupId),
+      userId: asString(params?.userId || normalized.route.userId),
+    }) || normalized.route;
+
+    this.fileRecvTransfers.set(transferId, {
+      transferId,
+      accountId,
+      sessionKey: normalized.sessionKey,
+      route,
+      fileName,
+      mimeType,
+      fileSize,
+      chunkSize,
+      totalChunks,
+      fileSha256,
+      startedAt: now(),
+      status: 'init',
+      bufferByChunk: new Map(),
+      receivedChunks: new Set(),
+    });
+
+    respond(true, {
+      ok: true,
+      transferId,
+      status: 'init',
+    });
+  };
+
+  handleFileChunk = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
+    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    this.rememberGatewayContext(context);
+    this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
+
+    const transferId = asString(params?.transferId || '').trim();
+    const chunkIndex = Number(params?.chunkIndex ?? -1);
+    const offset = Number(params?.offset ?? 0);
+    const size = Number(params?.size ?? 0);
+    const chunkSha256 = asString(params?.chunkSha256 || '').trim();
+    const base64 = asString(params?.base64 || '');
+
+    if (!transferId || chunkIndex < 0 || !base64) {
+      respond(false, { error: 'transferId/chunkIndex/base64 required' });
+      return;
+    }
+
+    const st = this.fileRecvTransfers.get(transferId);
+    if (!st) {
+      respond(false, { error: 'transfer not found' });
+      return;
+    }
+
+    try {
+      const buf = Buffer.from(base64, 'base64');
+      if (size > 0 && buf.length !== size) {
+        throw new Error(`chunk size mismatch expected=${size} got=${buf.length}`);
+      }
+      if (chunkSha256) {
+        const digest = createHash('sha256').update(buf).digest('hex');
+        if (digest !== chunkSha256) throw new Error('chunk sha256 mismatch');
+      }
+      st.bufferByChunk.set(chunkIndex, buf);
+      st.receivedChunks.add(chunkIndex);
+      st.status = 'transferring';
+      this.fileRecvTransfers.set(transferId, st);
+
+      respond(true, {
+        ok: true,
+        transferId,
+        chunkIndex,
+        offset,
+        received: st.receivedChunks.size,
+        totalChunks: st.totalChunks,
+      });
+    } catch (error) {
+      respond(false, { error: String((error as any)?.message || error || 'chunk invalid') });
+    }
+  };
+
+  handleFileComplete = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
+    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    this.rememberGatewayContext(context);
+    this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
+
+    const transferId = asString(params?.transferId || '').trim();
+    if (!transferId) {
+      respond(false, { error: 'transferId required' });
+      return;
+    }
+
+    const st = this.fileRecvTransfers.get(transferId);
+    if (!st) {
+      respond(false, { error: 'transfer not found' });
+      return;
+    }
+
+    try {
+      if (st.receivedChunks.size < st.totalChunks) {
+        throw new Error(`chunk not complete received=${st.receivedChunks.size} total=${st.totalChunks}`);
+      }
+
+      const ordered = Array.from(st.bufferByChunk.entries()).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+      const merged = Buffer.concat(ordered);
+      if (st.fileSize > 0 && merged.length !== st.fileSize) {
+        throw new Error(`file size mismatch expected=${st.fileSize} got=${merged.length}`);
+      }
+      const digest = createHash('sha256').update(merged).digest('hex');
+      if (st.fileSha256 && digest !== st.fileSha256) {
+        throw new Error('file sha256 mismatch');
+      }
+
+      const saved = await this.api.runtime.channel.media.saveMediaBuffer(
+        merged,
+        st.mimeType,
+        'inbound',
+        50 * 1024 * 1024,
+        st.fileName,
+      );
+      st.completedPath = saved.path;
+      st.status = 'completed';
+      this.fileRecvTransfers.set(transferId, st);
+
+      respond(true, {
+        ok: true,
+        transferId,
+        path: saved.path,
+        size: merged.length,
+        fileName: st.fileName,
+        mimeType: st.mimeType,
+        fileSha256: digest,
+      });
+    } catch (error) {
+      st.status = 'aborted';
+      st.error = String((error as any)?.message || error || 'complete failed');
+      this.fileRecvTransfers.set(transferId, st);
+      respond(false, { error: st.error });
+    }
+  };
+
+  handleFileAbort = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
+    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    this.rememberGatewayContext(context);
+    this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
+
+    const transferId = asString(params?.transferId || '').trim();
+    if (!transferId) {
+      respond(false, { error: 'transferId required' });
+      return;
+    }
+
+    const st = this.fileRecvTransfers.get(transferId);
+    if (!st) {
+      respond(true, { ok: true, transferId, message: 'not-found' });
+      return;
+    }
+
+    st.status = 'aborted';
+    st.error = asString(params?.reason || 'aborted');
+    this.fileRecvTransfers.set(transferId, st);
+
+    respond(true, {
+      ok: true,
+      transferId,
+      status: 'aborted',
+    });
+  };
+
+  handleFileAck = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
+    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    this.rememberGatewayContext(context);
+    this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
+
+    const transferId = asString(params?.transferId || '').trim();
+    const stage = asString(params?.stage || '').trim();
+    const ok = params?.ok !== false;
+    const chunkIndex = Number(params?.chunkIndex ?? -1);
+
+    if (!transferId || !stage) {
+      respond(false, { error: 'transferId/stage required' });
+      return;
+    }
+
+    const st = this.fileSendTransfers.get(transferId);
+    if (st) {
+      if (!ok) {
+        const code = asString(params?.errorCode || 'ACK_FAILED');
+        const msg = asString(params?.errorMessage || 'ack failed');
+        st.error = `${code}:${msg}`;
+        if (stage === 'chunk' && chunkIndex >= 0) st.failedChunks.set(chunkIndex, st.error);
+        if (stage === 'complete') st.status = 'aborted';
+      } else {
+        if (stage === 'chunk' && chunkIndex >= 0) {
+          st.ackedChunks.add(chunkIndex);
+          st.status = 'transferring';
+        }
+        if (stage === 'complete') {
+          st.status = 'completed';
+          st.completedPath = asString(params?.path || '').trim() || st.completedPath;
+        }
+      }
+      this.fileSendTransfers.set(transferId, st);
+    }
+
+    // 唤醒等待中的 chunk/complete ACK
+    this.resolveFileAck({
+      transferId,
+      stage,
+      chunkIndex: chunkIndex >= 0 ? chunkIndex : undefined,
+      payload: {
+        ok,
+        transferId,
+        stage,
+        path: asString(params?.path || '').trim(),
+        errorCode: asString(params?.errorCode || ''),
+        errorMessage: asString(params?.errorMessage || ''),
+      },
+      ok,
+    });
+
+    respond(true, {
+      ok: true,
+      transferId,
+      stage,
+      state: st?.status || 'late',
+    });
+  };
+
   handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
@@ -1487,6 +2235,7 @@ class BncrBridgeRuntime {
     const text = asString(params?.msg || '');
     const msgType = asString(params?.type || 'text') || 'text';
     const mediaBase64 = asString(params?.base64 || '');
+    const mediaPathFromTransfer = asString(params?.path || '').trim();
     const mimeType = asString(params?.mimeType || '').trim() || undefined;
     const fileName = asString(params?.fileName || '').trim() || undefined;
     const msgId = asString(params?.msgId || '').trim() || undefined;
@@ -1563,6 +2312,8 @@ class BncrBridgeRuntime {
             fileName,
           );
           mediaPath = saved.path;
+        } else if (mediaPathFromTransfer && fs.existsSync(mediaPathFromTransfer)) {
+          mediaPath = mediaPathFromTransfer;
         }
 
         const rawBody = agentText || (msgType === 'text' ? '' : `[${msgType}]`);
@@ -1579,6 +2330,11 @@ class BncrBridgeRuntime {
         });
 
         const displayTo = formatDisplayScope(route);
+        // 全场景口径：SenderId 统一上报为 hex(scope)
+        // 作为平台侧稳定身份键，避免退化为裸 userId。
+        const senderIdForContext =
+          parseStrictBncrSessionKey(baseSessionKey)?.scopeHex
+          || routeScopeToHex(route);
         const ctxPayload = this.api.runtime.channel.reply.finalizeInboundContext({
           Body: body,
           BodyForAgent: rawBody,
@@ -1592,7 +2348,7 @@ class BncrBridgeRuntime {
           AccountId: accountId,
           ChatType: peer.kind,
           ConversationLabel: displayTo,
-          SenderId: userId,
+          SenderId: senderIdForContext,
           Provider: CHANNEL_ID,
           Surface: CHANNEL_ID,
           MessageSid: msgId,
@@ -1696,6 +2452,25 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
 
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(
+        `[bncr-send-entry:text] ${JSON.stringify({
+          accountId,
+          to,
+          text: asString(ctx?.text || ''),
+          mediaUrl: asString(ctx?.mediaUrl || ''),
+          sessionKey: asString(ctx?.sessionKey || ''),
+          mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
+          rawCtx: {
+            to: ctx?.to,
+            accountId: ctx?.accountId,
+            threadId: ctx?.threadId,
+            replyToId: ctx?.replyToId,
+          },
+        })}`,
+      );
+    }
+
     const verified = this.resolveVerifiedTarget(to, accountId);
 
     this.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
@@ -1716,6 +2491,26 @@ class BncrBridgeRuntime {
   channelSendMedia = async (ctx: any) => {
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
+
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(
+        `[bncr-send-entry:media] ${JSON.stringify({
+          accountId,
+          to,
+          text: asString(ctx?.text || ''),
+          mediaUrl: asString(ctx?.mediaUrl || ''),
+          mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
+          sessionKey: asString(ctx?.sessionKey || ''),
+          mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
+          rawCtx: {
+            to: ctx?.to,
+            accountId: ctx?.accountId,
+            threadId: ctx?.threadId,
+            replyToId: ctx?.replyToId,
+          },
+        })}`,
+      );
+    }
 
     const verified = this.resolveVerifiedTarget(to, accountId);
 
@@ -1799,7 +2594,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         looksLikeId: (raw: string, normalized?: string) => {
           return Boolean(asString(normalized || raw).trim());
         },
-        hint: 'Any label accepted; will be validated against known bncr sessions before send',
+        hint: 'Compat(6): agent:main:bncr:direct:<hex>, agent:main:bncr:group:<hex>, bncr:<hex>, bncr:g-<hex>, bncr:<platform>:<group>:<user>, bncr:g-<platform>:<group>:<user>; preferred to=bncr:<platform>:<group>:<user>, canonical sessionKey=agent:main:bncr:direct:<hex>',
       },
     },
     configSchema: BncrConfigSchema,
@@ -1876,6 +2671,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         const lastInboundAgo = rt?.lastInboundAgo ?? meta.lastInboundAgo ?? '-';
         const lastOutboundAt = rt?.lastOutboundAt ?? meta.lastOutboundAt ?? null;
         const lastOutboundAgo = rt?.lastOutboundAgo ?? meta.lastOutboundAgo ?? '-';
+        const diagnostics = rt?.diagnostics ?? meta.diagnostics ?? null;
         // 右侧状态字段统一：离线时也显示 Status（避免出现 configured 文案）
         const normalizedMode = rt?.mode === 'linked'
           ? 'linked'
@@ -1908,6 +2704,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
           lastInboundAgo,
           lastOutboundAt,
           lastOutboundAgo,
+          diagnostics,
         };
       },
       resolveAccountState: ({ enabled, configured, account, cfg, runtime }: any) => {
@@ -1918,7 +2715,18 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         return rt?.connected ? 'linked' : 'configured';
       },
     },
-    gatewayMethods: ['bncr.connect', 'bncr.inbound', 'bncr.activity', 'bncr.ack', 'bncr.diagnostics'],
+    gatewayMethods: [
+      'bncr.connect',
+      'bncr.inbound',
+      'bncr.activity',
+      'bncr.ack',
+      'bncr.diagnostics',
+      'bncr.file.init',
+      'bncr.file.chunk',
+      'bncr.file.complete',
+      'bncr.file.abort',
+      'bncr.file.ack',
+    ],
     gateway: {
       startAccount: bridge.channelStartAccount,
       stopAccount: bridge.channelStopAccount,
