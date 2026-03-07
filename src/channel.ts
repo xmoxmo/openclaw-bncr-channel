@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type {
@@ -109,7 +110,11 @@ function asString(v: unknown, fallback = ''): string {
 
 function normalizeAccountId(accountId?: string | null): string {
   const v = asString(accountId || '').trim();
-  return v || BNCR_DEFAULT_ACCOUNT_ID;
+  if (!v) return BNCR_DEFAULT_ACCOUNT_ID;
+  const lower = v.toLowerCase();
+  // 历史兼容：default/primary 统一折叠到 Primary，避免状态尾巴反复出现。
+  if (lower === 'default' || lower === 'primary') return BNCR_DEFAULT_ACCOUNT_ID;
+  return v;
 }
 
 function parseRouteFromScope(scope: string): BncrRoute | null {
@@ -409,6 +414,13 @@ class BncrBridgeRuntime {
   private lastInboundByAccount = new Map<string, number>();
   private lastOutboundByAccount = new Map<string, number>();
 
+  // 内置健康/回归计数（替代独立脚本）
+  private startedAt = now();
+  private connectEventsByAccount = new Map<string, number>();
+  private inboundEventsByAccount = new Map<string, number>();
+  private activityEventsByAccount = new Map<string, number>();
+  private ackEventsByAccount = new Map<string, number>();
+
   private saveTimer: NodeJS.Timeout | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
   private waiters = new Map<string, Array<() => void>>();
@@ -421,7 +433,8 @@ class BncrBridgeRuntime {
   startService = async (ctx: OpenClawPluginServiceContext) => {
     this.statePath = path.join(ctx.stateDir, 'bncr-bridge-state.json');
     await this.loadState();
-    this.api.logger.info('bncr-channel service started');
+    const bootDiag = this.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
+    this.api.logger.info(`bncr-channel service started (diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter})`);
   };
 
   stopService = async () => {
@@ -439,6 +452,96 @@ class BncrBridgeRuntime {
       this.saveTimer = null;
       void this.flushState();
     }, 300);
+  }
+
+  private incrementCounter(map: Map<string, number>, accountId: string) {
+    const acc = normalizeAccountId(accountId);
+    map.set(acc, (map.get(acc) || 0) + 1);
+  }
+
+  private getCounter(map: Map<string, number>, accountId: string): number {
+    return map.get(normalizeAccountId(accountId)) || 0;
+  }
+
+  private countInvalidOutboxSessionKeys(accountId: string): number {
+    const acc = normalizeAccountId(accountId);
+    let count = 0;
+    for (const entry of this.outbox.values()) {
+      if (entry.accountId !== acc) continue;
+      if (!parseStrictBncrSessionKey(entry.sessionKey)) count += 1;
+    }
+    return count;
+  }
+
+  private countLegacyAccountResidue(accountId: string): number {
+    const acc = normalizeAccountId(accountId);
+    const mismatched = (raw?: string | null) => asString(raw || '').trim() && normalizeAccountId(raw) !== acc;
+
+    let count = 0;
+
+    for (const entry of this.outbox.values()) {
+      if (mismatched(entry.accountId)) count += 1;
+    }
+    for (const entry of this.deadLetter) {
+      if (mismatched(entry.accountId)) count += 1;
+    }
+    for (const info of this.sessionRoutes.values()) {
+      if (mismatched(info.accountId)) count += 1;
+    }
+    for (const key of this.lastSessionByAccount.keys()) {
+      if (mismatched(key)) count += 1;
+    }
+    for (const key of this.lastActivityByAccount.keys()) {
+      if (mismatched(key)) count += 1;
+    }
+    for (const key of this.lastInboundByAccount.keys()) {
+      if (mismatched(key)) count += 1;
+    }
+    for (const key of this.lastOutboundByAccount.keys()) {
+      if (mismatched(key)) count += 1;
+    }
+
+    return count;
+  }
+
+  private buildIntegratedDiagnostics(accountId: string) {
+    const acc = normalizeAccountId(accountId);
+    const t = now();
+
+    const pending = Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length;
+    const dead = this.deadLetter.filter((v) => v.accountId === acc).length;
+    const invalidOutboxSessionKeys = this.countInvalidOutboxSessionKeys(acc);
+    const legacyAccountResidue = this.countLegacyAccountResidue(acc);
+
+    const totalKnownRoutes = Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc).length;
+    const connected = this.isOnline(acc);
+
+    const pluginIndexExists = fs.existsSync(path.join(process.cwd(), 'plugins', 'bncr', 'index.ts'));
+    const pluginChannelExists = fs.existsSync(path.join(process.cwd(), 'plugins', 'bncr', 'src', 'channel.ts'));
+
+    const health = {
+      connected,
+      pending,
+      deadLetter: dead,
+      activeConnections: this.activeConnectionCount(acc),
+      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
+      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
+      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
+      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
+      uptimeSec: Math.floor((t - this.startedAt) / 1000),
+    };
+
+    const regression = {
+      pluginFilesPresent: pluginIndexExists && pluginChannelExists,
+      pluginIndexExists,
+      pluginChannelExists,
+      totalKnownRoutes,
+      invalidOutboxSessionKeys,
+      legacyAccountResidue,
+      ok: invalidOutboxSessionKeys === 0 && legacyAccountResidue === 0,
+    };
+
+    return { health, regression };
   }
 
   private async loadState() {
@@ -989,6 +1092,7 @@ class BncrBridgeRuntime {
     const lastActivityAgo = this.fmtAgo(lastActAt);
     const lastInboundAgo = this.fmtAgo(lastInboundAt);
     const lastOutboundAgo = this.fmtAgo(lastOutboundAt);
+    const diagnostics = this.buildIntegratedDiagnostics(acc);
 
     return {
       pending,
@@ -1003,6 +1107,7 @@ class BncrBridgeRuntime {
       lastInboundAgo,
       lastOutboundAt,
       lastOutboundAgo,
+      diagnostics,
     };
   }
 
@@ -1026,21 +1131,49 @@ class BncrBridgeRuntime {
     };
   }
 
+  private buildStatusHeadline(accountId: string): string {
+    const acc = normalizeAccountId(accountId);
+    const diag = this.buildIntegratedDiagnostics(acc);
+    const h = diag.health;
+    const r = diag.regression;
+
+    const parts = [
+      r.ok ? 'diag:ok' : 'diag:warn',
+      `p:${h.pending}`,
+      `d:${h.deadLetter}`,
+      `c:${h.activeConnections}`,
+    ];
+
+    if (!r.ok) {
+      if (r.invalidOutboxSessionKeys > 0) parts.push(`invalid:${r.invalidOutboxSessionKeys}`);
+      if (r.legacyAccountResidue > 0) parts.push(`legacy:${r.legacyAccountResidue}`);
+    }
+
+    return parts.join(' ');
+  }
+
+  getStatusHeadline(accountId: string): string {
+    return this.buildStatusHeadline(accountId);
+  }
+
   getChannelSummary(defaultAccountId: string) {
-    const runtime = this.getAccountRuntimeSnapshot(defaultAccountId);
+    const accountId = normalizeAccountId(defaultAccountId);
+    const runtime = this.getAccountRuntimeSnapshot(accountId);
+    const headline = this.buildStatusHeadline(accountId);
+
     if (runtime.connected) {
-      return { linked: true };
+      return { linked: true, self: { e164: headline } };
     }
 
     // 顶层汇总不绑定某个 accountId：任一账号在线都应显示 linked
     const t = now();
     for (const c of this.connections.values()) {
       if (t - c.lastSeenAt <= CONNECT_TTL_MS) {
-        return { linked: true };
+        return { linked: true, self: { e164: headline } };
       }
     }
 
-    return { linked: false };
+    return { linked: false, self: { e164: headline } };
   }
 
   private enqueueOutbound(entry: OutboxEntry) {
@@ -1207,6 +1340,7 @@ class BncrBridgeRuntime {
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
     this.markActivity(accountId);
+    this.incrementCounter(this.connectEventsByAccount, accountId);
 
     respond(true, {
       channel: CHANNEL_ID,
@@ -1218,6 +1352,7 @@ class BncrBridgeRuntime {
       activeConnections: this.activeConnectionCount(accountId),
       pending: Array.from(this.outbox.values()).filter((v) => v.accountId === accountId).length,
       deadLetter: this.deadLetter.filter((v) => v.accountId === accountId).length,
+      diagnostics: this.buildIntegratedDiagnostics(accountId),
       now: now(),
     });
 
@@ -1231,6 +1366,7 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.incrementCounter(this.ackEventsByAccount, accountId);
 
     const messageId = asString(params?.messageId || '').trim();
     if (!messageId) {
@@ -1280,6 +1416,7 @@ class BncrBridgeRuntime {
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
     this.markActivity(accountId);
+    this.incrementCounter(this.activityEventsByAccount, accountId);
 
     // 轻量活动心跳：仅刷新在线活跃状态，不承担拉取职责。
     respond(true, {
@@ -1293,6 +1430,20 @@ class BncrBridgeRuntime {
     });
   };
 
+  handleDiagnostics = async ({ params, respond }: GatewayRequestHandlerOptions) => {
+    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const runtime = this.getAccountRuntimeSnapshot(accountId);
+    const diagnostics = this.buildIntegratedDiagnostics(accountId);
+
+    respond(true, {
+      channel: CHANNEL_ID,
+      accountId,
+      runtime,
+      diagnostics,
+      now: now(),
+    });
+  };
+
   handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
@@ -1300,6 +1451,7 @@ class BncrBridgeRuntime {
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
     this.markActivity(accountId);
+    this.incrementCounter(this.inboundEventsByAccount, accountId);
 
     const platform = asString(params?.platform || '').trim();
     const groupId = asString(params?.groupId || '0').trim() || '0';
@@ -1730,6 +1882,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
           mode: normalizedMode,
           pending,
           deadLetter,
+          statusHeadline: bridge.getStatusHeadline(account?.accountId),
           lastSessionKey,
           lastSessionScope,
           lastSessionAt,
@@ -1750,7 +1903,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         return rt?.connected ? 'linked' : 'configured';
       },
     },
-    gatewayMethods: ['bncr.connect', 'bncr.inbound', 'bncr.activity', 'bncr.ack'],
+    gatewayMethods: ['bncr.connect', 'bncr.inbound', 'bncr.activity', 'bncr.ack', 'bncr.diagnostics'],
     gateway: {
       startAccount: bridge.channelStartAccount,
       stopAccount: bridge.channelStopAccount,

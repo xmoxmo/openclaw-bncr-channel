@@ -37,6 +37,10 @@ const plugin = {
       "bncr.ack",
       (opts: GatewayRequestHandlerOptions) => bridge.handleAck(opts),
     );
+    api.registerGatewayMethod(
+      "bncr.diagnostics",
+      (opts: GatewayRequestHandlerOptions) => bridge.handleDiagnostics(opts),
+    );
   },
 };
 
