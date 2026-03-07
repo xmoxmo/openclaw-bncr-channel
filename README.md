@@ -13,6 +13,13 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件（`channelId=bncr`）。
 - **出站事件名**：`bncr.push`
 - **出站模式**：`push-only`（不依赖 pull 轮询）
 - **活动心跳方法**：`bncr.activity`
+- **诊断方法**：`bncr.diagnostics`
+- **文件互传方法（V1）**：
+  - `bncr.file.init`
+  - `bncr.file.chunk`
+  - `bncr.file.complete`
+  - `bncr.file.abort`
+  - `bncr.file.ack`
 
 ---
 
@@ -23,7 +30,7 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件（`channelId=bncr`）。
 - Bncr 在线：OpenClaw 通过 WS `event=bncr.push` 直接下发回复。
 - Bncr 离线：消息进入 outbox；重连后自动冲队列。
 - `bncr.activity` 仅用于在线保活，不承载拉取。
-- `bncr.ack` 兼容保留，当前不是必需链路（fire-and-forget）。
+- `bncr.ack` 保留兼容，当前主链路不强依赖。
 
 > 结论：客户端最小实现只需两件事：
 > 1) 发 `bncr.inbound`；2) 监听 `bncr.push`。
@@ -32,7 +39,7 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件（`channelId=bncr`）。
 
 ## 3. SessionKey 规则（严格）
 
-严格格式：
+标准格式（canonical）：
 
 ```text
 agent:main:bncr:direct:<hexScope>
@@ -40,28 +47,34 @@ agent:main:bncr:direct:<hexScope>
 
 其中：
 
-- `<hexScope>` = `platform:groupId:userId` 的 UTF-8 hex（小写）。
-- 仅允许 `0-9a-f` 且长度为偶数。
-- 旧格式（如 `...:<hexScope>:0`）不再作为标准形态。
+- `<hexScope>` = `platform:groupId:userId` 的 UTF-8 十六进制。
+- 推荐使用小写 hex（插件兼容大小写输入）。
+- 兼容输入会在内部归一到 `agent:main:bncr:direct:<hexScope>`。
 
 示例：
 
 ```text
-scope     = qq:0:888888
-hexScope  = 71713a303a383838383838
-sessionKey= agent:main:bncr:direct:71713a303a383838383838
+scope      = qq:0:888888
+hexScope   = 71713a303a383838383838
+sessionKey = agent:main:bncr:direct:71713a303a383838383838
 ```
 
 ---
 
 ## 4. Gateway Methods
 
-插件注册：
+插件注册方法：
 
 - `bncr.connect`
 - `bncr.inbound`
 - `bncr.activity`
 - `bncr.ack`
+- `bncr.diagnostics`
+- `bncr.file.init`
+- `bncr.file.chunk`
+- `bncr.file.complete`
+- `bncr.file.abort`
+- `bncr.file.ack`
 
 ---
 
@@ -100,6 +113,17 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
     "activeConnections": 1,
     "pending": 0,
     "deadLetter": 0,
+    "diagnostics": {
+      "health": {
+        "connected": true,
+        "pending": 0,
+        "deadLetter": 0,
+        "activeConnections": 1
+      },
+      "regression": {
+        "ok": true
+      }
+    },
     "now": 1772476800000
   }
 }
@@ -211,61 +235,101 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 - `platform`：必填
 - `groupId`：可选，默认 `"0"`（私聊）
 - `userId`：建议填写（私聊/群聊都建议带上）
-- `sessionKey`：可选，建议传严格 sessionKey（见第 3 节）
+- `sessionKey`：可选，建议传严格 sessionKey
 - `msgId`：建议传（便于短窗口去重）
 - `type`：`text/image/video/file/...`
 - `msg`：文本
 - `base64`：媒体 base64
+- `path`：可选，文件直传完成后的落盘路径（与 `base64` 二选一）
 - `mimeType` / `fileName`：媒体元数据（可选）
 
 校验失败常见错误：
 
 - `platform/groupId/userId required`
 
-#### 6.1.1 openclawclient.js（发送端）对齐说明
+#### 6.1.1 任务分流前缀（可选）
 
-基于你当前附件版本（`openclawclient` 注释版本 `0.0.2`）核对结果：
+`msg` 支持前缀：
 
-- `inboundSend()` 使用 `sessionKey`，与当前插件入站字段一致。
-- 文本消息使用 `msg`，与当前插件读取一致。
-- 媒体字段使用 `base64`（可带 `mimeType/fileName`），与当前插件读取一致。
-- 默认账号建议使用 `Primary`，并与网关账户 ID 保持大小写一致。
+- `#task:foo`
+- `/task:foo`
+- `/task foo 正文...`
+
+命中后会把会话键附加为 `:task:<taskKey>` 用于子任务分流，ACK 中会返回 `taskKey`。
 
 ### 6.2 OpenClaw -> Bncr（`bncr.push`）
 
 关键字段：
 
+- `type`（固定 `message.outbound`）
 - `messageId`
 - `idempotencyKey`（当前等于 `messageId`）
 - `sessionKey`
 - `message.platform/groupId/userId`
-- `message.type/msg/path/base64/fileName`
+- `message.type/msg/path/base64/fileName/mimeType`
+- `message.transferMode`（媒体场景可出现：`base64`/`chunk`）
 - `ts`
 
 说明：
 
 - 主类型固定为 `type="message.outbound"`。
-- 仅输出嵌套结构 `message.{...}`，不再输出平铺兼容字段。
-- 不附带 webchat 的 `stream/state/data` 语义字段。
+- 推荐客户端仅消费 `message.outbound` 主链路。
 
 ---
 
 ## 7. `message.send(channel=bncr)` 目标解析规则（重要）
 
-插件发送目标支持三种输入：
+发送前支持并兼容以下 6 种目标输入：
 
-1. 严格 `sessionKey`
-2. `platform:groupId:userId`
-3. `Bncr-platform:groupId:userId`
+1. `agent:main:bncr:direct:<hex>`
+2. `agent:main:bncr:group:<hex>`
+3. `bncr:<hex>`
+4. `bncr:g-<hex>`
+5. `bncr:<platform>:<groupId>:<userId>`
+6. `bncr:g-<platform>:<groupId>:<userId>`
 
-但发送前会做**反查校验**：
+推荐写法：
 
-- 必须在已知会话路由里反查到真实 `sessionKey` 才会发送。
-- 禁止拼凑 key 直接发；查不到会报：`target not found in known sessions`。
+- `to=bncr:<platform>:<groupId>:<userId>`
+
+内部会做**反查校验**：
+
+- 必须在已知会话路由中反查到真实 session 才发送。
+- 查不到会报：`target not found in known sessions`。
 
 ---
 
-## 8. 重试与可靠性
+## 8. 文件互传（V1）
+
+### 8.1 OpenClaw -> Bncr（下行媒体）
+
+当前默认 **强制分块**（chunk）传输：
+
+- `bncr.file.init`
+- `bncr.file.chunk`
+- `bncr.file.complete`
+- Bncr 客户端通过 `bncr.file.ack` 回 ACK
+
+特性：
+
+- 分块大小默认 256KB
+- chunk ACK 超时/失败会重试
+- 完成后 `message.outbound.message.path` 回填客户端可用路径
+
+### 8.2 Bncr -> OpenClaw（上行文件）
+
+Bncr 客户端可通过：
+
+- `bncr.file.init`
+- `bncr.file.chunk`
+- `bncr.file.complete`
+- `bncr.file.abort`
+
+完成上传后，OpenClaw 会落盘并在后续 `bncr.inbound` 中通过 `path` 传递。
+
+---
+
+## 9. 可靠性
 
 - 离线入队 + 重连自动冲队列。
 - 指数退避：`1s,2s,4s,8s...`
@@ -274,53 +338,28 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 
 ---
 
-## 9. 状态判定与观测
+## 10. 状态判定与诊断
 
 - 实际链路在线：`linked`
 - 已配置但离线：`configured`
-- 账户卡片中离线模式会显示 `Status`（展示口径）
+- 账户卡片离线展示口径会显示 `Status`
 
 常用状态字段：
 
 - `pending`
 - `deadLetter`
 - `lastSessionKey`
-- `lastSessionScope`（`Bncr-platform:group:user`）
+- `lastSessionScope`（`bncr:platform:group:user`）
 - `lastSessionAt`
 - `lastActivityAt`
 - `lastInboundAt`
 - `lastOutboundAt`
+- `diagnostics`
 
-> 已知现象：`openclaw status` 顶层与 `status --deep` 在个别版本可能出现口径不一致；排障时优先看 `status --deep` 的 Health。
+`diagnostics` 中包含：
 
----
-
-## 10. 兼容接口说明
-
-### `bncr.activity`
-
-用于活动保活，建议节流（例如 60s 一次）。
-
-请求示例：
-
-```json
-{
-  "type": "req",
-  "id": "a1",
-  "method": "bncr.activity",
-  "params": {
-    "accountId": "Primary",
-    "clientId": "bncr-client-1",
-    "reason": "heartbeat"
-  }
-}
-```
-
-`reason` 为可选自定义字段，插件会忽略业务外字段。
-
-### `bncr.ack`
-
-可调用，但当前模式下不是必需链路。
+- `health`：连接数、pending、dead-letter、事件计数、uptime
+- `regression`：已知路由数、无效 sessionKey 残留、账号残留等
 
 ---
 
@@ -330,7 +369,7 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 
 1. 先确认 `bncr.connect` 成功。
 2. 客户端确认监听的是 `bncr.push`。
-3. `sessionKey` 是否符合严格格式。
+3. `sessionKey` 是否符合规范。
 4. 若用 `message.send`，目标是否能反查到已知会话。
 
 ### Q2：为什么不需要 `bncr.pull`？
@@ -341,10 +380,15 @@ sessionKey= agent:main:bncr:direct:71713a303a383838383838
 
 - 入站带稳定 `msgId`。
 - 出站按 `idempotencyKey` 幂等处理。
-- 客户端侧建议只消费 `message.outbound` 主链路。
+- 客户端侧建议仅消费 `message.outbound`，并按需过滤 `NO_REPLY/HEARTBEAT_OK`。
+
+### Q4：如何看桥接健康状态？
+
+- 可直接调用 `bncr.diagnostics`。
+- 或看 `bncr.connect`/状态卡片中的 `diagnostics` 字段。
 
 ---
 
 ## 12. 版本提示
 
-历史版本接入过的话，请以当前文档（push-only + strict sessionKey + 目标反查）为准。
+历史版本接入过的话，请以当前文档（push-only + 6 格式目标兼容 + 文件互传 V1 + 诊断字段）为准。

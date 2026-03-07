@@ -403,7 +403,7 @@ function inboundDedupKey(params: {
 }
 
 function resolveChatType(_route: BncrRoute): 'direct' | 'group' {
-  // 业务口径：无论群聊/私聊，统一按 direct 上报，避免会话层落到 group 显示分支（bncr:g-...）。
+  // 业务口径：无论群聊/私聊，统一按 direct 上报，避免会话层落到 group 显示分支（历史 bncr:g-*）。
   return 'direct';
 }
 
