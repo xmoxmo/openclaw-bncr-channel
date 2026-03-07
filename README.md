@@ -64,6 +64,43 @@ OpenClaw 的 Bncr WebSocket Bridge 频道插件（`channelId=bncr`）。
 
 > 注意：目标会做“已知会话反查”，若未建立过会话会报 `target not found in known sessions`。
 
+## 📦 OpenClaw 快速安装插件
+
+> 适合直接放在服务器/主机上一步到位安装。
+
+### 1) 安装并启用
+
+```bash
+openclaw plugins install @xmoxmo/bncr
+openclaw plugins enable bncr
+openclaw gateway restart
+```
+
+### 2) 验证是否生效
+
+```bash
+openclaw plugins list
+openclaw status
+```
+
+### 3) 推荐：固定版本安装（生产环境）
+
+```bash
+openclaw plugins install @xmoxmo/bncr@0.0.3 --pin
+```
+
+### 4) 更新 / 卸载（可选）
+
+```bash
+openclaw plugins update bncr
+openclaw plugins uninstall bncr
+```
+
+### 5) 常见提示
+
+- 如果出现 `plugins.allow is empty` 相关提示，建议在配置里把可信插件显式加入 allow 列表。
+- 安装后若通道仍未显示，优先执行一次 `openclaw gateway restart` 再看状态。
+
 ---
 
 ## 1) 概览
