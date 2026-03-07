@@ -1882,7 +1882,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
           mode: normalizedMode,
           pending,
           deadLetter,
-          statusHeadline: bridge.getStatusHeadline(account?.accountId),
+          healthSummary: bridge.getStatusHeadline(account?.accountId),
           lastSessionKey,
           lastSessionScope,
           lastSessionAt,
