@@ -129,12 +129,26 @@ function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
   const raw = asString(scope).trim();
   if (!raw) return null;
 
-  // 支持展示标签：Bncr-platform:group:user
+  // 支持展示标签：
+  // 1) Bncr-platform:group:user
+  // 2) Bncr-platform:user   （当 groupId=0 且 userId!=0 的单聊简写）
   const stripped = raw.replace(/^Bncr-/i, '');
+  const parts = stripped.split(':');
+  if (parts.length === 2) {
+    const [platform, userId] = parts;
+    if (!platform || !userId) return null;
+    return { platform, groupId: '0', userId };
+  }
   return parseRouteFromScope(stripped);
 }
 
 function formatDisplayScope(route: BncrRoute): string {
+  // 规则：
+  // - 单聊（groupId=0）：Bncr-platform:userId
+  // - 群聊（groupId!=0）：Bncr-platform:groupId:userId
+  if (route.groupId === '0') {
+    return `Bncr-${route.platform}:${route.userId}`;
+  }
   return `Bncr-${route.platform}:${route.groupId}:${route.userId}`;
 }
 
@@ -388,8 +402,9 @@ function inboundDedupKey(params: {
   return `${accountId}|${platform}|${groupId}|${userId}|hash:${digest}`;
 }
 
-function resolveChatType(route: BncrRoute): 'direct' | 'group' {
-  return route.groupId === '0' ? 'direct' : 'group';
+function resolveChatType(_route: BncrRoute): 'direct' | 'group' {
+  // 业务口径：无论群聊/私聊，统一按 direct 上报，避免会话层落到 group 显示分支（bncr:g-...）。
+  return 'direct';
 }
 
 function routeKey(accountId: string, route: BncrRoute): string {
