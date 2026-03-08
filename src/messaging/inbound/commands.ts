@@ -2,44 +2,36 @@ import { formatDisplayScope, normalizeInboundSessionKey, parseStrictBncrSessionK
 
 type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
 
-type NativeCommand =
-  | 'help'
-  | 'commands'
-  | 'status'
-  | 'usage'
-  | 'whoami'
-  | 'session'
-  | 'model'
-  | 'models'
-  | 'new'
-  | 'reset'
-  | 'clear'
-  | 'compact'
-  | 'stop'
-  | 'reasoning'
-  | 'verbose'
-  | 'think'
-  | 'elevated';
+type NativeCommand = 'help' | 'new' | 'reset' | 'clear';
 
-const SUPPORTED_NATIVE_COMMANDS = new Set<NativeCommand>([
-  'help',
-  'commands',
-  'status',
-  'usage',
-  'whoami',
-  'session',
-  'model',
-  'models',
-  'new',
-  'reset',
-  'clear',
-  'compact',
-  'stop',
-  'reasoning',
-  'verbose',
-  'think',
-  'elevated',
-]);
+const SUPPORTED_NATIVE_COMMANDS = new Set<NativeCommand>(['help', 'new', 'reset', 'clear']);
+
+function buildBncrHelpMessage(cfg: any): string {
+  const optionParts = [
+    '/think <level>',
+    '/model <id>',
+    '/verbose on|off',
+  ];
+  if (cfg?.commands?.config === true) optionParts.push('/config');
+  if (cfg?.commands?.debug === true) optionParts.push('/debug');
+  return [
+    'ℹ️ Help',
+    '',
+    'Session',
+    '  /new  |  /reset  |  /compact [instructions]  |  /stop',
+    '',
+    'Options',
+    `  ${optionParts.join('  |  ')}`,
+    '',
+    'Status',
+    '  /status  |  /whoami  |  /context',
+    '',
+    'Skills',
+    '  /skill <name> [input]',
+    '',
+    'More: /commands for full list',
+  ].join('\n');
+}
 
 export function parseBncrNativeCommand(text: string): { command: NativeCommand; raw: string; body: string } | null {
   const raw = String(text || '').trim();
@@ -128,6 +120,16 @@ export async function handleBncrNativeCommand(params: {
       logger?.warn?.(`bncr: record native command session failed: ${String(err)}`);
     },
   });
+
+  if (command.command === 'help') {
+    await enqueueFromReply({
+      accountId,
+      sessionKey,
+      route,
+      payload: { text: buildBncrHelpMessage(cfg) },
+    });
+    return { handled: true, command: command.command, sessionKey };
+  }
 
   await api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
