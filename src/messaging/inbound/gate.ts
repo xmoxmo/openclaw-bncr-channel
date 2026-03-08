@@ -1,6 +1,6 @@
 import { normalizeAccountId } from '../../core/accounts.js';
 import { resolveBncrChannelPolicy } from '../../core/policy.js';
-import { formatDisplayScope } from '../../core/targets.js';
+import { buildDisplayScopeCandidates } from '../../core/targets.js';
 
 export type BncrGateResult =
   | { allowed: true }
@@ -44,12 +44,7 @@ export function checkBncrMessageGate(params: {
     return { allowed: false, reason: 'group disabled' };
   }
 
-  const candidates = [
-    formatDisplayScope(route),
-    `${route?.platform}:${route?.groupId}:${route?.userId}`,
-    `${route?.platform}:${route?.userId}`,
-    `${route?.userId}`,
-  ].filter(Boolean);
+  const candidates = buildDisplayScopeCandidates(route);
 
   if (!isGroup && policy.dmPolicy === 'allowlist') {
     if (!matchesAllowList(policy.allowFrom, candidates)) {

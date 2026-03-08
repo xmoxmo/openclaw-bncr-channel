@@ -7,12 +7,36 @@ import {
   normalizeStoredSessionKey,
   buildFallbackSessionKey,
   withTaskSessionKey,
+  formatDisplayScope,
+  formatLegacyDisplayScope,
 } from '../src/core/targets.ts';
 
 const route = { platform: 'tgBot', groupId: '0', userId: '6278285192' };
 
-test('parseRouteFromDisplayScope supports direct display scope', () => {
+test('parseRouteFromDisplayScope supports legacy direct display scope', () => {
   assert.deepEqual(parseRouteFromDisplayScope('bncr:tgBot:0:6278285192'), route);
+});
+
+test('parseRouteFromDisplayScope supports modern direct display scope', () => {
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr-tgBot:6278285192'), route);
+});
+
+test('parseRouteFromDisplayScope supports modern group display scope', () => {
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr-tgBot:-1001:6278285192'), {
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '6278285192',
+  });
+});
+
+test('formatDisplayScope uses short direct form and full group form', () => {
+  assert.equal(formatDisplayScope(route), 'Bncr-tgBot:6278285192');
+  assert.equal(formatDisplayScope({ platform: 'tgBot', groupId: '-1001', userId: '6278285192' }), 'Bncr-tgBot:-1001:6278285192');
+  assert.equal(formatDisplayScope({ platform: 'tgBot', groupId: '-1001', userId: '0' }), 'Bncr-tgBot:-1001:0');
+});
+
+test('formatLegacyDisplayScope keeps legacy bncr prefix form', () => {
+  assert.equal(formatLegacyDisplayScope(route), 'bncr:tgBot:0:6278285192');
 });
 
 test('parseRouteFromDisplayScope supports g-hex scope', () => {
