@@ -42,7 +42,7 @@ export async function handleBncrNativeCommand(params: {
   logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<{ handled: false } | { handled: true; command: string; sessionKey: string }> {
   const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply, logger } = params;
-  const { accountId, route, peer, sessionKeyfromroute, extracted, msgId } = parsed;
+  const { accountId, route, peer, sessionKeyfromroute, clientId, extracted, msgId } = parsed;
   const command = parseBncrNativeCommand(extracted.text);
   if (!command) return { handled: false };
 
@@ -61,7 +61,8 @@ export async function handleBncrNativeCommand(params: {
 
   const displayTo = formatDisplayScope(route);
   const body = command.body;
-  const senderIdForContext = parseStrictBncrSessionKey(baseSessionKey)?.scopeHex || routeScopeToHex(route);
+  const senderIdForContext = clientId || parseStrictBncrSessionKey(baseSessionKey)?.scopeHex || routeScopeToHex(route);
+  const senderDisplayName = 'bncr-client';
   const storePath = api.runtime.channel.session.resolveStorePath(cfg?.session?.store, {
     agentId: resolvedRoute.agentId,
   });
@@ -72,7 +73,7 @@ export async function handleBncrNativeCommand(params: {
     RawBody: body,
     CommandBody: body,
     BodyForCommands: body,
-    From: `${channelId}:${route.platform}:${route.groupId}:${route.userId}`,
+    From: senderIdForContext,
     To: displayTo,
     SessionKey: sessionKey,
     CommandTargetSessionKey: sessionKey,
@@ -82,6 +83,8 @@ export async function handleBncrNativeCommand(params: {
     ChatType: peer.kind,
     ConversationLabel: displayTo,
     SenderId: senderIdForContext,
+    SenderName: senderDisplayName,
+    SenderUsername: senderDisplayName,
     Provider: channelId,
     Surface: channelId,
     WasMentioned: true,

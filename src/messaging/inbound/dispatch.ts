@@ -22,7 +22,7 @@ export async function dispatchBncrInbound(params: {
   logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
 }) {
   const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply, setInboundActivity, scheduleSave, logger } = params;
-  const { accountId, route, peer, sessionKeyfromroute, text, msgType, mediaBase64, mediaPathFromTransfer, mimeType, fileName, msgId, extracted, platform, groupId, userId } = parsed;
+  const { accountId, route, peer, sessionKeyfromroute, clientId, text, msgType, mediaBase64, mediaPathFromTransfer, mimeType, fileName, msgId, extracted, platform, groupId, userId } = parsed;
 
   const nativeCommand = await handleBncrNativeCommand({
     api,
@@ -95,7 +95,8 @@ export async function dispatchBncrInbound(params: {
   });
 
   const displayTo = formatDisplayScope(route);
-  const senderIdForContext = parseStrictBncrSessionKey(baseSessionKey)?.scopeHex || routeScopeToHex(route);
+  const senderIdForContext = clientId || parseStrictBncrSessionKey(baseSessionKey)?.scopeHex || routeScopeToHex(route);
+  const senderDisplayName = 'bncr-client';
   const ctxPayload = api.runtime.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: rawBody,
@@ -103,13 +104,15 @@ export async function dispatchBncrInbound(params: {
     CommandBody: rawBody,
     MediaPath: mediaPath,
     MediaType: mimeType,
-    From: `${channelId}:${platform}:${groupId}:${userId}`,
+    From: senderIdForContext,
     To: displayTo,
     SessionKey: sessionKey,
     AccountId: accountId,
     ChatType: peer.kind,
     ConversationLabel: displayTo,
     SenderId: senderIdForContext,
+    SenderName: senderDisplayName,
+    SenderUsername: senderDisplayName,
     Provider: channelId,
     Surface: channelId,
     MessageSid: msgId,

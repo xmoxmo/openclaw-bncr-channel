@@ -42,6 +42,7 @@ export function parseBncrInboundParams(params: any) {
   const groupId = asString(params?.groupId || '0').trim() || '0';
   const userId = asString(params?.userId || '').trim();
   const sessionKeyfromroute = asString(params?.sessionKey || '').trim();
+  const clientId = asString(params?.clientId || '').trim() || undefined;
 
   const route: BncrRoute = {
     platform,
@@ -80,6 +81,7 @@ export function parseBncrInboundParams(params: any) {
     groupId,
     userId,
     sessionKeyfromroute,
+    clientId,
     route,
     text,
     msgType,
