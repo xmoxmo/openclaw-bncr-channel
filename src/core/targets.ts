@@ -33,6 +33,24 @@ function parseRouteFromModernDisplayScope(scope: string): BncrRoute | null {
   return null;
 }
 
+function parseRouteFromLegacyBncrPayload(payload: string): BncrRoute | null {
+  const raw = asString(payload).trim();
+  if (!raw) return null;
+
+  const legacyHex = raw.match(/^([0-9a-fA-F]+):0$/)?.[1];
+  if (legacyHex) {
+    const route = parseRouteFromHexScope(legacyHex);
+    if (route) return route;
+  }
+
+  if (isLowerHex(raw)) {
+    const route = parseRouteFromHexScope(raw);
+    if (route) return route;
+  }
+
+  return parseRouteFromModernDisplayScope(raw) || parseRouteFromScope(raw);
+}
+
 export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
   const raw = asString(scope).trim();
   if (!raw) return null;
@@ -53,11 +71,7 @@ export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
 
   const bPayload = raw.match(/^bncr:(.+)$/i)?.[1];
   if (bPayload) {
-    if (isLowerHex(bPayload)) {
-      const route = parseRouteFromHexScope(bPayload);
-      if (route) return route;
-    }
-    return parseRouteFromModernDisplayScope(bPayload) || parseRouteFromScope(bPayload);
+    return parseRouteFromLegacyBncrPayload(bPayload);
   }
 
   return null;

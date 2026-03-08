@@ -48,6 +48,11 @@ test('parseRouteFromDisplayScope supports g-hex scope', () => {
   assert.deepEqual(parseRouteFromDisplayScope(`bncr:g-${hex}`), route);
 });
 
+test('parseRouteFromDisplayScope supports legacy bncr hex:0 scope', () => {
+  const hex = Buffer.from('tgBot:0:6278285192', 'utf8').toString('hex');
+  assert.deepEqual(parseRouteFromDisplayScope(`bncr:${hex}:0`), route);
+});
+
 test('parseStrictBncrSessionKey normalizes route payload to strict direct hex sessionKey', () => {
   const parsed = parseStrictBncrSessionKey('agent:main:bncr:direct:tgBot:0:6278285192');
   assert.ok(parsed);
