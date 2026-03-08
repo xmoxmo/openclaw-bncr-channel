@@ -17,12 +17,7 @@ export function parseBncrNativeCommand(text: string): NativeCommand | null {
   const command = String(match[1] || '').trim().toLowerCase();
   if (!command) return null;
 
-  const rest = String(match[2] || '').trim();
-  const body = command === 'clear'
-    ? ['/new', rest].filter(Boolean).join(' ')
-    : command === 'help'
-      ? ['/commands', rest].filter(Boolean).join(' ')
-      : raw;
+  const body = raw;
   return { command, raw, body };
 }
 
