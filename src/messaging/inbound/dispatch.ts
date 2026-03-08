@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { formatDisplayScope, normalizeInboundSessionKey, parseStrictBncrSessionKey, routeScopeToHex, withTaskSessionKey } from '../../core/targets.js';
+import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.js';
 import { handleBncrNativeCommand } from './commands.js';
 
 type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;

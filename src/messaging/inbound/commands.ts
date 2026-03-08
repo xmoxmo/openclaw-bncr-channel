@@ -1,4 +1,4 @@
-import { formatDisplayScope, normalizeInboundSessionKey, parseStrictBncrSessionKey, routeScopeToHex, withTaskSessionKey } from '../../core/targets.js';
+import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.js';
 
 type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
 
@@ -17,7 +17,10 @@ export function parseBncrNativeCommand(text: string): NativeCommand | null {
   const command = String(match[1] || '').trim().toLowerCase();
   if (!command) return null;
 
-  const body = raw;
+  const rest = String(match[2] || '').trim();
+  const body = command === 'help'
+    ? ['/commands', rest].filter(Boolean).join(' ')
+    : raw;
   return { command, raw, body };
 }
 
