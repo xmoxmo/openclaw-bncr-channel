@@ -57,7 +57,7 @@ export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
       const route = parseRouteFromHexScope(bPayload);
       if (route) return route;
     }
-    return parseRouteFromScope(bPayload);
+    return parseRouteFromModernDisplayScope(bPayload) || parseRouteFromScope(bPayload);
   }
 
   return null;

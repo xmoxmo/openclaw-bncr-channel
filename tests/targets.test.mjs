@@ -17,6 +17,10 @@ test('parseRouteFromDisplayScope supports legacy direct display scope', () => {
   assert.deepEqual(parseRouteFromDisplayScope('bncr:tgBot:0:6278285192'), route);
 });
 
+test('parseRouteFromDisplayScope supports legacy short direct display scope', () => {
+  assert.deepEqual(parseRouteFromDisplayScope('bncr:tgBot:6278285192'), route);
+});
+
 test('parseRouteFromDisplayScope supports modern direct display scope', () => {
   assert.deepEqual(parseRouteFromDisplayScope('Bncr-tgBot:6278285192'), route);
 });
