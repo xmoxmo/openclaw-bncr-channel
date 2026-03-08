@@ -1,74 +1,19 @@
-# @xmoxmo/bncr
+# bncr
 
-OpenClaw 的 Bncr WebSocket Bridge 频道插件（`channelId=bncr`）。
+OpenClaw 的 Bncr 频道插件（`channelId=bncr`）。
 
-> 目标：只看这一份 README，就能完成接入、联调和排障。
+作用很简单：把 **Bncr / 无界客户端** 接到 **OpenClaw 网关**，用于消息双向通信与媒体/文件传输。
 
-## 🚀 QuickStart（30 秒）
+> 当前定位说明：bncr **不是 agent**。它保留既有 **WS 接入链路** 作为 transport / 通信承载，
+> 在 OpenClaw 内部则按 **正式频道插件（channel plugin）** 建模。
 
-1) 建立 WS 并发送 `bncr.connect`（拿到 `pushEvent=bncr.push`）  
-2) 用 `bncr.inbound` 上行（建议带 `msgId`）  
-3) 监听 `bncr.push`，只处理 `type=message.outbound`
+---
 
-最小消息链路（可直接抄）：
+## 安装
 
-```json
-{
-  "type": "req",
-  "id": "c1",
-  "method": "bncr.connect",
-  "params": { "accountId": "Primary", "clientId": "demo-client" }
-}
-```
+### OpenClaw 侧
 
-```json
-{
-  "type": "req",
-  "id": "i1",
-  "method": "bncr.inbound",
-  "params": {
-    "accountId": "Primary",
-    "platform": "qq",
-    "groupId": "0",
-    "userId": "888888",
-    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
-    "msgId": "msg-1001",
-    "type": "text",
-    "msg": "你好"
-  }
-}
-```
-
-```json
-{
-  "type": "event",
-  "event": "bncr.push",
-  "payload": {
-    "type": "message.outbound",
-    "messageId": "...",
-    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
-    "message": {
-      "platform": "qq",
-      "groupId": "0",
-      "userId": "888888",
-      "type": "text",
-      "msg": "收到，已处理。"
-    }
-  }
-}
-```
-
-主动发送推荐写法（`message.send(channel=bncr)`）：
-
-- `to=bncr:<platform>:<groupId>:<userId>`
-
-> 注意：目标会做“已知会话反查”，若未建立过会话会报 `target not found in known sessions`。
-
-## 📦 OpenClaw 快速安装插件
-
-> 适合直接放在服务器/主机上一步到位安装。
-
-### 1) 安装并启用
+在 OpenClaw 上执行：
 
 ```bash
 openclaw plugins install @xmoxmo/bncr
@@ -76,441 +21,222 @@ openclaw plugins enable bncr
 openclaw gateway restart
 ```
 
-### 2) 验证是否生效
+### Bncr / 无界侧
 
-```bash
-openclaw plugins list
-openclaw status
-```
+安装：
 
-### 3) 推荐：固定版本安装（生产环境）
+- `openclawclient.js`
 
-```bash
-openclaw plugins install @xmoxmo/bncr@0.0.3 --pin
-```
+然后完成客户端配置，至少包括：
 
-### 4) 更新 / 卸载（可选）
+- OpenClaw 地址
+- 端口
+- Token
+- 连接相关参数
 
-```bash
-openclaw plugins update bncr
-openclaw plugins uninstall bncr
-```
-
-### 5) 常见提示
-
-- 如果出现 `plugins.allow is empty` 相关提示，建议在配置里把可信插件显式加入 allow 列表。
-- 安装后若通道仍未显示，优先执行一次 `openclaw gateway restart` 再看状态。
+配置完成后，让客户端成功连到 OpenClaw 网关即可。
 
 ---
 
-## 1) 概览
+## 支持能力
 
-- **NPM 包名**：`@xmoxmo/bncr`
-- **OpenClaw Channel ID**：`bncr`
-- **Bridge Version**：`2`
-- **主下行事件**：`bncr.push`
-- **工作模式**：`push-only`（不依赖 pull）
-- **在线保活方法**：`bncr.activity`
-- **诊断方法**：`bncr.diagnostics`
-- **文件互传方法（V1）**：
-  - `bncr.file.init`
-  - `bncr.file.chunk`
-  - `bncr.file.complete`
-  - `bncr.file.abort`
-  - `bncr.file.ack`
+### 支持内容
 
----
+- 文本
+- 图片
+- 视频
+- 语音
+- 音频
+- 文件
 
-## 2) 工作模式（重点）
+### 其它特性
 
-当前为 **push-only**：
-
-- Bncr 在线：OpenClaw 通过 `event=bncr.push` 主动推送回复。
-- Bncr 离线：消息进入 outbox；重连后自动冲队列。
-- `bncr.activity` 只用于刷新在线活跃状态，不承担拉取。
-- `bncr.ack` 保留兼容，主链路不强依赖。
-
-> 客户端最小实现：
->
-> 1. 发送 `bncr.inbound`
-> 2. 监听 `bncr.push`
+- 下行推送
+- 离线消息自动排队
+- 重连后继续发送
+- 支持诊断信息
+- 支持文件互传
 
 ---
 
-## 3) SessionKey 规则（canonical）
+## 当前架构说明
 
-标准格式：
+### 设计原则
+
+bncr 当前采用两层模型：
+
+1. **WS 承载层（保留现状）**
+   - Bncr 客户端通过 WebSocket 接入 OpenClaw 网关
+   - 这一层负责连接、消息传输、推送、ACK、文件分块等 transport 能力
+   - 本插件**不重做这层通信**
+
+2. **OpenClaw 频道插件层（当前主线）**
+   - 在 OpenClaw 内部，bncr 作为正式 `channel plugin` 存在
+   - 负责渠道身份、入站解析、准入治理、消息分发、出站适配、状态与权限解释
+
+### 不再采用的错误理解
+
+以下理解现在都不准确：
+
+- “bncr 是一个 agent”
+- “bncr 只是临时桥接脚本”
+- “为了正式化，需要再新开一条通信层”
+
+正确理解是：
+
+> **bncr 保留现有 WS 通信承载，但在 OpenClaw 内部已经按正式频道插件分层。**
+
+---
+
+## 当前代码结构
 
 ```text
-agent:main:bncr:direct:<hexScope>
+plugins/bncr/src/
+  channel.ts
+  core/
+    types.ts
+    accounts.ts
+    targets.ts
+    status.ts
+    probe.ts
+    config-schema.ts
+    policy.ts
+    permissions.ts
+  messaging/
+    inbound/
+      parse.ts
+      gate.ts
+      dispatch.ts
+    outbound/
+      send.ts
+      media.ts
+      actions.ts
 ```
+
+### 各层职责
+
+#### `channel.ts`
+运行时宿主（runtime host）与 transport orchestration：
+- 持有连接状态
+- 处理 gateway methods
+- 维护 outbox / deadLetter / retry / push
+- 保留文件互传主链
+
+#### `core/*`
+插件的核心语义与治理层：
+- `types.ts`：基础类型
+- `accounts.ts`：账号模型
+- `targets.ts`：target / sessionKey / route 协议
+- `status.ts`：状态摘要拼装
+- `probe.ts`：探测 / 健康判断
+- `config-schema.ts`：正式配置字段
+- `policy.ts`：渠道治理默认口径
+- `permissions.ts`：elevated / approvals 解释层
+
+#### `messaging/inbound/*`
+入站消息主链：
+- `parse.ts`：原始入站解析
+- `gate.ts`：准入控制（如 dm/group policy、allowlist）
+- `dispatch.ts`：进入 OpenClaw reply pipeline
+
+#### `messaging/outbound/*`
+出站消息主链：
+- `send.ts`：文本/媒体发送入口
+- `media.ts`：媒体消息语义与 frame 组装
+- `actions.ts`：reply / delete / react / edit 等动作挂点
+
+---
+
+## 当前配置字段
+
+bncr 已正式收口的主要配置字段：
+
+- `enabled`
+- `dmPolicy`
+- `groupPolicy`
+- `allowFrom`
+- `groupAllowFrom`
+- `requireMention`（保留字段，待实现）
+- `accounts`
 
 其中：
 
-- `<hexScope>` = `platform:groupId:userId` 的 UTF-8 十六进制
-- 推荐小写 hex（插件兼容大小写输入）
-- 插件会兼容 `group` 形式并归一到 `direct`
+- `dmPolicy` / `groupPolicy` 支持：`open | allowlist | disabled`
+- `allowFrom` / `groupAllowFrom` 用于渠道侧准入
+- `requireMention` 当前仅保留配置位，尚未接通稳定的 mention 解析与拦截链路，暂按待实现处理
+- `accounts` 用于账号启停与显示名等配置
 
-示例：
+---
 
-```text
-scope      = qq:0:888888
-hexScope   = 71713a303a383838383838
-sessionKey = agent:main:bncr:direct:71713a303a383838383838
+## 权限说明
+
+bncr 当前已经有正式的权限解释层，但要区分两件事：
+
+1. **是否允许 bncr 请求 elevated**
+   - 取决于 `tools.elevated.allowFrom.bncr`
+
+2. **请求后是否直接执行**
+   - 仍可能受 OpenClaw approvals 策略约束
+
+也就是说：
+
+> `allowFrom.bncr` 表示 bncr 可以申请 elevated，
+> **不等于** bncr 可以绕过 approvals 直接执行。
+
+---
+
+## 自检
+
+当前提供轻量自检：
+
+```bash
+cd plugins/bncr
+npm run selfcheck
 ```
 
----
+用途：
+- 检查正式插件骨架是否完整
+- 检查核心分层文件是否存在
+- 作为继续重构前的轻量护栏
 
-## 4) Gateway Methods
-
-插件注册的方法：
-
-- `bncr.connect`
-- `bncr.inbound`
-- `bncr.activity`
-- `bncr.ack`
-- `bncr.diagnostics`
-- `bncr.file.init`
-- `bncr.file.chunk`
-- `bncr.file.complete`
-- `bncr.file.abort`
-- `bncr.file.ack`
-
----
-
-## 5) 接入流程（最小可用）
-
-### Step A：建立 WS 并发送 `bncr.connect`
-
-请求：
+如果输出：
 
 ```json
 {
-  "type": "req",
-  "id": "c1",
-  "method": "bncr.connect",
-  "params": {
-    "accountId": "Primary",
-    "clientId": "bncr-client-1"
-  }
+  "ok": true
 }
 ```
 
-响应（示例）：
+说明当前插件结构至少在文件层面完整。
 
-```json
-{
-  "type": "res",
-  "id": "c1",
-  "ok": true,
-  "result": {
-    "channel": "bncr",
-    "accountId": "Primary",
-    "bridgeVersion": 2,
-    "pushEvent": "bncr.push",
-    "online": true,
-    "isPrimary": true,
-    "activeConnections": 1,
-    "pending": 0,
-    "deadLetter": 0,
-    "diagnostics": {
-      "health": {
-        "connected": true,
-        "pending": 0,
-        "deadLetter": 0,
-        "activeConnections": 1
-      },
-      "regression": {
-        "ok": true
-      }
-    },
-    "now": 1772476800000
-  }
-}
+---
+
+## 安装后如何确认成功
+
+可以通过以下方式检查：
+
+```bash
+openclaw gateway status
+openclaw health --json
 ```
 
-说明：
+重点看：
 
-- `accountId` 不传时默认折叠为 `Primary`（历史 `default/primary` 也会折叠）。
+- 网关是否正常运行
+- bncr 是否已经 `linked`
+- 是否存在异常 pending / deadLetter
+- diagnostics / probe / permissions 是否输出正常
 
-### Step B：上行消息用 `bncr.inbound`
-
-文本（`msg`）示例：
-
-```json
-{
-  "type": "req",
-  "id": "i1",
-  "method": "bncr.inbound",
-  "params": {
-    "accountId": "Primary",
-    "platform": "qq",
-    "groupId": "0",
-    "userId": "888888",
-    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
-    "msgId": "msg-1001",
-    "type": "text",
-    "msg": "你好"
-  }
-}
-```
-
-媒体（`base64`）示例：
-
-```json
-{
-  "type": "req",
-  "id": "i2",
-  "method": "bncr.inbound",
-  "params": {
-    "accountId": "Primary",
-    "platform": "qq",
-    "groupId": "0",
-    "userId": "888888",
-    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
-    "msgId": "msg-1002",
-    "type": "image/png",
-    "msg": "",
-    "base64": "<BASE64_PAYLOAD>",
-    "mimeType": "image/png",
-    "fileName": "demo.png"
-  }
-}
-```
-
-响应（示例）：
-
-```json
-{
-  "type": "res",
-  "id": "i1",
-  "ok": true,
-  "result": {
-    "accepted": true,
-    "accountId": "Primary",
-    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
-    "msgId": "msg-1001",
-    "taskKey": null
-  }
-}
-```
-
-说明：
-
-- `bncr.inbound` 是 **先 ACK、后异步处理**。
-- AI 最终回复统一经 `bncr.push` 推送。
-
-### Step C：消费 `bncr.push`
-
-事件示例：
-
-```json
-{
-  "type": "event",
-  "event": "bncr.push",
-  "payload": {
-    "type": "message.outbound",
-    "messageId": "3f8b1f9b-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "idempotencyKey": "3f8b1f9b-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "sessionKey": "agent:main:bncr:direct:71713a303a383838383838",
-    "message": {
-      "platform": "qq",
-      "groupId": "0",
-      "userId": "888888",
-      "type": "text",
-      "msg": "收到，已处理。",
-      "path": "",
-      "base64": "",
-      "fileName": ""
-    },
-    "ts": 1772476801234
-  }
-}
-```
+如果 bncr 已成功连上，一般就说明插件安装和基础链路已经正常。
 
 ---
 
-## 6) 字段协议
+## 说明
 
-### 6.1 Bncr -> OpenClaw（`bncr.inbound`）
+如果你接触过旧版本，请以当前 README 和当前代码为准。
 
-常用字段：
+当前 README 描述的是：
+- **保留 WS 承载**
+- **内部已按正式频道插件分层**
 
-- `accountId`：可选（默认 `Primary`）
-- `platform`：必填
-- `groupId`：可选，默认 `"0"`
-- `userId`：建议必填
-- `sessionKey`：可选，建议传 canonical
-- `msgId`：建议传（用于短窗口去重）
-- `type`：`text/image/video/file/...`
-- `msg`：文本
-- `base64`：媒体内容
-- `path`：可选（文件分块上行完成后的路径）
-- `mimeType` / `fileName`：媒体元数据（可选）
-
-常见校验错误：
-
-- `platform/groupId/userId required`
-
-#### 6.1.1 任务分流前缀（可选）
-
-`msg` 支持任务前缀：
-
-- `#task:foo`
-- `/task:foo`
-- `/task foo 正文...`
-
-命中后会把会话键附加 `:task:<taskKey>`，ACK 中会返回 `taskKey`。
-
-#### 6.1.2 去重窗口
-
-- 有 `msgId`：按 `accountId+platform+groupId+userId+msgId` 去重
-- 无 `msgId`：按文本/媒体摘要去重
-- 去重窗口约 90 秒
-
-### 6.2 OpenClaw -> Bncr（`bncr.push`）
-
-关键字段：
-
-- `type`（固定 `message.outbound`）
-- `messageId`
-- `idempotencyKey`（当前等于 `messageId`）
-- `sessionKey`
-- `message.platform/groupId/userId`
-- `message.type/msg/path/base64/fileName/mimeType`
-- `message.transferMode`（媒体可能为 `base64` / `chunk`）
-- `ts`
-
-客户端建议：
-
-- 仅消费 `type=message.outbound` 主链路
-- 按需过滤 `NO_REPLY/HEARTBEAT_OK`
-
----
-
-## 7) `message.send(channel=bncr)` 目标解析规则（重要）
-
-发送时兼容以下 6 种输入：
-
-1. `agent:main:bncr:direct:<hex>`
-2. `agent:main:bncr:group:<hex>`
-3. `bncr:<hex>`
-4. `bncr:g-<hex>`
-5. `bncr:<platform>:<groupId>:<userId>`
-6. `bncr:g-<platform>:<groupId>:<userId>`
-
-推荐写法：
-
-- `to=bncr:<platform>:<groupId>:<userId>`
-
-发送前会做“已知会话反查校验”：
-
-- 能反查到：归一后发送
-- 反查不到：报错 `target not found in known sessions`
-
-> 实务建议：先让对端至少发过一次 `bncr.inbound`，建立会话路由后再主动发。
-
----
-
-## 8) 文件互传（V1）
-
-### 8.1 OpenClaw -> Bncr（下行媒体）
-
-默认 **强制分块**（`FILE_FORCE_CHUNK=true`）：
-
-- 事件：`bncr.file.init` -> `bncr.file.chunk` -> `bncr.file.complete`
-- Bncr 侧通过 `bncr.file.ack` 回 ACK
-
-参数口径：
-
-- chunk 大小：`256KB`
-- 单 chunk 重试：`3` 次
-- chunk ACK 超时：`30s`
-
-完成后：
-
-- `bncr.file.ack(stage=complete)` 可回传落地 `path`
-- `message.outbound.message.path` 会携带可用路径
-
-### 8.2 Bncr -> OpenClaw（上行文件）
-
-Bncr 侧调用：
-
-- `bncr.file.init`
-- `bncr.file.chunk`
-- `bncr.file.complete`
-- `bncr.file.abort`
-
-完成后 OpenClaw 校验并落盘，在后续 `bncr.inbound` 中可通过 `path` 传递。
-
----
-
-## 9) 可靠性与重试
-
-- 离线入队 + 重连自动冲队列
-- 指数退避：`1s, 2s, 4s, 8s...`
-- 最大重试次数：`10`
-- 超限进入 dead-letter
-
----
-
-## 10) 状态与诊断
-
-状态关键字段：
-
-- `pending`
-- `deadLetter`
-- `lastSessionKey`
-- `lastSessionScope`（展示为 `bncr:platform:group:user`）
-- `lastSessionAt`
-- `lastActivityAt`
-- `lastInboundAt`
-- `lastOutboundAt`
-- `diagnostics`
-
-`diagnostics` 包含：
-
-- `health`：连接数、pending、dead-letter、事件计数、uptime
-- `regression`：已知路由数、异常 sessionKey 残留、账号残留等
-
-状态摘要（`healthSummary`）格式：
-
-- 正常：`diag:ok p:<pending> d:<dead> c:<conn>`
-- 异常：`diag:warn ...`（并附带 `invalid/legacy` 计数）
-
----
-
-## 11) FAQ
-
-### Q1：为什么看不到回复？
-
-1. `bncr.connect` 是否成功
-2. 客户端是否在监听 `bncr.push`
-3. `sessionKey` 是否符合 canonical
-4. 若用 `message.send`，目标是否能反查到已知会话
-
-### Q2：为什么不需要 `bncr.pull`？
-
-当前是 push-only，统一走 `bncr.push`。
-
-### Q3：如何避免重复消息？
-
-- 入站带稳定 `msgId`
-- 出站按 `idempotencyKey` 做幂等
-- 客户端仅消费 `message.outbound` 主链路
-
-### Q4：怎么查看桥接健康状态？
-
-- 调 `bncr.diagnostics`
-- 或看 `bncr.connect` / 插件状态卡片里的 `diagnostics`
-
----
-
-## 12) 版本迁移提示
-
-如果你接过老版本，请以当前口径为准：
-
-- push-only
-- 6 格式目标兼容 + canonical 统一
-- 文件互传 V1（默认强制分块）
-- 诊断字段与 `healthSummary` 统一口径
+而不是旧的“单文件桥接实现”理解。

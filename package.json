@@ -1,6 +1,6 @@
 {
   "name": "@xmoxmo/bncr",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -20,8 +20,13 @@
     "openclaw.plugin.json",
     "README.md",
     "LICENSE",
-    "src"
+    "src",
+    "scripts"
   ],
+  "scripts": {
+    "selfcheck": "node ./scripts/selfcheck.mjs",
+    "test": "node --import ./tests/register-ts-hooks.mjs --test ./tests/*.test.mjs"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

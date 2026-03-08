@@ -14,13 +14,45 @@ import {
   writeJsonFileAtomically,
   readJsonFileWithFallback,
 } from 'openclaw/plugin-sdk';
-
-const CHANNEL_ID = 'bncr';
-const BNCR_DEFAULT_ACCOUNT_ID = 'Primary';
+import { CHANNEL_ID, BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId, resolveDefaultDisplayName, resolveAccount, listAccountIds } from './core/accounts.js';
+import type { BncrRoute, BncrConnection, OutboxEntry } from './core/types.js';
+import {
+  parseRouteFromScope,
+  parseRouteFromDisplayScope,
+  formatDisplayScope,
+  isLowerHex,
+  routeScopeToHex,
+  parseRouteFromHexScope,
+  parseRouteLike,
+  parseLegacySessionKeyToStrict,
+  normalizeStoredSessionKey,
+  parseStrictBncrSessionKey,
+  normalizeInboundSessionKey,
+  withTaskSessionKey,
+  buildFallbackSessionKey,
+  routeKey,
+} from './core/targets.js';
+import { parseBncrInboundParams } from './messaging/inbound/parse.js';
+import { dispatchBncrInbound } from './messaging/inbound/dispatch.js';
+import { checkBncrMessageGate } from './messaging/inbound/gate.js';
+import { sendBncrText, sendBncrMedia } from './messaging/outbound/send.js';
+import { buildBncrMediaOutboundFrame, resolveBncrOutboundMessageType } from './messaging/outbound/media.js';
+import { sendBncrReplyAction, deleteBncrMessageAction, reactBncrMessageAction, editBncrMessageAction } from './messaging/outbound/actions.js';
+import {
+  buildIntegratedDiagnostics as buildIntegratedDiagnosticsFromRuntime,
+  buildStatusHeadlineFromRuntime,
+  buildStatusMetaFromRuntime,
+  buildAccountRuntimeSnapshot,
+} from './core/status.js';
+import { probeBncrAccount } from './core/probe.js';
+import { BncrConfigSchema } from './core/config-schema.js';
+import { resolveBncrChannelPolicy } from './core/policy.js';
+import { buildBncrPermissionSummary } from './core/permissions.js';
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'bncr.push';
 const CONNECT_TTL_MS = 120_000;
 const MAX_RETRY = 10;
+const PUSH_DRAIN_INTERVAL_MS = 500;
 const FILE_FORCE_CHUNK = true; // 统一走 WS 分块，保留 base64 仅作兜底
 const FILE_INLINE_THRESHOLD = 5 * 1024 * 1024; // fallback 阈值（仅 FILE_FORCE_CHUNK=false 时生效）
 const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
@@ -29,53 +61,6 @@ const FILE_ACK_TIMEOUT_MS = 30_000;
 const FILE_TRANSFER_ACK_TTL_MS = 30_000;
 const FILE_TRANSFER_KEEP_MS = 6 * 60 * 60 * 1000;
 const BNCR_DEBUG_VERBOSE = true; // 临时调试：打印发送入口完整请求体
-
-const BncrConfigSchema = {
-  schema: {
-    type: 'object',
-    additionalProperties: true,
-    properties: {
-      accounts: {
-        type: 'object',
-        additionalProperties: {
-          type: 'object',
-          additionalProperties: true,
-          properties: {
-            enabled: { type: 'boolean' },
-            name: { type: 'string' },
-          },
-        },
-      },
-    },
-  },
-};
-
-type BncrRoute = {
-  platform: string;
-  groupId: string;
-  userId: string;
-};
-
-type BncrConnection = {
-  accountId: string;
-  connId: string;
-  clientId?: string;
-  connectedAt: number;
-  lastSeenAt: number;
-};
-
-type OutboxEntry = {
-  messageId: string;
-  accountId: string;
-  sessionKey: string;
-  route: BncrRoute;
-  payload: Record<string, unknown>;
-  createdAt: number;
-  retryCount: number;
-  nextAttemptAt: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-};
 
 type FileSendTransferState = {
   transferId: string;
@@ -154,328 +139,12 @@ function asString(v: unknown, fallback = ''): string {
   return String(v);
 }
 
-function normalizeAccountId(accountId?: string | null): string {
-  const v = asString(accountId || '').trim();
-  if (!v) return BNCR_DEFAULT_ACCOUNT_ID;
-  const lower = v.toLowerCase();
-  // 历史兼容：default/primary 统一折叠到 Primary，避免状态尾巴反复出现。
-  if (lower === 'default' || lower === 'primary') return BNCR_DEFAULT_ACCOUNT_ID;
-  return v;
-}
-
-function parseRouteFromScope(scope: string): BncrRoute | null {
-  const parts = asString(scope).trim().split(':');
-  if (parts.length < 3) return null;
-  const [platform, groupId, userId] = parts;
-  if (!platform || !groupId || !userId) return null;
-  return { platform, groupId, userId };
-}
-
-function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
-  const raw = asString(scope).trim();
-  if (!raw) return null;
-
-  // 终版兼容（6 种）：
-  // 1) bncr:g-<hex(scope)>
-  // 2) bncr:<hex(scope)>
-  // 3) bncr:<platform>:<groupId>:<userId>
-  // 4) bncr:g-<platform>:<groupId>:<userId>
-
-  // 1) bncr:g-<hex> 或 bncr:g-<scope>
-  const gPayload = raw.match(/^bncr:g-(.+)$/i)?.[1];
-  if (gPayload) {
-    if (isLowerHex(gPayload)) {
-      const route = parseRouteFromHexScope(gPayload);
-      if (route) return route;
-    }
-    return parseRouteFromScope(gPayload);
-  }
-
-  // 2) / 3) bncr:<hex> or bncr:<scope>
-  const bPayload = raw.match(/^bncr:(.+)$/i)?.[1];
-  if (bPayload) {
-    if (isLowerHex(bPayload)) {
-      const route = parseRouteFromHexScope(bPayload);
-      if (route) return route;
-    }
-    return parseRouteFromScope(bPayload);
-  }
-
-  return null;
-}
-
-function formatDisplayScope(route: BncrRoute): string {
-  // 主推荐标签：bncr:<platform>:<groupId>:<userId>
-  // 保持原始大小写，不做平台名降级。
-  return `bncr:${route.platform}:${route.groupId}:${route.userId}`;
-}
-
-function isLowerHex(input: string): boolean {
-  const raw = asString(input).trim();
-  // 兼容大小写十六进制，不主动降级大小写
-  return !!raw && /^[0-9a-fA-F]+$/.test(raw) && raw.length % 2 === 0;
-}
-
-function routeScopeToHex(route: BncrRoute): string {
-  const raw = `${route.platform}:${route.groupId}:${route.userId}`;
-  return Buffer.from(raw, 'utf8').toString('hex').toLowerCase();
-}
-
-function parseRouteFromHexScope(scopeHex: string): BncrRoute | null {
-  const rawHex = asString(scopeHex).trim();
-  if (!isLowerHex(rawHex)) return null;
-
-  try {
-    const decoded = Buffer.from(rawHex, 'hex').toString('utf8');
-    return parseRouteFromScope(decoded);
-  } catch {
-    return null;
-  }
-}
-
-function parseRouteLike(input: unknown): BncrRoute | null {
-  const platform = asString((input as any)?.platform || '').trim();
-  const groupId = asString((input as any)?.groupId || '').trim();
-  const userId = asString((input as any)?.userId || '').trim();
-  if (!platform || !groupId || !userId) return null;
-  return { platform, groupId, userId };
-}
-
-function parseLegacySessionKeyToStrict(input: string): string | null {
-  const raw = asString(input).trim();
-  if (!raw) return null;
-
-  const directLegacy = raw.match(/^agent:main:bncr:direct:([0-9a-fA-F]+):0$/);
-  if (directLegacy?.[1]) {
-    const route = parseRouteFromHexScope(directLegacy[1].toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
-  }
-
-  const bncrLegacy = raw.match(/^bncr:([0-9a-fA-F]+):0$/);
-  if (bncrLegacy?.[1]) {
-    const route = parseRouteFromHexScope(bncrLegacy[1].toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
-  }
-
-  const agentLegacy = raw.match(/^agent:main:bncr:([0-9a-fA-F]+):0$/);
-  if (agentLegacy?.[1]) {
-    const route = parseRouteFromHexScope(agentLegacy[1].toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
-  }
-
-  if (isLowerHex(raw.toLowerCase())) {
-    const route = parseRouteFromHexScope(raw.toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
-  }
-
-  return null;
-}
-
-function isLegacyNoiseRoute(route: BncrRoute): boolean {
-  const platform = asString(route.platform).trim().toLowerCase();
-  const groupId = asString(route.groupId).trim().toLowerCase();
-  const userId = asString(route.userId).trim().toLowerCase();
-
-  // 明确排除历史污染：agent:main:bncr（不是实际外部会话路由）
-  if (platform === 'agent' && groupId === 'main' && userId === 'bncr') return true;
-
-  // 明确排除嵌套遗留：bncr:<hex>:0（非真实外部 peer）
-  if (platform === 'bncr' && userId === '0' && isLowerHex(groupId)) return true;
-
-  return false;
-}
-
-function normalizeStoredSessionKey(input: string): { sessionKey: string; route: BncrRoute } | null {
-  const raw = asString(input).trim();
-  if (!raw) return null;
-
-  let taskKey: string | null = null;
-  let base = raw;
-
-  const taskTagged = raw.match(/^(.*):task:([a-z0-9_-]{1,32})$/i);
-  if (taskTagged) {
-    base = asString(taskTagged[1]).trim();
-    taskKey = normalizeTaskKey(taskTagged[2]);
-  }
-
-  const strict = parseStrictBncrSessionKey(base);
-  if (strict) {
-    if (isLegacyNoiseRoute(strict.route)) return null;
-    return {
-      sessionKey: taskKey ? `${strict.sessionKey}:task:${taskKey}` : strict.sessionKey,
-      route: strict.route,
-    };
-  }
-
-  const migrated = parseLegacySessionKeyToStrict(base);
-  if (!migrated) return null;
-
-  const parsed = parseStrictBncrSessionKey(migrated);
-  if (!parsed) return null;
-  if (isLegacyNoiseRoute(parsed.route)) return null;
-
-  return {
-    sessionKey: taskKey ? `${parsed.sessionKey}:task:${taskKey}` : parsed.sessionKey,
-    route: parsed.route,
-  };
-}
-
-const BNCR_SESSION_KEY_PREFIX = 'agent:main:bncr:direct:';
-
-function hex2utf8SessionKey(str: string): { sessionKey: string; scope: string } {
-  const raw = {
-    sessionKey: '',
-    scope: '',
-  };
-  if (!str) return raw;
-
-  const strarr = asString(str).trim().split(':');
-  const newarr: string[] = [];
-
-  for (const s of strarr) {
-    const part = asString(s).trim();
-    if (!part) {
-      newarr.push(part);
-      continue;
-    }
-
-    const decoded = Buffer.from(part, 'hex').toString('utf8');
-    if (decoded?.split(':')?.length === 3) {
-      newarr.push(decoded);
-      raw.scope = decoded;
-    } else {
-      newarr.push(part);
-    }
-  }
-
-  raw.sessionKey = newarr.join(':').trim();
-  return raw;
-}
-
-function parseStrictBncrSessionKey(input: string): { sessionKey: string; scopeHex: string; route: BncrRoute } | null {
-  const raw = asString(input).trim();
-  if (!raw) return null;
-
-  // 终版兼容 sessionKey：
-  // 1) agent:main:bncr:direct:<hex(scope)>
-  // 2) agent:main:bncr:group:<hex(scope)>
-  // （统一归一成 direct:<hex(scope)>）
-  const m = raw.match(/^agent:main:bncr:(direct|group):(.+)$/);
-  if (!m?.[1] || !m?.[2]) return null;
-
-  const payload = asString(m[2]).trim();
-  let route: BncrRoute | null = null;
-  let scopeHex = '';
-
-  if (isLowerHex(payload)) {
-    scopeHex = payload;
-    route = parseRouteFromHexScope(payload);
-  } else {
-    route = parseRouteFromScope(payload);
-    if (route) scopeHex = routeScopeToHex(route);
-  }
-
-  if (!route || !scopeHex) return null;
-
-  return {
-    sessionKey: `${BNCR_SESSION_KEY_PREFIX}${scopeHex}`,
-    scopeHex,
-    route,
-  };
-}
-
-function normalizeInboundSessionKey(scope: string, route: BncrRoute): string | null {
-  const raw = asString(scope).trim();
-  if (!raw) return buildFallbackSessionKey(route);
-
-  const parsed = parseStrictBncrSessionKey(raw);
-  if (!parsed) return null;
-  return parsed.sessionKey;
-}
-
-function normalizeTaskKey(input: unknown): string | null {
-  const raw = asString(input).trim().toLowerCase();
-  if (!raw) return null;
-
-  const normalized = raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
-  return normalized || null;
-}
-
-function extractInlineTaskKey(text: string): { taskKey: string | null; text: string } {
-  const raw = asString(text);
-  if (!raw) return { taskKey: null, text: '' };
-
-  // 形如：#task:xxx 或 /task:xxx
-  const tagged = raw.match(/^\s*(?:#task|\/task)\s*[:=]\s*([a-zA-Z0-9_-]{1,32})\s*\n?\s*([\s\S]*)$/i);
-  if (tagged) {
-    return {
-      taskKey: normalizeTaskKey(tagged[1]),
-      text: asString(tagged[2]),
-    };
-  }
-
-  // 形如：/task xxx 后跟正文
-  const spaced = raw.match(/^\s*\/task\s+([a-zA-Z0-9_-]{1,32})\s+([\s\S]*)$/i);
-  if (spaced) {
-    return {
-      taskKey: normalizeTaskKey(spaced[1]),
-      text: asString(spaced[2]),
-    };
-  }
-
-  return { taskKey: null, text: raw };
-}
-
-function withTaskSessionKey(sessionKey: string, taskKey?: string | null): string {
-  const base = asString(sessionKey).trim();
-  const tk = normalizeTaskKey(taskKey);
-  if (!base || !tk) return base;
-
-  if (/:task:[a-z0-9_-]+(?:$|:)/i.test(base)) return base;
-  return `${base}:task:${tk}`;
-}
-
-function buildFallbackSessionKey(route: BncrRoute): string {
-  // 新主口径：sessionKey 使用 agent:main:bncr:direct:<hex(scope)>
-  return `${BNCR_SESSION_KEY_PREFIX}${routeScopeToHex(route)}`;
-}
 
 function backoffMs(retryCount: number): number {
   // 1s,2s,4s,8s... capped by retry count checks
   return Math.max(1_000, 1_000 * 2 ** Math.max(0, retryCount - 1));
 }
 
-function inboundDedupKey(params: {
-  accountId: string;
-  platform: string;
-  groupId: string;
-  userId: string;
-  msgId?: string;
-  text?: string;
-  mediaBase64?: string;
-}): string {
-  const accountId = normalizeAccountId(params.accountId);
-  const platform = asString(params.platform).trim().toLowerCase();
-  const groupId = asString(params.groupId).trim();
-  const userId = asString(params.userId).trim();
-  const msgId = asString(params.msgId || '').trim();
-
-  if (msgId) return `${accountId}|${platform}|${groupId}|${userId}|msg:${msgId}`;
-
-  const text = asString(params.text || '').trim();
-  const media = asString(params.mediaBase64 || '');
-  const digest = createHash('sha1').update(`${text}\n${media.slice(0, 256)}`).digest('hex').slice(0, 16);
-  return `${accountId}|${platform}|${groupId}|${userId}|hash:${digest}`;
-}
-
-function resolveChatType(_route: BncrRoute): 'direct' | 'group' {
-  // 业务口径：无论群聊/私聊，统一按 direct 上报，避免会话层落到 group 显示分支（历史 bncr:g-*）。
-  return 'direct';
-}
-
-function routeKey(accountId: string, route: BncrRoute): string {
-  return `${accountId}:${route.platform}:${route.groupId}:${route.userId}`.toLowerCase();
-}
 
 function fileExtFromMime(mimeType?: string): string {
   const mt = asString(mimeType || '').toLowerCase();
@@ -529,24 +198,6 @@ function resolveOutboundFileName(params: { mediaUrl?: string; fileName?: string;
   return `${stem}${ext}`;
 }
 
-function resolveBncrOutboundMessageType(params: { mimeType?: string; fileName?: string; hintedType?: string }): 'text' | 'image' | 'video' | 'file' {
-  const hinted = asString(params.hintedType || '').toLowerCase();
-  // 优先使用可确定类型；“file”属于兜底，不覆盖更明确的 mime/扩展判断
-  if (hinted === 'text' || hinted === 'image' || hinted === 'video') return hinted as any;
-
-  const mt = asString(params.mimeType || '').toLowerCase();
-  const major = mt.split('/')[0] || '';
-  if (major === 'text') return 'text';
-  if (major === 'image') return 'image';
-  if (major === 'video') return 'video';
-
-  const fn = asString(params.fileName || '').toLowerCase();
-  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(fn)) return 'image';
-  if (/\.(mp4|mov|mkv|avi|webm)$/.test(fn)) return 'video';
-
-  return 'file';
-}
-
 class BncrBridgeRuntime {
   private api: OpenClawPluginApi;
   private statePath: string | null = null;
@@ -574,6 +225,7 @@ class BncrBridgeRuntime {
 
   private saveTimer: NodeJS.Timeout | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
+  private pushDrainRunningAccounts = new Set<string>();
   private waiters = new Map<string, Array<() => void>>();
   private gatewayContext: GatewayRequestHandlerOptions['context'] | null = null;
 
@@ -666,42 +318,26 @@ class BncrBridgeRuntime {
 
   private buildIntegratedDiagnostics(accountId: string) {
     const acc = normalizeAccountId(accountId);
-    const t = now();
-
-    const pending = Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length;
-    const dead = this.deadLetter.filter((v) => v.accountId === acc).length;
-    const invalidOutboxSessionKeys = this.countInvalidOutboxSessionKeys(acc);
-    const legacyAccountResidue = this.countLegacyAccountResidue(acc);
-
-    const totalKnownRoutes = Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc).length;
-    const connected = this.isOnline(acc);
-
-    const pluginIndexExists = fs.existsSync(path.join(process.cwd(), 'plugins', 'bncr', 'index.ts'));
-    const pluginChannelExists = fs.existsSync(path.join(process.cwd(), 'plugins', 'bncr', 'src', 'channel.ts'));
-
-    const health = {
-      connected,
-      pending,
-      deadLetter: dead,
+    return buildIntegratedDiagnosticsFromRuntime({
+      accountId: acc,
+      connected: this.isOnline(acc),
+      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
+      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
       activeConnections: this.activeConnectionCount(acc),
       connectEvents: this.getCounter(this.connectEventsByAccount, acc),
       inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
       activityEvents: this.getCounter(this.activityEventsByAccount, acc),
       ackEvents: this.getCounter(this.ackEventsByAccount, acc),
-      uptimeSec: Math.floor((t - this.startedAt) / 1000),
-    };
-
-    const regression = {
-      pluginFilesPresent: pluginIndexExists && pluginChannelExists,
-      pluginIndexExists,
-      pluginChannelExists,
-      totalKnownRoutes,
-      invalidOutboxSessionKeys,
-      legacyAccountResidue,
-      ok: invalidOutboxSessionKeys === 0 && legacyAccountResidue === 0,
-    };
-
-    return { health, regression };
+      startedAt: this.startedAt,
+      lastSession: this.lastSessionByAccount.get(acc) || null,
+      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
+      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
+      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
+      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc).length,
+      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
+      legacyAccountResidue: this.countLegacyAccountResidue(acc),
+      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
+    });
   }
 
   private async loadState() {
@@ -965,55 +601,76 @@ class BncrBridgeRuntime {
     const delay = Math.max(0, Math.min(Number(delayMs || 0), 30_000));
     this.pushTimer = setTimeout(() => {
       this.pushTimer = null;
-      this.flushPushQueue();
+      void this.flushPushQueue();
     }, delay);
   }
 
-  private flushPushQueue(accountId?: string) {
-    const t = now();
+  private async flushPushQueue(accountId?: string): Promise<void> {
     const filterAcc = accountId ? normalizeAccountId(accountId) : null;
-    const entries = Array.from(this.outbox.values())
-      .filter((entry) => (filterAcc ? entry.accountId === filterAcc : true))
-      .sort((a, b) => a.createdAt - b.createdAt);
+    const targetAccounts = filterAcc
+      ? [filterAcc]
+      : Array.from(new Set(Array.from(this.outbox.values()).map((entry) => normalizeAccountId(entry.accountId))));
 
-    let changed = false;
-    let nextDelay: number | null = null;
+    let globalNextDelay: number | null = null;
 
-    for (const entry of entries) {
-      if (!this.isOnline(entry.accountId)) continue;
+    for (const acc of targetAccounts) {
+      if (!acc || this.pushDrainRunningAccounts.has(acc)) continue;
+      if (!this.isOnline(acc)) continue;
 
-      if (entry.nextAttemptAt > t) {
-        const wait = entry.nextAttemptAt - t;
-        nextDelay = nextDelay == null ? wait : Math.min(nextDelay, wait);
-        continue;
+      this.pushDrainRunningAccounts.add(acc);
+      try {
+        let localNextDelay: number | null = null;
+
+        while (true) {
+          const t = now();
+          const entries = Array.from(this.outbox.values())
+            .filter((entry) => normalizeAccountId(entry.accountId) === acc)
+            .sort((a, b) => a.createdAt - b.createdAt);
+
+          if (!entries.length) break;
+          if (!this.isOnline(acc)) break;
+
+          const entry = entries.find((item) => item.nextAttemptAt <= t);
+          if (!entry) {
+            const wait = Math.max(0, entries[0].nextAttemptAt - t);
+            localNextDelay = localNextDelay == null ? wait : Math.min(localNextDelay, wait);
+            break;
+          }
+
+          const pushed = this.tryPushEntry(entry);
+          if (pushed) {
+            this.scheduleSave();
+            await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
+            continue;
+          }
+
+          const nextAttempt = entry.retryCount + 1;
+          if (nextAttempt > MAX_RETRY) {
+            this.moveToDeadLetter(entry, entry.lastError || 'push-retry-limit');
+            continue;
+          }
+
+          entry.retryCount = nextAttempt;
+          entry.lastAttemptAt = t;
+          entry.nextAttemptAt = t + backoffMs(nextAttempt);
+          entry.lastError = entry.lastError || 'push-retry';
+          this.outbox.set(entry.messageId, entry);
+          this.scheduleSave();
+
+          const wait = Math.max(0, entry.nextAttemptAt - t);
+          localNextDelay = localNextDelay == null ? wait : Math.min(localNextDelay, wait);
+          break;
+        }
+
+        if (localNextDelay != null) {
+          globalNextDelay = globalNextDelay == null ? localNextDelay : Math.min(globalNextDelay, localNextDelay);
+        }
+      } finally {
+        this.pushDrainRunningAccounts.delete(acc);
       }
-
-      const pushed = this.tryPushEntry(entry);
-      if (pushed) {
-        changed = true;
-        continue;
-      }
-
-      const nextAttempt = entry.retryCount + 1;
-      if (nextAttempt > MAX_RETRY) {
-        this.moveToDeadLetter(entry, entry.lastError || 'push-retry-limit');
-        changed = true;
-        continue;
-      }
-
-      entry.retryCount = nextAttempt;
-      entry.lastAttemptAt = t;
-      entry.nextAttemptAt = t + backoffMs(nextAttempt);
-      entry.lastError = entry.lastError || 'push-retry';
-      this.outbox.set(entry.messageId, entry);
-      changed = true;
-
-      const wait = entry.nextAttemptAt - t;
-      nextDelay = nextDelay == null ? wait : Math.min(nextDelay, wait);
     }
 
-    if (changed) this.scheduleSave();
-    if (nextDelay != null) this.schedulePushDrain(nextDelay);
+    if (globalNextDelay != null) this.schedulePushDrain(globalNextDelay);
   }
 
   private async waitForOutbound(accountId: string, waitMs: number): Promise<void> {
@@ -1332,87 +989,77 @@ class BncrBridgeRuntime {
     return { path: finalPath, fileSha256: sha };
   }
 
-  private fmtAgo(ts?: number | null): string {
-    if (!ts || !Number.isFinite(ts) || ts <= 0) return '-';
-    const diff = Math.max(0, now() - ts);
-    if (diff < 1_000) return 'just now';
-    if (diff < 60_000) return `${Math.floor(diff / 1_000)}s ago`;
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-    return `${Math.floor(diff / 86_400_000)}d ago`;
-  }
-
   private buildStatusMeta(accountId: string) {
     const acc = normalizeAccountId(accountId);
-    const pending = Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length;
-    const dead = this.deadLetter.filter((v) => v.accountId === acc).length;
-    const last = this.lastSessionByAccount.get(acc);
-    const lastActAt = this.lastActivityByAccount.get(acc) || null;
-    const lastInboundAt = this.lastInboundByAccount.get(acc) || null;
-    const lastOutboundAt = this.lastOutboundByAccount.get(acc) || null;
-
-    const lastSessionAgo = this.fmtAgo(last?.updatedAt || null);
-    const lastActivityAgo = this.fmtAgo(lastActAt);
-    const lastInboundAgo = this.fmtAgo(lastInboundAt);
-    const lastOutboundAgo = this.fmtAgo(lastOutboundAt);
-    const diagnostics = this.buildIntegratedDiagnostics(acc);
-
-    return {
-      pending,
-      deadLetter: dead,
-      lastSessionKey: last?.sessionKey || null,
-      lastSessionScope: last?.scope || null,
-      lastSessionAt: last?.updatedAt || null,
-      lastSessionAgo,
-      lastActivityAt: lastActAt,
-      lastActivityAgo,
-      lastInboundAt,
-      lastInboundAgo,
-      lastOutboundAt,
-      lastOutboundAgo,
-      diagnostics,
-    };
+    return buildStatusMetaFromRuntime({
+      accountId: acc,
+      connected: this.isOnline(acc),
+      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
+      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
+      activeConnections: this.activeConnectionCount(acc),
+      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
+      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
+      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
+      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
+      startedAt: this.startedAt,
+      lastSession: this.lastSessionByAccount.get(acc) || null,
+      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
+      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
+      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
+      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc).length,
+      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
+      legacyAccountResidue: this.countLegacyAccountResidue(acc),
+      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
+    });
   }
 
   getAccountRuntimeSnapshot(accountId: string) {
     const acc = normalizeAccountId(accountId);
-    const connected = this.isOnline(acc);
-    const lastEventAt = this.lastActivityByAccount.get(acc) || null;
-    const lastInboundAt = this.lastInboundByAccount.get(acc) || null;
-    const lastOutboundAt = this.lastOutboundByAccount.get(acc) || null;
-    return {
+    return buildAccountRuntimeSnapshot({
       accountId: acc,
+      connected: this.isOnline(acc),
+      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
+      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
+      activeConnections: this.activeConnectionCount(acc),
+      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
+      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
+      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
+      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
+      startedAt: this.startedAt,
+      lastSession: this.lastSessionByAccount.get(acc) || null,
+      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
+      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
+      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
+      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc).length,
+      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
+      legacyAccountResidue: this.countLegacyAccountResidue(acc),
       running: true,
-      connected,
-      linked: connected,
-      lastEventAt,
-      lastInboundAt,
-      lastOutboundAt,
-      // 状态映射：在线=linked，离线=configured
-      mode: connected ? 'linked' : 'configured',
-      meta: this.buildStatusMeta(acc),
-    };
+      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
+    });
   }
 
   private buildStatusHeadline(accountId: string): string {
     const acc = normalizeAccountId(accountId);
-    const diag = this.buildIntegratedDiagnostics(acc);
-    const h = diag.health;
-    const r = diag.regression;
-
-    const parts = [
-      r.ok ? 'diag:ok' : 'diag:warn',
-      `p:${h.pending}`,
-      `d:${h.deadLetter}`,
-      `c:${h.activeConnections}`,
-    ];
-
-    if (!r.ok) {
-      if (r.invalidOutboxSessionKeys > 0) parts.push(`invalid:${r.invalidOutboxSessionKeys}`);
-      if (r.legacyAccountResidue > 0) parts.push(`legacy:${r.legacyAccountResidue}`);
-    }
-
-    return parts.join(' ');
+    return buildStatusHeadlineFromRuntime({
+      accountId: acc,
+      connected: this.isOnline(acc),
+      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
+      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
+      activeConnections: this.activeConnectionCount(acc),
+      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
+      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
+      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
+      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
+      startedAt: this.startedAt,
+      lastSession: this.lastSessionByAccount.get(acc) || null,
+      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
+      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
+      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
+      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc).length,
+      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
+      legacyAccountResidue: this.countLegacyAccountResidue(acc),
+      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
+    });
   }
 
   getStatusHeadline(accountId: string): string {
@@ -1739,33 +1386,20 @@ class BncrBridgeRuntime {
         });
         const messageId = randomUUID();
         const mediaMsg = first ? asString(payload.text || '') : '';
-        const frame = {
-          type: 'message.outbound',
+        const frame = buildBncrMediaOutboundFrame({
           messageId,
-          idempotencyKey: messageId,
           sessionKey,
-          message: {
-            platform: route.platform,
-            groupId: route.groupId,
-            userId: route.userId,
-            type: resolveBncrOutboundMessageType({
-              mimeType: media.mimeType,
-              fileName: media.fileName,
-              hintedType: 'file',
-            }),
-            mimeType: media.mimeType || '',
-            msg: mediaMsg,
-            path: media.path || mediaUrl,
-            base64: media.mediaBase64 || '',
-            fileName: resolveOutboundFileName({
-              mediaUrl,
-              fileName: media.fileName,
-              mimeType: media.mimeType,
-            }),
-            transferMode: media.mode,
-          },
-          ts: now(),
-        };
+          route,
+          media,
+          mediaUrl,
+          mediaMsg,
+          fileName: resolveOutboundFileName({
+            mediaUrl,
+            fileName: media.fileName,
+            mimeType: media.mimeType,
+          }),
+          now: now(),
+        });
 
         this.enqueueOutbound({
           messageId,
@@ -1916,14 +1550,33 @@ class BncrBridgeRuntime {
 
   handleDiagnostics = async ({ params, respond }: GatewayRequestHandlerOptions) => {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const cfg = await this.api.runtime.config.loadConfig();
     const runtime = this.getAccountRuntimeSnapshot(accountId);
     const diagnostics = this.buildIntegratedDiagnostics(accountId);
+    const permissions = buildBncrPermissionSummary(cfg ?? {});
+    const probe = probeBncrAccount({
+      accountId,
+      connected: Boolean(runtime?.connected),
+      pending: Number(runtime?.meta?.pending ?? 0),
+      deadLetter: Number(runtime?.meta?.deadLetter ?? 0),
+      activeConnections: this.activeConnectionCount(accountId),
+      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(accountId),
+      legacyAccountResidue: this.countLegacyAccountResidue(accountId),
+      lastActivityAt: runtime?.meta?.lastActivityAt ?? null,
+      structure: {
+        coreComplete: true,
+        inboundComplete: true,
+        outboundComplete: true,
+      },
+    });
 
     respond(true, {
       channel: CHANNEL_ID,
       accountId,
       runtime,
       diagnostics,
+      permissions,
+      probe,
       now: now(),
     });
   };
@@ -2208,7 +1861,8 @@ class BncrBridgeRuntime {
   };
 
   handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const parsed = parseBncrInboundParams(params);
+    const { accountId, platform, groupId, userId, sessionKeyfromroute, route, text, msgType, mediaBase64, mediaPathFromTransfer, mimeType, fileName, msgId, dedupKey, peer, extracted } = parsed;
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
@@ -2216,39 +1870,10 @@ class BncrBridgeRuntime {
     this.markActivity(accountId);
     this.incrementCounter(this.inboundEventsByAccount, accountId);
 
-    const platform = asString(params?.platform || '').trim();
-    const groupId = asString(params?.groupId || '0').trim() || '0';
-    const userId = asString(params?.userId || '').trim();
-    const sessionKeyfromroute = asString(params?.sessionKey || '').trim();
-
     if (!platform || (!userId && !groupId)) {
       respond(false, { error: 'platform/groupId/userId required' });
       return;
     }
-
-    const route: BncrRoute = {
-      platform,
-      groupId,
-      userId,
-    };
-
-    const text = asString(params?.msg || '');
-    const msgType = asString(params?.type || 'text') || 'text';
-    const mediaBase64 = asString(params?.base64 || '');
-    const mediaPathFromTransfer = asString(params?.path || '').trim();
-    const mimeType = asString(params?.mimeType || '').trim() || undefined;
-    const fileName = asString(params?.fileName || '').trim() || undefined;
-    const msgId = asString(params?.msgId || '').trim() || undefined;
-
-    const dedupKey = inboundDedupKey({
-      accountId,
-      platform,
-      groupId,
-      userId,
-      msgId,
-      text,
-      mediaBase64,
-    });
     if (this.markInboundDedupSeen(dedupKey)) {
       respond(true, {
         accepted: true,
@@ -2259,34 +1884,32 @@ class BncrBridgeRuntime {
       return;
     }
 
-    const peer = {
-      kind: resolveChatType(route),
-      id: route.groupId === '0' ? route.userId : route.groupId,
-    } as const;
-
     const cfg = await this.api.runtime.config.loadConfig();
-    const resolvedRoute = this.api.runtime.channel.routing.resolveAgentRoute({
+    const gate = checkBncrMessageGate({
+      parsed,
       cfg,
-      channel: CHANNEL_ID,
-      accountId,
-      peer,
+      account: resolveAccount(cfg, accountId),
     });
+    if (!gate.allowed) {
+      respond(true, {
+        accepted: false,
+        accountId,
+        msgId: msgId ?? null,
+        reason: gate.reason,
+      });
+      return;
+    }
 
-    const baseSessionKey = normalizeInboundSessionKey(sessionKeyfromroute, route) || resolvedRoute.sessionKey;
-
-    // 轻量任务拆分：允许在消息前缀中声明 task key，将任务分流到子会话，降低单会话上下文压力。
-    // 支持：#task:foo / /task:foo / /task foo <正文>
-    const extracted = extractInlineTaskKey(text);
-    const agentText = extracted.text;
+    const baseSessionKey = normalizeInboundSessionKey(sessionKeyfromroute, route)
+      || this.api.runtime.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: CHANNEL_ID,
+        accountId,
+        peer,
+      }).sessionKey;
     const taskSessionKey = withTaskSessionKey(baseSessionKey, extracted.taskKey);
     const sessionKey = taskSessionKey || baseSessionKey;
 
-    this.rememberSessionRoute(baseSessionKey, accountId, route);
-    if (taskSessionKey && taskSessionKey !== baseSessionKey) {
-      this.rememberSessionRoute(taskSessionKey, accountId, route);
-    }
-
-    // 先回 ACK，后异步处理 AI 回复
     respond(true, {
       accepted: true,
       accountId,
@@ -2295,114 +1918,22 @@ class BncrBridgeRuntime {
       taskKey: extracted.taskKey ?? null,
     });
 
-    void (async () => {
-      try {
-        const storePath = this.api.runtime.channel.session.resolveStorePath(cfg?.session?.store, {
-          agentId: resolvedRoute.agentId,
-        });
-
-        let mediaPath: string | undefined;
-        if (mediaBase64) {
-          const mediaBuf = Buffer.from(mediaBase64, 'base64');
-          const saved = await this.api.runtime.channel.media.saveMediaBuffer(
-            mediaBuf,
-            mimeType,
-            'inbound',
-            30 * 1024 * 1024,
-            fileName,
-          );
-          mediaPath = saved.path;
-        } else if (mediaPathFromTransfer && fs.existsSync(mediaPathFromTransfer)) {
-          mediaPath = mediaPathFromTransfer;
-        }
-
-        const rawBody = agentText || (msgType === 'text' ? '' : `[${msgType}]`);
-        const body = this.api.runtime.channel.reply.formatAgentEnvelope({
-          channel: 'Bncr',
-          from: `${platform}:${groupId}:${userId}`,
-          timestamp: Date.now(),
-          previousTimestamp: this.api.runtime.channel.session.readSessionUpdatedAt({
-            storePath,
-            sessionKey,
-          }),
-          envelope: this.api.runtime.channel.reply.resolveEnvelopeFormatOptions(cfg),
-          body: rawBody,
-        });
-
-        const displayTo = formatDisplayScope(route);
-        // 全场景口径：SenderId 统一上报为 hex(scope)
-        // 作为平台侧稳定身份键，避免退化为裸 userId。
-        const senderIdForContext =
-          parseStrictBncrSessionKey(baseSessionKey)?.scopeHex
-          || routeScopeToHex(route);
-        const ctxPayload = this.api.runtime.channel.reply.finalizeInboundContext({
-          Body: body,
-          BodyForAgent: rawBody,
-          RawBody: rawBody,
-          CommandBody: rawBody,
-          MediaPath: mediaPath,
-          MediaType: mimeType,
-          From: `${CHANNEL_ID}:${platform}:${groupId}:${userId}`,
-          To: displayTo,
-          SessionKey: sessionKey,
-          AccountId: accountId,
-          ChatType: peer.kind,
-          ConversationLabel: displayTo,
-          SenderId: senderIdForContext,
-          Provider: CHANNEL_ID,
-          Surface: CHANNEL_ID,
-          MessageSid: msgId,
-          Timestamp: Date.now(),
-          OriginatingChannel: CHANNEL_ID,
-          OriginatingTo: displayTo,
-        });
-
-        await this.api.runtime.channel.session.recordInboundSession({
-          storePath,
-          sessionKey,
-          ctx: ctxPayload,
-          onRecordError: (err) => {
-            this.api.logger.warn?.(`bncr: record session failed: ${String(err)}`);
-          },
-        });
-
-        // 记录真正的业务活动时间（入站已完成解析并落会话）
-        const inboundAt = now();
-        this.lastInboundByAccount.set(accountId, inboundAt);
-        this.markActivity(accountId, inboundAt);
-        this.scheduleSave();
-
-        await this.api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-          ctx: ctxPayload,
-          cfg,
-          // BNCR 侧仅推送最终回复，不要流式 block 推送
-          replyOptions: {
-            disableBlockStreaming: true,
-          },
-          dispatcherOptions: {
-            deliver: async (
-              payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
-              info?: { kind?: 'tool' | 'block' | 'final' },
-            ) => {
-              // 过滤掉流式 block/tool，仅投递 final
-              if (info?.kind && info.kind !== 'final') return;
-
-              await this.enqueueFromReply({
-                accountId,
-                sessionKey,
-                route,
-                payload,
-              });
-            },
-            onError: (err: unknown) => {
-              this.api.logger.error?.(`bncr reply failed: ${String(err)}`);
-            },
-          },
-        });
-      } catch (err) {
-        this.api.logger.error?.(`bncr inbound process failed: ${String(err)}`);
-      }
-    })();
+    void dispatchBncrInbound({
+      api: this.api,
+      channelId: CHANNEL_ID,
+      cfg,
+      parsed,
+      rememberSessionRoute: (sessionKey, accountId, route) => this.rememberSessionRoute(sessionKey, accountId, route),
+      enqueueFromReply: (args) => this.enqueueFromReply(args),
+      setInboundActivity: (accountId, at) => {
+        this.lastInboundByAccount.set(accountId, at);
+        this.markActivity(accountId, at);
+      },
+      scheduleSave: () => this.scheduleSave(),
+      logger: this.api.logger,
+    }).catch((err) => {
+      this.api.logger.error?.(`bncr inbound process failed: ${String(err)}`);
+    });
   };
 
   channelStartAccount = async (ctx: any) => {
@@ -2471,21 +2002,17 @@ class BncrBridgeRuntime {
       );
     }
 
-    const verified = this.resolveVerifiedTarget(to, accountId);
-
-    this.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
-
-    await this.enqueueFromReply({
+    return sendBncrText({
+      channelId: CHANNEL_ID,
       accountId,
-      sessionKey: verified.sessionKey,
-      route: verified.route,
-      payload: {
-        text: asString(ctx.text || ''),
-      },
+      to,
+      text: asString(ctx.text || ''),
       mediaLocalRoots: ctx.mediaLocalRoots,
+      resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
+      rememberSessionRoute: (sessionKey, accountId, route) => this.rememberSessionRoute(sessionKey, accountId, route),
+      enqueueFromReply: (args) => this.enqueueFromReply(args),
+      createMessageId: () => randomUUID(),
     });
-
-    return { channel: CHANNEL_ID, messageId: randomUUID(), chatId: verified.sessionKey };
   };
 
   channelSendMedia = async (ctx: any) => {
@@ -2512,55 +2039,19 @@ class BncrBridgeRuntime {
       );
     }
 
-    const verified = this.resolveVerifiedTarget(to, accountId);
-
-    this.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
-
-    await this.enqueueFromReply({
+    return sendBncrMedia({
+      channelId: CHANNEL_ID,
       accountId,
-      sessionKey: verified.sessionKey,
-      route: verified.route,
-      payload: {
-        text: asString(ctx.text || ''),
-        mediaUrl: asString(ctx.mediaUrl || ''),
-      },
+      to,
+      text: asString(ctx.text || ''),
+      mediaUrl: asString(ctx.mediaUrl || ''),
       mediaLocalRoots: ctx.mediaLocalRoots,
+      resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
+      rememberSessionRoute: (sessionKey, accountId, route) => this.rememberSessionRoute(sessionKey, accountId, route),
+      enqueueFromReply: (args) => this.enqueueFromReply(args),
+      createMessageId: () => randomUUID(),
     });
-
-    return { channel: CHANNEL_ID, messageId: randomUUID(), chatId: verified.sessionKey };
   };
-}
-
-function resolveDefaultDisplayName(rawName: unknown, accountId: string): string {
-  const raw = asString(rawName || '').trim();
-  // 统一兜底：空名 / 与 accountId 重复 / 历史默认名 => Monitor
-  if (!raw || raw === accountId || /^bncr$/i.test(raw) || /^status$/i.test(raw) || /^runtime$/i.test(raw)) return 'Monitor';
-  return raw;
-}
-
-function resolveAccount(cfg: any, accountId?: string | null) {
-  const accounts = cfg?.channels?.[CHANNEL_ID]?.accounts || {};
-  let key = normalizeAccountId(accountId);
-
-  // 若请求的 accountId 不存在（例如框架仍传 default），回退到首个已配置账号
-  if (!accounts[key]) {
-    const first = Object.keys(accounts)[0];
-    if (first) key = first;
-  }
-
-  const account = accounts[key] || {};
-  const displayName = resolveDefaultDisplayName(account?.name, key);
-  return {
-    accountId: key,
-    // accountId(default) 无法隐藏时，给稳定默认名，避免空名或 default(default)
-    name: displayName,
-    enabled: account?.enabled !== false,
-  };
-}
-
-function listAccountIds(cfg: any): string[] {
-  const ids = Object.keys(cfg?.channels?.[CHANNEL_ID]?.accounts || {});
-  return ids.length ? ids : [BNCR_DEFAULT_ACCOUNT_ID];
 }
 
 export function createBncrBridge(api: OpenClawPluginApi) {
@@ -2609,7 +2100,10 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
           enabled,
           allowTopLevel: true,
         }),
-      isEnabled: (account: any) => account?.enabled !== false,
+      isEnabled: (account: any, cfg: any) => {
+        const policy = resolveBncrChannelPolicy(cfg?.channels?.[CHANNEL_ID] || {});
+        return policy.enabled !== false && account?.enabled !== false;
+      },
       isConfigured: () => true,
       describeAccount: (account: any) => {
         const displayName = resolveDefaultDisplayName(account?.name, account?.accountId);
@@ -2647,6 +2141,27 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       textChunkLimit: 4000,
       sendText: bridge.channelSendText,
       sendMedia: bridge.channelSendMedia,
+      replyAction: async (ctx: any) => sendBncrReplyAction({
+        accountId: normalizeAccountId(ctx?.accountId),
+        to: asString(ctx?.to || '').trim(),
+        text: asString(ctx?.text || ''),
+        replyToMessageId: asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
+        sendText: async ({ accountId, to, text }) => bridge.channelSendText({ accountId, to, text }),
+      }),
+      deleteAction: async (ctx: any) => deleteBncrMessageAction({
+        accountId: normalizeAccountId(ctx?.accountId),
+        targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
+      }),
+      reactAction: async (ctx: any) => reactBncrMessageAction({
+        accountId: normalizeAccountId(ctx?.accountId),
+        targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
+        emoji: asString(ctx?.emoji || '').trim(),
+      }),
+      editAction: async (ctx: any) => editBncrMessageAction({
+        accountId: normalizeAccountId(ctx?.accountId),
+        targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
+        text: asString(ctx?.text || ''),
+      }),
     },
     status: {
       defaultRuntime: createDefaultChannelRuntimeState(BNCR_DEFAULT_ACCOUNT_ID, {

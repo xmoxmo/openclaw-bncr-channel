@@ -1,0 +1,37 @@
+export const BncrConfigSchema = {
+  schema: {
+    type: 'object',
+    additionalProperties: true,
+    properties: {
+      enabled: { type: 'boolean' },
+      dmPolicy: {
+        type: 'string',
+        enum: ['open', 'allowlist', 'disabled'],
+      },
+      groupPolicy: {
+        type: 'string',
+        enum: ['open', 'allowlist', 'disabled'],
+      },
+      allowFrom: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+      groupAllowFrom: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+      requireMention: { type: 'boolean' },
+      accounts: {
+        type: 'object',
+        additionalProperties: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            enabled: { type: 'boolean' },
+            name: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+};

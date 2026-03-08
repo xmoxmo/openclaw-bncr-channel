@@ -1,15 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
-  emptyPluginConfigSchema,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk";
+import { BncrConfigSchema } from "./src/core/config-schema.js";
 import { createBncrBridge, createBncrChannelPlugin } from "./src/channel.js";
 
 const plugin = {
   id: "bncr",
   name: "Bncr",
   description: "Bncr channel plugin",
-  configSchema: emptyPluginConfigSchema(),
+  configSchema: BncrConfigSchema,
   register(api: OpenClawPluginApi) {
     const bridge = createBncrBridge(api);
 
