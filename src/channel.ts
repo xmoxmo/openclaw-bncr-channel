@@ -2073,7 +2073,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       chatTypes: ['direct'] as ChatType[],
       media: true,
       reply: true,
-      nativeCommands: false,
+      nativeCommands: true,
     },
     messaging: {
       // 接收任意标签输入；不在 normalize 阶段做格式门槛，统一下沉到发送前验证。

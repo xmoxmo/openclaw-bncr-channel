@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { formatDisplayScope, normalizeInboundSessionKey, parseStrictBncrSessionKey, routeScopeToHex, withTaskSessionKey } from '../../core/targets.js';
+import { handleBncrNativeCommand } from './commands.js';
 
 type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
 
@@ -22,6 +23,26 @@ export async function dispatchBncrInbound(params: {
 }) {
   const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply, setInboundActivity, scheduleSave, logger } = params;
   const { accountId, route, peer, sessionKeyfromroute, text, msgType, mediaBase64, mediaPathFromTransfer, mimeType, fileName, msgId, extracted, platform, groupId, userId } = parsed;
+
+  const nativeCommand = await handleBncrNativeCommand({
+    api,
+    channelId,
+    cfg,
+    parsed,
+    rememberSessionRoute,
+    enqueueFromReply,
+  });
+  if (nativeCommand.handled) {
+    const inboundAt = Date.now();
+    setInboundActivity(accountId, inboundAt);
+    scheduleSave();
+    return {
+      accountId,
+      sessionKey: nativeCommand.sessionKey,
+      taskKey: extracted.taskKey ?? null,
+      msgId: msgId ?? null,
+    };
+  }
 
   const resolvedRoute = api.runtime.channel.routing.resolveAgentRoute({
     cfg,
