@@ -31,6 +31,7 @@ export async function dispatchBncrInbound(params: {
     parsed,
     rememberSessionRoute,
     enqueueFromReply,
+    logger,
   });
   if (nativeCommand.handled) {
     const inboundAt = Date.now();

@@ -1,4 +1,4 @@
-import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.js';
+import { formatDisplayScope, normalizeInboundSessionKey, parseStrictBncrSessionKey, routeScopeToHex, withTaskSessionKey } from '../../core/targets.js';
 
 type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
 
@@ -68,9 +68,10 @@ export async function handleBncrNativeCommand(params: {
     payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
     mediaLocalRoots?: readonly string[];
   }) => Promise<void>;
+  logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<{ handled: false } | { handled: true; command: NativeCommand; sessionKey: string }> {
-  const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply } = params;
-  const { accountId, route, peer, sessionKeyfromroute, extracted } = parsed;
+  const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply, logger } = params;
+  const { accountId, route, peer, sessionKeyfromroute, extracted, msgId } = parsed;
   const command = parseBncrNativeCommand(extracted.text);
   if (!command) return { handled: false };
 
@@ -89,6 +90,10 @@ export async function handleBncrNativeCommand(params: {
 
   const displayTo = formatDisplayScope(route);
   const body = command.body;
+  const senderIdForContext = parseStrictBncrSessionKey(baseSessionKey)?.scopeHex || routeScopeToHex(route);
+  const storePath = api.runtime.channel.session.resolveStorePath(cfg?.session?.store, {
+    agentId: resolvedRoute.agentId,
+  });
 
   const ctxPayload = api.runtime.channel.reply.finalizeInboundContext({
     Body: body,
@@ -99,14 +104,29 @@ export async function handleBncrNativeCommand(params: {
     From: `${channelId}:${route.platform}:${route.groupId}:${route.userId}`,
     To: displayTo,
     SessionKey: sessionKey,
+    CommandTargetSessionKey: sessionKey,
+    CommandSource: 'native',
+    CommandAuthorized: true,
     AccountId: accountId,
     ChatType: peer.kind,
     ConversationLabel: displayTo,
+    SenderId: senderIdForContext,
     Provider: channelId,
     Surface: channelId,
+    WasMentioned: true,
+    MessageSid: msgId,
     Timestamp: Date.now(),
     OriginatingChannel: channelId,
     OriginatingTo: displayTo,
+  });
+
+  await api.runtime.channel.session.recordInboundSession({
+    storePath,
+    sessionKey,
+    ctx: ctxPayload,
+    onRecordError: (err: unknown) => {
+      logger?.warn?.(`bncr: record native command session failed: ${String(err)}`);
+    },
   });
 
   await api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
