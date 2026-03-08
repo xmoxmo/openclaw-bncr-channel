@@ -16,7 +16,7 @@ export function parseRouteFromScope(scope: string): BncrRoute | null {
   return { platform, groupId, userId };
 }
 
-function parseRouteFromModernDisplayScope(scope: string): BncrRoute | null {
+function parseRouteFromStandardDisplayScope(scope: string): BncrRoute | null {
   const parts = asString(scope).trim().split(':');
   if (parts.length === 2) {
     const [platform, userId] = parts;
@@ -24,7 +24,7 @@ function parseRouteFromModernDisplayScope(scope: string): BncrRoute | null {
     return { platform, groupId: '0', userId };
   }
 
-  if (parts.length >= 3) {
+  if (parts.length === 3) {
     const [platform, groupId, userId] = parts;
     if (!platform || !groupId || !userId) return null;
     return { platform, groupId, userId };
@@ -33,70 +33,24 @@ function parseRouteFromModernDisplayScope(scope: string): BncrRoute | null {
   return null;
 }
 
-function parseRouteFromLegacyBncrPayload(payload: string): BncrRoute | null {
-  const raw = asString(payload).trim();
-  if (!raw) return null;
-
-  const legacyHex = raw.match(/^([0-9a-fA-F]+):0$/)?.[1];
-  if (legacyHex) {
-    const route = parseRouteFromHexScope(legacyHex);
-    if (route) return route;
-  }
-
-  if (isLowerHex(raw)) {
-    const route = parseRouteFromHexScope(raw);
-    if (route) return route;
-  }
-
-  return parseRouteFromModernDisplayScope(raw) || parseRouteFromScope(raw);
-}
-
 export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
   const raw = asString(scope).trim();
   if (!raw) return null;
 
-  const modernPayload = raw.match(/^bncr-(.+)$/i)?.[1];
-  if (modernPayload) {
-    return parseRouteFromModernDisplayScope(modernPayload);
-  }
-
-  const gPayload = raw.match(/^bncr:g-(.+)$/i)?.[1];
-  if (gPayload) {
-    if (isLowerHex(gPayload)) {
-      const route = parseRouteFromHexScope(gPayload);
-      if (route) return route;
-    }
-    return parseRouteFromScope(gPayload);
-  }
-
-  const bPayload = raw.match(/^bncr:(.+)$/i)?.[1];
-  if (bPayload) {
-    return parseRouteFromLegacyBncrPayload(bPayload);
-  }
-
-  return null;
-}
-
-export function formatLegacyDisplayScope(route: BncrRoute): string {
-  return `bncr:${route.platform}:${route.groupId}:${route.userId}`;
+  const payload = raw.match(/^Bncr:(.+)$/)?.[1];
+  if (!payload) return null;
+  return parseRouteFromStandardDisplayScope(payload);
 }
 
 export function formatDisplayScope(route: BncrRoute): string {
   if (route.groupId === '0' && route.userId !== '0') {
-    return `Bncr-${route.platform}:${route.userId}`;
+    return `Bncr:${route.platform}:${route.userId}`;
   }
-  return `Bncr-${route.platform}:${route.groupId}:${route.userId}`;
+  return `Bncr:${route.platform}:${route.groupId}:${route.userId}`;
 }
 
 export function buildDisplayScopeCandidates(route: BncrRoute): string[] {
-  const candidates = [
-    formatDisplayScope(route),
-    formatLegacyDisplayScope(route),
-    `${route.platform}:${route.groupId}:${route.userId}`,
-    `${route.platform}:${route.userId}`,
-    `${route.userId}`,
-  ].filter(Boolean);
-
+  const candidates = [formatDisplayScope(route)].filter(Boolean);
   return Array.from(new Set(candidates.map((x) => asString(x).trim()).filter(Boolean)));
 }
 

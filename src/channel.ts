@@ -838,10 +838,10 @@ class BncrBridgeRuntime {
     return alias?.route || parsed.route;
   }
 
-  // 严谨目标解析（终版兼容模式）：
-  // 1) 兼容 6 种输入格式（to/sessionKey）
-  // 2) 统一反查并归一为 sessionKey=agent:main:bncr:direct:<hex(scope)>
-  // 3) 非兼容格式直接失败，并输出标准格式提示日志
+  // 严谨目标解析：
+  // 1) 标准 to 仅认 Bncr:<platform>:<groupId>:<userId> / Bncr:<platform>:<userId>
+  // 2) 仍接受 strict sessionKey 作为内部兼容输入
+  // 3) 其他旧格式直接失败，并输出标准格式提示日志
   private resolveVerifiedTarget(rawTarget: string, accountId: string): { sessionKey: string; route: BncrRoute; displayScope: string } {
     const acc = normalizeAccountId(accountId);
     const raw = asString(rawTarget).trim();
@@ -860,9 +860,9 @@ class BncrBridgeRuntime {
 
     if (!route) {
       this.api.logger.warn?.(
-        `[bncr-target-invalid] raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=bncr:<platform>:<groupId>:<userId> standardSessionKey=agent:main:bncr:direct:<hex(scope)>`,
+        `[bncr-target-invalid] raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=Bncr:<platform>:<groupId>:<userId>|Bncr:<platform>:<userId> standardSessionKey=agent:main:bncr:direct:<hex(scope)>`,
       );
-      throw new Error(`bncr invalid target(standard: to=bncr:<platform>:<groupId>:<userId>): ${raw}`);
+      throw new Error(`bncr invalid target(standard: Bncr:<platform>:<groupId>:<userId> | Bncr:<platform>:<userId>): ${raw}`);
     }
 
     const wantedRouteKey = routeKey(acc, route);
@@ -2085,7 +2085,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         looksLikeId: (raw: string, normalized?: string) => {
           return Boolean(asString(normalized || raw).trim());
         },
-        hint: 'Compat(6): agent:main:bncr:direct:<hex>, agent:main:bncr:group:<hex>, bncr:<hex>, bncr:g-<hex>, bncr:<platform>:<group>:<user>, bncr:g-<platform>:<group>:<user>; preferred to=bncr:<platform>:<group>:<user>, canonical sessionKey=agent:main:bncr:direct:<hex>',
+        hint: 'Standard to=Bncr:<platform>:<group>:<user> or Bncr:<platform>:<user>; canonical sessionKey=agent:main:bncr:direct:<hex>',
       },
     },
     configSchema: BncrConfigSchema,

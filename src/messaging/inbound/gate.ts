@@ -14,8 +14,8 @@ function asString(v: unknown, fallback = ''): string {
 
 function matchesAllowList(list: string[], candidates: string[]): boolean {
   if (!list.length) return false;
-  const normalized = new Set(list.map((x) => x.toLowerCase()));
-  return candidates.some((x) => normalized.has(asString(x).toLowerCase()));
+  const normalized = new Set(list.map((x) => asString(x).trim()).filter(Boolean));
+  return candidates.some((x) => normalized.has(asString(x).trim()));
 }
 
 export function checkBncrMessageGate(params: {
