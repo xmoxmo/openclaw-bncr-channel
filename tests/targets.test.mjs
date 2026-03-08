@@ -56,6 +56,18 @@ test('normalizeStoredSessionKey migrates legacy hex-only keys to strict keys', (
   assert.deepEqual(normalized.route, route);
 });
 
+test('normalizeStoredSessionKey keeps strict and legacy sessionKey compatibility independent from to format', () => {
+  const strict = normalizeStoredSessionKey('agent:main:bncr:direct:tgBot:0:6278285192');
+  assert.ok(strict);
+  assert.equal(strict.sessionKey, buildFallbackSessionKey(route));
+  assert.deepEqual(strict.route, route);
+
+  const directLegacy = normalizeStoredSessionKey(`agent:main:bncr:direct:${Buffer.from('tgBot:0:6278285192', 'utf8').toString('hex')}:0`);
+  assert.ok(directLegacy);
+  assert.equal(directLegacy.sessionKey, buildFallbackSessionKey(route));
+  assert.deepEqual(directLegacy.route, route);
+});
+
 test('withTaskSessionKey appends task suffix once', () => {
   const base = buildFallbackSessionKey(route);
   assert.equal(withTaskSessionKey(base, 'review-1'), `${base}:task:review-1`);

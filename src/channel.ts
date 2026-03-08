@@ -2085,7 +2085,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         looksLikeId: (raw: string, normalized?: string) => {
           return Boolean(asString(normalized || raw).trim());
         },
-        hint: 'Standard to=Bncr:<platform>:<group>:<user> or Bncr:<platform>:<user>; canonical sessionKey=agent:main:bncr:direct:<hex>',
+        hint: 'Standard to=Bncr:<platform>:<group>:<user> or Bncr:<platform>:<user>; sessionKey keeps existing strict/legacy compatibility, canonical sessionKey=agent:main:bncr:direct:<hex>',
       },
     },
     configSchema: BncrConfigSchema,
