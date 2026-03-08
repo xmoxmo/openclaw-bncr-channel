@@ -2,49 +2,30 @@ import { formatDisplayScope, normalizeInboundSessionKey, parseStrictBncrSessionK
 
 type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
 
-type NativeCommand = 'help' | 'new' | 'reset' | 'clear';
+type NativeCommandRoute = 'reset' | 'generic';
 
-const SUPPORTED_NATIVE_COMMANDS = new Set<NativeCommand>(['help', 'new', 'reset', 'clear']);
+type NativeCommand = {
+  command: string;
+  raw: string;
+  body: string;
+  route: NativeCommandRoute;
+};
 
-function buildBncrHelpMessage(cfg: any): string {
-  const optionParts = [
-    '/think <level>',
-    '/model <id>',
-    '/verbose on|off',
-  ];
-  if (cfg?.commands?.config === true) optionParts.push('/config');
-  if (cfg?.commands?.debug === true) optionParts.push('/debug');
-  return [
-    'ℹ️ Help',
-    '',
-    'Session',
-    '  /new  |  /reset  |  /compact [instructions]  |  /stop',
-    '',
-    'Options',
-    `  ${optionParts.join('  |  ')}`,
-    '',
-    'Status',
-    '  /status  |  /whoami  |  /context',
-    '',
-    'Skills',
-    '  /skill <name> [input]',
-    '',
-    'More: /commands for full list',
-  ].join('\n');
-}
-
-export function parseBncrNativeCommand(text: string): { command: NativeCommand; raw: string; body: string } | null {
+export function parseBncrNativeCommand(text: string): NativeCommand | null {
   const raw = String(text || '').trim();
   if (!raw.startsWith('/')) return null;
-  const match = raw.match(/^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i);
+  const match = raw.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/i);
   if (!match) return null;
 
-  const command = String(match[1] || '').trim().toLowerCase() as NativeCommand;
-  if (!SUPPORTED_NATIVE_COMMANDS.has(command)) return null;
+  const command = String(match[1] || '').trim().toLowerCase();
+  if (!command) return null;
 
   const rest = String(match[2] || '').trim();
   const body = command === 'clear' ? ['/new', rest].filter(Boolean).join(' ') : raw;
-  return { command, raw, body };
+  const route: NativeCommandRoute = command === 'new' || command === 'reset' || command === 'clear'
+    ? 'reset'
+    : 'generic';
+  return { command, raw, body, route };
 }
 
 export async function handleBncrNativeCommand(params: {
@@ -61,7 +42,7 @@ export async function handleBncrNativeCommand(params: {
     mediaLocalRoots?: readonly string[];
   }) => Promise<void>;
   logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
-}): Promise<{ handled: false } | { handled: true; command: NativeCommand; sessionKey: string }> {
+}): Promise<{ handled: false } | { handled: true; command: string; sessionKey: string }> {
   const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply, logger } = params;
   const { accountId, route, peer, sessionKeyfromroute, extracted, msgId } = parsed;
   const command = parseBncrNativeCommand(extracted.text);
@@ -121,14 +102,8 @@ export async function handleBncrNativeCommand(params: {
     },
   });
 
-  if (command.command === 'help') {
-    await enqueueFromReply({
-      accountId,
-      sessionKey,
-      route,
-      payload: { text: buildBncrHelpMessage(cfg) },
-    });
-    return { handled: true, command: command.command, sessionKey };
+  if (command.route !== 'reset') {
+    return { handled: false };
   }
 
   await api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
