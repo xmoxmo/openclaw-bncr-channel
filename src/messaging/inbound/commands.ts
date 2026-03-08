@@ -18,7 +18,11 @@ export function parseBncrNativeCommand(text: string): NativeCommand | null {
   if (!command) return null;
 
   const rest = String(match[2] || '').trim();
-  const body = command === 'clear' ? ['/new', rest].filter(Boolean).join(' ') : raw;
+  const body = command === 'clear'
+    ? ['/new', rest].filter(Boolean).join(' ')
+    : command === 'help'
+      ? ['/commands', rest].filter(Boolean).join(' ')
+      : raw;
   return { command, raw, body };
 }
 

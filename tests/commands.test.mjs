@@ -22,7 +22,7 @@ test('parseBncrNativeCommand treats all slash commands as tool-chain candidates'
   assert.deepEqual(parseBncrNativeCommand('/help'), {
     command: 'help',
     raw: '/help',
-    body: '/help',
+    body: '/commands',
   });
   assert.deepEqual(parseBncrNativeCommand('/whoami'), {
     command: 'whoami',
