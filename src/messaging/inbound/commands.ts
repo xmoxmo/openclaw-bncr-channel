@@ -61,7 +61,11 @@ export async function handleBncrNativeCommand(params: {
 
   const displayTo = formatDisplayScope(route);
   const body = command.body;
-  const senderIdForContext = clientId || parseStrictBncrSessionKey(baseSessionKey)?.scopeHex || routeScopeToHex(route);
+  if (!clientId) {
+    logger?.warn?.('bncr: missing clientId for inbound command identity');
+    return { handled: false };
+  }
+  const senderIdForContext = clientId;
   const senderDisplayName = 'bncr-client';
   const storePath = api.runtime.channel.session.resolveStorePath(cfg?.session?.store, {
     agentId: resolvedRoute.agentId,

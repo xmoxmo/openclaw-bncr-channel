@@ -95,7 +95,16 @@ export async function dispatchBncrInbound(params: {
   });
 
   const displayTo = formatDisplayScope(route);
-  const senderIdForContext = clientId || parseStrictBncrSessionKey(baseSessionKey)?.scopeHex || routeScopeToHex(route);
+  if (!clientId) {
+    logger?.warn?.('bncr: missing clientId for inbound chat identity');
+    return {
+      accountId,
+      sessionKey,
+      taskKey: extracted.taskKey ?? null,
+      msgId: msgId ?? null,
+    };
+  }
+  const senderIdForContext = clientId;
   const senderDisplayName = 'bncr-client';
   const ctxPayload = api.runtime.channel.reply.finalizeInboundContext({
     Body: body,
