@@ -9,6 +9,12 @@ function asList(v: unknown): string[] {
   return v.map((x) => asString(x).trim()).filter(Boolean);
 }
 
+function asBoolean(v: unknown, fallback = false): boolean {
+  if (typeof v === 'boolean') return v;
+  if (v == null) return fallback;
+  return String(v).trim().toLowerCase() === 'true';
+}
+
 export function resolveBncrChannelPolicy(channelCfg: any) {
   return {
     enabled: channelCfg?.enabled !== false,
@@ -16,6 +22,6 @@ export function resolveBncrChannelPolicy(channelCfg: any) {
     groupPolicy: asString(channelCfg?.groupPolicy || 'open').toLowerCase(),
     allowFrom: asList(channelCfg?.allowFrom),
     groupAllowFrom: asList(channelCfg?.groupAllowFrom),
-    requireMention: channelCfg?.requireMention === true,
+    requireMention: asBoolean(channelCfg?.requireMention, false),
   };
 }

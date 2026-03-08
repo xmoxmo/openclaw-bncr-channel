@@ -63,8 +63,9 @@ export function checkBncrMessageGate(params: {
     }
   }
 
-  // requireMention 当前仅保留为待实现配置位。
-  // 现阶段 parse 层尚未稳定提取 mentions，上游客户端也未统一透传 mention 信号，
-  // 因此这里先不做实际拦截，避免表现成“看似开启但行为不稳定”的半实现状态。
+  // requireMention 默认值为 false。
+  // 设计目标：当它未来真正生效时，含义是“群消息只有在明确提到机器人时才允许进入处理链”。
+  // 但当前 parse 层尚未稳定提取 mentions，上游客户端也未统一透传 mention 信号，
+  // 因此现阶段即使配置为 true，也仍不做实际拦截，避免出现半实现状态。
   return { allowed: true };
 }
