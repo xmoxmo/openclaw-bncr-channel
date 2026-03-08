@@ -2,13 +2,10 @@ import { formatDisplayScope, normalizeInboundSessionKey, parseStrictBncrSessionK
 
 type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
 
-type NativeCommandRoute = 'reset' | 'generic';
-
 type NativeCommand = {
   command: string;
   raw: string;
   body: string;
-  route: NativeCommandRoute;
 };
 
 export function parseBncrNativeCommand(text: string): NativeCommand | null {
@@ -22,10 +19,7 @@ export function parseBncrNativeCommand(text: string): NativeCommand | null {
 
   const rest = String(match[2] || '').trim();
   const body = command === 'clear' ? ['/new', rest].filter(Boolean).join(' ') : raw;
-  const route: NativeCommandRoute = command === 'new' || command === 'reset' || command === 'clear'
-    ? 'reset'
-    : 'generic';
-  return { command, raw, body, route };
+  return { command, raw, body };
 }
 
 export async function handleBncrNativeCommand(params: {
@@ -102,10 +96,7 @@ export async function handleBncrNativeCommand(params: {
     },
   });
 
-  if (command.route !== 'reset') {
-    return { handled: false };
-  }
-
+  let responded = false;
   await api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
@@ -115,6 +106,9 @@ export async function handleBncrNativeCommand(params: {
     dispatcherOptions: {
       deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }, info?: { kind?: 'tool' | 'block' | 'final' }) => {
         if (info?.kind && info.kind !== 'final') return;
+        const hasPayload = Boolean(payload?.text || payload?.mediaUrl || (Array.isArray(payload?.mediaUrls) && payload.mediaUrls.length > 0));
+        if (!hasPayload) return;
+        responded = true;
         await enqueueFromReply({
           accountId,
           sessionKey,
@@ -124,6 +118,10 @@ export async function handleBncrNativeCommand(params: {
       },
     },
   });
+
+  if (!responded) {
+    return { handled: false };
+  }
 
   return { handled: true, command: command.command, sessionKey };
 }
