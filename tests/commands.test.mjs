@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { parseBncrNativeCommand } from '../src/messaging/inbound/commands.ts';
 
-test('parseBncrNativeCommand treats all slash commands as tool-chain candidates without alias remap', () => {
+test('parseBncrNativeCommand treats all slash commands as tool-chain candidates, with help remapped only', () => {
   assert.deepEqual(parseBncrNativeCommand('/new'), {
     command: 'new',
     raw: '/new',
@@ -22,7 +22,7 @@ test('parseBncrNativeCommand treats all slash commands as tool-chain candidates 
   assert.deepEqual(parseBncrNativeCommand('/help'), {
     command: 'help',
     raw: '/help',
-    body: '/help',
+    body: '/commands',
   });
   assert.deepEqual(parseBncrNativeCommand('/whoami'), {
     command: 'whoami',
