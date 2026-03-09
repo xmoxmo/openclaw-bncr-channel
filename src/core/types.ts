@@ -12,6 +12,15 @@ export type BncrConnection = {
   lastSeenAt: number;
 };
 
+export type PendingAdmission = {
+  clientId: string;
+  route: BncrRoute;
+  routes: BncrRoute[];
+  firstSeenAt: number;
+  lastSeenAt: number;
+  attempts: number;
+};
+
 export type OutboxEntry = {
   messageId: string;
   accountId: string;
@@ -29,6 +38,7 @@ export type BncrDiagnosticsSummary = {
   health: {
     connected: boolean;
     pending: number;
+    pendingAdmissions: number;
     deadLetter: number;
     activeConnections: number;
     connectEvents: number;

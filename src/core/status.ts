@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { BncrDiagnosticsSummary } from './types.js';
+import type { BncrDiagnosticsSummary, PendingAdmission } from './types.js';
 
 type RuntimeStatusInput = {
   accountId: string;
@@ -13,6 +13,7 @@ type RuntimeStatusInput = {
   activityEvents: number;
   ackEvents: number;
   startedAt: number;
+  pendingAdmissions?: PendingAdmission[];
   lastSession?: { sessionKey: string; scope: string; updatedAt: number } | null;
   lastActivityAt?: number | null;
   lastInboundAt?: number | null;
@@ -48,6 +49,7 @@ export function buildIntegratedDiagnostics(input: RuntimeStatusInput): BncrDiagn
     health: {
       connected: input.connected,
       pending: input.pending,
+      pendingAdmissions: Array.isArray(input.pendingAdmissions) ? input.pendingAdmissions.length : 0,
       deadLetter: input.deadLetter,
       activeConnections: input.activeConnections,
       connectEvents: input.connectEvents,
@@ -92,8 +94,20 @@ export function buildStatusMetaFromRuntime(input: RuntimeStatusInput) {
   const diagnostics = buildIntegratedDiagnostics(input);
   return {
     pending: input.pending,
+    pendingAdmissionsCount: Array.isArray(input.pendingAdmissions) ? input.pendingAdmissions.length : 0,
+    pendingAdmissions: Array.isArray(input.pendingAdmissions)
+      ? input.pendingAdmissions.map((item) => ({
+          clientId: item.clientId,
+          scope: item.route ? `${item.route.platform}:${item.route.groupId}:${item.route.userId}` : null,
+          scopes: Array.isArray(item.routes)
+            ? item.routes.map((route) => `${route.platform}:${route.groupId}:${route.userId}`)
+            : [],
+          firstSeenAt: item.firstSeenAt,
+          lastSeenAt: item.lastSeenAt,
+          attempts: item.attempts,
+        }))
+      : [],
     deadLetter: input.deadLetter,
-    lastSessionKey: input.lastSession?.sessionKey || null,
     lastSessionScope: input.lastSession?.scope || null,
     lastSessionAt: input.lastSession?.updatedAt || null,
     lastSessionAgo: fmtAgo(input.lastSession?.updatedAt || null),

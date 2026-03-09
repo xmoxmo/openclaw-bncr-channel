@@ -23,6 +23,7 @@
         "items": { "type": "string" }
       },
       "requireMention": { "type": "boolean" },
+      "outboundRequireAck": { "type": "boolean" },
       "accounts": {
         "type": "object",
         "additionalProperties": {
