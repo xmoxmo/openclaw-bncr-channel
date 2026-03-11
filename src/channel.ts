@@ -60,7 +60,7 @@ const FILE_CHUNK_RETRY = 3;
 const FILE_ACK_TIMEOUT_MS = 30_000;
 const FILE_TRANSFER_ACK_TTL_MS = 30_000;
 const FILE_TRANSFER_KEEP_MS = 6 * 60 * 60 * 1000;
-const BNCR_DEBUG_VERBOSE = true; // 临时调试：打印发送入口完整请求体
+let BNCR_DEBUG_VERBOSE = false; // 全局调试日志开关（默认关闭）
 
 type FileSendTransferState = {
   transferId: string;
@@ -201,6 +201,7 @@ function resolveOutboundFileName(params: { mediaUrl?: string; fileName?: string;
 class BncrBridgeRuntime {
   private api: OpenClawPluginApi;
   private statePath: string | null = null;
+  private bridgeId = `${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
 
   private connections = new Map<string, BncrConnection>(); // connectionKey -> connection
   private activeConnectionByAccount = new Map<string, string>(); // accountId -> connectionKey
@@ -242,11 +243,23 @@ class BncrBridgeRuntime {
     this.api = api;
   }
 
-  startService = async (ctx: OpenClawPluginServiceContext) => {
+  isDebugEnabled(): boolean {
+    try {
+      const cfg = (this.api.runtime.config?.get?.() as any) || {};
+      return Boolean(cfg?.channels?.[CHANNEL_ID]?.debug?.verbose);
+    } catch {
+      return false;
+    }
+  }
+
+  startService = async (ctx: OpenClawPluginServiceContext, debug?: boolean) => {
     this.statePath = path.join(ctx.stateDir, 'bncr-bridge-state.json');
     await this.loadState();
+    if (typeof debug === 'boolean') BNCR_DEBUG_VERBOSE = debug;
     const bootDiag = this.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
-    this.api.logger.info(`bncr-channel service started (diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter})`);
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info(`bncr-channel service started (bridge=${this.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter} debug=${BNCR_DEBUG_VERBOSE})`);
+    }
   };
 
   stopService = async () => {
@@ -255,7 +268,9 @@ class BncrBridgeRuntime {
       this.pushTimer = null;
     }
     await this.flushState();
-    this.api.logger.info('bncr-channel service stopped');
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info('bncr-channel service stopped');
+    }
   };
 
   private scheduleSave() {
@@ -273,6 +288,14 @@ class BncrBridgeRuntime {
 
   private getCounter(map: Map<string, number>, accountId: string): number {
     return map.get(normalizeAccountId(accountId)) || 0;
+  }
+
+  private syncDebugFlag() {
+    const next = this.isDebugEnabled();
+    if (next !== BNCR_DEBUG_VERBOSE) {
+      BNCR_DEBUG_VERBOSE = next;
+      this.api.logger.info?.(`[bncr-debug] verbose=${BNCR_DEBUG_VERBOSE}`);
+    }
   }
 
   private countInvalidOutboxSessionKeys(accountId: string): number {
@@ -572,10 +595,32 @@ class BncrBridgeRuntime {
 
   private tryPushEntry(entry: OutboxEntry): boolean {
     const ctx = this.gatewayContext;
-    if (!ctx) return false;
+    if (!ctx) {
+      if (BNCR_DEBUG_VERBOSE) {
+        this.api.logger.info?.(
+          `[bncr-outbox-push-skip] ${JSON.stringify({
+            messageId: entry.messageId,
+            accountId: entry.accountId,
+            reason: 'no-gateway-context',
+          })}`,
+        );
+      }
+      return false;
+    }
 
     const connIds = this.resolvePushConnIds(entry.accountId);
-    if (!connIds.size) return false;
+    if (!connIds.size) {
+      if (BNCR_DEBUG_VERBOSE) {
+        this.api.logger.info?.(
+          `[bncr-outbox-push-skip] ${JSON.stringify({
+            messageId: entry.messageId,
+            accountId: entry.accountId,
+            reason: 'no-active-connection',
+          })}`,
+        );
+      }
+      return false;
+    }
 
     try {
       const payload = {
@@ -584,6 +629,16 @@ class BncrBridgeRuntime {
       };
 
       ctx.broadcastToConnIds(BNCR_PUSH_EVENT, payload, connIds);
+      if (BNCR_DEBUG_VERBOSE) {
+        this.api.logger.info?.(
+          `[bncr-outbox-push-ok] ${JSON.stringify({
+            messageId: entry.messageId,
+            accountId: entry.accountId,
+            connIds: Array.from(connIds),
+            event: BNCR_PUSH_EVENT,
+          })}`,
+        );
+      }
       this.outbox.delete(entry.messageId);
       this.lastOutboundByAccount.set(entry.accountId, now());
       this.markActivity(entry.accountId);
@@ -592,6 +647,15 @@ class BncrBridgeRuntime {
     } catch (error) {
       entry.lastError = asString((error as any)?.message || error || 'push-error');
       this.outbox.set(entry.messageId, entry);
+      if (BNCR_DEBUG_VERBOSE) {
+        this.api.logger.info?.(
+          `[bncr-outbox-push-fail] ${JSON.stringify({
+            messageId: entry.messageId,
+            accountId: entry.accountId,
+            error: entry.lastError,
+          })}`,
+        );
+      }
       return false;
     }
   }
@@ -610,12 +674,118 @@ class BncrBridgeRuntime {
     const targetAccounts = filterAcc
       ? [filterAcc]
       : Array.from(new Set(Array.from(this.outbox.values()).map((entry) => normalizeAccountId(entry.accountId))));
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(
+        `[bncr-outbox-flush] ${JSON.stringify({
+          bridge: this.bridgeId,
+          accountId: filterAcc,
+          targetAccounts,
+          outboxSize: this.outbox.size,
+        })}`,
+      );
+    }
 
     let globalNextDelay: number | null = null;
 
     for (const acc of targetAccounts) {
       if (!acc || this.pushDrainRunningAccounts.has(acc)) continue;
-      if (!this.isOnline(acc)) continue;
+      const online = this.isOnline(acc);
+      if (BNCR_DEBUG_VERBOSE) {
+        this.api.logger.info?.(
+          `[bncr-outbox-online] ${JSON.stringify({
+            bridge: this.bridgeId,
+            accountId: acc,
+            online,
+            connections: Array.from(this.connections.values()).map((c) => ({
+              accountId: c.accountId,
+              connId: c.connId,
+              clientId: c.clientId,
+              lastSeenAt: c.lastSeenAt,
+            })),
+          })}`,
+        );
+      }
+      if (!online) {
+        const ctx = this.gatewayContext;
+        const directConnIds = Array.from(this.connections.values())
+          .filter((c) => normalizeAccountId(c.accountId) === acc && c.connId)
+          .map((c) => c.connId as string);
+
+        if (BNCR_DEBUG_VERBOSE) {
+          this.api.logger.info?.(
+            `[bncr-outbox-direct-push] ${JSON.stringify({
+              bridge: this.bridgeId,
+              accountId: acc,
+              outboxSize: this.outbox.size,
+              hasGatewayContext: Boolean(ctx),
+              connCount: directConnIds.length,
+            })}`,
+          );
+        }
+
+        if (!ctx) {
+          if (BNCR_DEBUG_VERBOSE) {
+            this.api.logger.info?.(
+              `[bncr-outbox-direct-push-skip] ${JSON.stringify({
+                bridge: this.bridgeId,
+                accountId: acc,
+                reason: 'no-gateway-context',
+              })}`,
+            );
+          }
+          continue;
+        }
+
+        if (!directConnIds.length) {
+          if (BNCR_DEBUG_VERBOSE) {
+            this.api.logger.info?.(
+              `[bncr-outbox-direct-push-skip] ${JSON.stringify({
+                accountId: acc,
+                reason: 'no-connection',
+              })}`,
+            );
+          }
+          continue;
+        }
+
+        const directPayloads = this.collectDue(acc, 50);
+        if (!directPayloads.length) continue;
+
+        try {
+          ctx.broadcastToConnIds(BNCR_PUSH_EVENT, {
+            forcePush: true,
+            items: directPayloads,
+          }, new Set(directConnIds));
+
+          const pushedIds = directPayloads
+            .map((item: any) => asString(item?.messageId || item?.idempotencyKey || '').trim())
+            .filter(Boolean);
+          for (const id of pushedIds) this.outbox.delete(id);
+          if (pushedIds.length) this.scheduleSave();
+
+          if (BNCR_DEBUG_VERBOSE) {
+            this.api.logger.info?.(
+              `[bncr-outbox-direct-push-ok] ${JSON.stringify({
+                bridge: this.bridgeId,
+                accountId: acc,
+                count: directPayloads.length,
+                connCount: directConnIds.length,
+                dropped: pushedIds.length,
+              })}`,
+            );
+          }
+        } catch (error) {
+          if (BNCR_DEBUG_VERBOSE) {
+            this.api.logger.info?.(
+              `[bncr-outbox-direct-push-fail] ${JSON.stringify({
+                accountId: acc,
+                error: asString((error as any)?.message || error || 'direct-push-error'),
+              })}`,
+            );
+          }
+        }
+        continue;
+      }
 
       this.pushDrainRunningAccounts.add(acc);
       try {
@@ -711,7 +881,22 @@ class BncrBridgeRuntime {
     // 清理过期连接
     const staleBefore = t - CONNECT_TTL_MS * 2;
     for (const [key, c] of this.connections.entries()) {
-      if (c.lastSeenAt < staleBefore) this.connections.delete(key);
+      if (c.lastSeenAt < staleBefore) {
+        if (BNCR_DEBUG_VERBOSE) {
+          this.api.logger.info?.(
+            `[bncr-conn-gc] ${JSON.stringify({
+              bridge: this.bridgeId,
+              key,
+              accountId: c.accountId,
+              connId: c.connId,
+              clientId: c.clientId,
+              lastSeenAt: c.lastSeenAt,
+              staleBefore,
+            })}`,
+          );
+        }
+        this.connections.delete(key);
+      }
     }
 
     // 清理去重窗口（90s）
@@ -750,6 +935,18 @@ class BncrBridgeRuntime {
     };
 
     this.connections.set(key, nextConn);
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(
+        `[bncr-conn-seen] ${JSON.stringify({
+          bridge: this.bridgeId,
+          accountId: acc,
+          connId,
+          clientId: nextConn.clientId,
+          connectedAt: nextConn.connectedAt,
+          lastSeenAt: nextConn.lastSeenAt,
+        })}`,
+      );
+    }
 
     const current = this.activeConnectionByAccount.get(acc);
     if (!current) {
@@ -847,7 +1044,9 @@ class BncrBridgeRuntime {
     const raw = asString(rawTarget).trim();
     if (!raw) throw new Error('bncr invalid target(empty)');
 
-    this.api.logger.info?.(`[bncr-target-incoming] raw=${raw} accountId=${acc}`);
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(`[bncr-target-incoming] raw=${raw} accountId=${acc}`);
+    }
 
     let route: BncrRoute | null = null;
 
@@ -868,6 +1067,11 @@ class BncrBridgeRuntime {
     const wantedRouteKey = routeKey(acc, route);
     let best: { sessionKey: string; route: BncrRoute; updatedAt: number } | null = null;
 
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(`[bncr-target-incoming-route] raw=${raw} accountId=${acc} route=${JSON.stringify(route)}`);
+      this.api.logger.info?.(`[bncr-target-incoming-sessionRoutes] raw=${raw} accountId=${acc} sessionRoutes=${JSON.stringify(this.sessionRoutes.entries())}`);
+    }
+
     for (const [key, info] of this.sessionRoutes.entries()) {
       if (normalizeAccountId(info.accountId) !== acc) continue;
       const parsed = parseStrictBncrSessionKey(key);
@@ -882,6 +1086,20 @@ class BncrBridgeRuntime {
           updatedAt,
         };
       }
+    }
+
+    // 直接根据raw生成标准sessionkey
+    if (!best) {
+      const updatedAt = 0;
+      best = {
+        sessionKey: `agent:main:bncr:direct:${routeScopeToHex(route)}`,
+        route,
+        updatedAt,
+      };
+    }
+
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(`[bncr-target-incoming-best] raw=${raw} accountId=${acc} best=${JSON.stringify(best)}`);
     }
 
     if (!best) {
@@ -1087,6 +1305,22 @@ class BncrBridgeRuntime {
   }
 
   private enqueueOutbound(entry: OutboxEntry) {
+    if (BNCR_DEBUG_VERBOSE) {
+      const msg = (entry.payload as any)?.message || {};
+      const type = asString(msg.type || (entry.payload as any)?.type || 'unknown');
+      const text = asString(msg.msg || '');
+      this.api.logger.info?.(
+        `[bncr-outbox-enqueue] ${JSON.stringify({
+          bridge: this.bridgeId,
+          messageId: entry.messageId,
+          accountId: entry.accountId,
+          sessionKey: entry.sessionKey,
+          route: entry.route,
+          type,
+          textLen: text.length,
+        })}`,
+      );
+    }
     this.outbox.set(entry.messageId, entry);
     this.scheduleSave();
     this.wakeAccountWaiters(entry.accountId);
@@ -1455,6 +1689,18 @@ class BncrBridgeRuntime {
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
 
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(
+        `[bncr-connect] ${JSON.stringify({
+          bridge: this.bridgeId,
+          accountId,
+          connId,
+          clientId,
+          hasContext: Boolean(context),
+        })}`,
+      );
+    }
+
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
     this.markActivity(accountId);
@@ -1487,6 +1733,17 @@ class BncrBridgeRuntime {
     this.incrementCounter(this.ackEventsByAccount, accountId);
 
     const messageId = asString(params?.messageId || '').trim();
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(
+        `[bncr-outbox-ack] ${JSON.stringify({
+          accountId,
+          messageId,
+          ok: params?.ok !== false,
+          fatal: params?.fatal === true,
+          error: asString(params?.error || ''),
+        })}`,
+      );
+    }
     if (!messageId) {
       respond(false, { error: 'messageId required' });
       return;
@@ -1528,9 +1785,21 @@ class BncrBridgeRuntime {
   };
 
   handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(
+        `[bncr-activity] ${JSON.stringify({
+          bridge: this.bridgeId,
+          accountId,
+          connId,
+          clientId,
+          hasContext: Boolean(context),
+        })}`,
+      );
+    }
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
     this.markActivity(accountId);

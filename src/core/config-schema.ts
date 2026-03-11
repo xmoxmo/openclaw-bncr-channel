@@ -20,6 +20,17 @@ export const BncrConfigSchema = {
         type: 'array',
         items: { type: 'string' },
       },
+      debug: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          verbose: {
+            type: 'boolean',
+            default: false,
+            description: 'Enable verbose debug logs for bncr channel runtime.',
+          },
+        },
+      },
       requireMention: {
         type: 'boolean',
         default: false,

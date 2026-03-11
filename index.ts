@@ -5,17 +5,43 @@ import {
 import { BncrConfigSchema } from "./src/core/config-schema.js";
 import { createBncrBridge, createBncrChannelPlugin } from "./src/channel.js";
 
+type BridgeSingleton = ReturnType<typeof createBncrBridge>;
+
+const getBridgeSingleton = (api: OpenClawPluginApi) => {
+  const g = globalThis as typeof globalThis & { __bncrBridge?: BridgeSingleton };
+  if (!g.__bncrBridge) g.__bncrBridge = createBncrBridge(api);
+  return g.__bncrBridge;
+};
+
 const plugin = {
   id: "bncr",
   name: "Bncr",
   description: "Bncr channel plugin",
   configSchema: BncrConfigSchema,
   register(api: OpenClawPluginApi) {
-    const bridge = createBncrBridge(api);
+    const bridge = getBridgeSingleton(api);
+    const debugLog = (...args: any[]) => {
+      if (!bridge.isDebugEnabled?.()) return;
+      api.logger.info?.(...args);
+    };
+
+    debugLog(`bncr plugin register bridge=${(bridge as any)?.bridgeId || 'unknown'}`);
+
+    const resolveDebug = async () => {
+      try {
+        const cfg = await api.runtime.config.loadConfig();
+        return Boolean((cfg as any)?.channels?.bncr?.debug?.verbose);
+      } catch {
+        return false;
+      }
+    };
 
     api.registerService({
       id: "bncr-bridge-service",
-      start: bridge.startService,
+      start: async (ctx) => {
+        const debug = await resolveDebug();
+        await bridge.startService(ctx, debug);
+      },
       stop: bridge.stopService,
     });
 
