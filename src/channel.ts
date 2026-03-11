@@ -290,11 +290,17 @@ class BncrBridgeRuntime {
     return map.get(normalizeAccountId(accountId)) || 0;
   }
 
-  private syncDebugFlag() {
-    const next = this.isDebugEnabled();
-    if (next !== BNCR_DEBUG_VERBOSE) {
-      BNCR_DEBUG_VERBOSE = next;
-      this.api.logger.info?.(`[bncr-debug] verbose=${BNCR_DEBUG_VERBOSE}`);
+  private async syncDebugFlag() {
+    try {
+      const cfg = await this.api.runtime.config.loadConfig();
+      const raw = (cfg as any)?.channels?.[CHANNEL_ID]?.debug?.verbose;
+      if (typeof raw !== 'boolean') return;
+      if (raw !== BNCR_DEBUG_VERBOSE) {
+        BNCR_DEBUG_VERBOSE = raw;
+        this.api.logger.info?.(`[bncr-debug] verbose=${BNCR_DEBUG_VERBOSE}`);
+      }
+    } catch {
+      // ignore config read errors
     }
   }
 
@@ -1785,7 +1791,7 @@ class BncrBridgeRuntime {
   };
 
   handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    this.syncDebugFlag();
+    void this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
