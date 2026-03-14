@@ -37,7 +37,20 @@ openclaw gateway restart
 
 ---
 
-## 3. 当前能力
+## 3. 客户端接入流程（最简）
+
+1. 在客户端插件配置中，将 **OpenClaw Token** 填写为 **gateway token**，并正确填写 host / port / ssl 后启用插件。
+2. 启动（或重启）bncr 客户端后，在 OpenClaw 侧执行：
+
+```bash
+openclaw devices approve --latest
+```
+
+完成后，客户端会使用自己的身份并自动保存后续授权。
+
+---
+
+## 4. 当前能力
 
 - 文本
 - 图片
@@ -54,7 +67,7 @@ openclaw gateway restart
 
 ---
 
-## 4. 架构定位
+## 5. 架构定位
 
 bncr 当前采用两层模型：
 
@@ -77,7 +90,7 @@ plugins/bncr/src/
 
 ---
 
-## 5. 配置项总览
+## 6. 配置项总览
 
 当前主要配置字段：
 
@@ -98,7 +111,7 @@ plugins/bncr/src/
 
 ---
 
-## 6. 状态与诊断
+## 7. 状态与诊断
 
 常用检查：
 
@@ -116,7 +129,7 @@ openclaw health --json
 
 ---
 
-## 7. 自检与测试
+## 8. 自检与测试
 
 ```bash
 cd plugins/bncr
@@ -133,7 +146,7 @@ npm pack
 
 ---
 
-## 8. 上线前检查
+## 9. 上线前检查
 
 上线前建议至少确认：
 
