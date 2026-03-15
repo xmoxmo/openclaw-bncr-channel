@@ -34,7 +34,6 @@ openclaw plugins update @xmoxmo/bncr
 openclaw gateway restart
 ```
 
-（如需更新所有插件：`openclaw plugins update --all`）
 
 ### Bncr / 无界侧
 
