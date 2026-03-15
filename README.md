@@ -27,6 +27,15 @@ openclaw plugins enable bncr
 openclaw gateway restart
 ```
 
+### 升级插件
+
+```bash
+openclaw plugins update @xmoxmo/bncr
+openclaw gateway restart
+```
+
+（如需更新所有插件：`openclaw plugins update --all`）
+
 ### Bncr / 无界侧
 
 安装：
