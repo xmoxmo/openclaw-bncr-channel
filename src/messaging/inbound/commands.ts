@@ -113,7 +113,7 @@ export async function handleBncrNativeCommand(params: {
       disableBlockStreaming: true,
     },
     dispatcherOptions: {
-      deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] }, info?: { kind?: 'tool' | 'block' | 'final' }) => {
+      deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean }, info?: { kind?: 'tool' | 'block' | 'final' }) => {
         if (info?.kind && info.kind !== 'final') return;
         const hasPayload = Boolean(payload?.text || payload?.mediaUrl || (Array.isArray(payload?.mediaUrls) && payload.mediaUrls.length > 0));
         if (!hasPayload) return;

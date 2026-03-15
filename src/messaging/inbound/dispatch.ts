@@ -151,7 +151,7 @@ export async function dispatchBncrInbound(params: {
     },
     dispatcherOptions: {
       deliver: async (
-        payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
+        payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
         info?: { kind?: 'tool' | 'block' | 'final' },
       ) => {
         if (info?.kind && info.kind !== 'final') return;

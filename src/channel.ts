@@ -6,6 +6,7 @@ import type {
   OpenClawPluginServiceContext,
   GatewayRequestHandlerOptions,
   ChatType,
+  ChannelMessageActionAdapter,
 } from 'openclaw/plugin-sdk';
 import {
   createDefaultChannelRuntimeState,
@@ -13,6 +14,10 @@ import {
   applyAccountNameToChannelSection,
   writeJsonFileAtomically,
   readJsonFileWithFallback,
+  readStringParam,
+  readBooleanParam,
+  extractToolSend,
+  jsonResult,
 } from 'openclaw/plugin-sdk';
 import { CHANNEL_ID, BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId, resolveDefaultDisplayName, resolveAccount, listAccountIds } from './core/accounts.js';
 import type { BncrRoute, BncrConnection, OutboxEntry } from './core/types.js';
@@ -1599,11 +1604,11 @@ class BncrBridgeRuntime {
     };
   }
 
-  private async enqueueFromReply(params: {
+  public async enqueueFromReply(params: {
     accountId: string;
     sessionKey: string;
     route: BncrRoute;
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
+    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; asVoice?: boolean; audioAsVoice?: boolean };
     mediaLocalRoots?: readonly string[];
   }) {
     const { accountId, sessionKey, route, payload, mediaLocalRoots } = params;
@@ -1626,6 +1631,7 @@ class BncrBridgeRuntime {
         });
         const messageId = randomUUID();
         const mediaMsg = first ? asString(payload.text || '') : '';
+        const wantsVoice = payload.asVoice === true || payload.audioAsVoice === true;
         const frame = buildBncrMediaOutboundFrame({
           messageId,
           sessionKey,
@@ -1638,6 +1644,7 @@ class BncrBridgeRuntime {
             fileName: media.fileName,
             mimeType: media.mimeType,
           }),
+          hintedType: wantsVoice ? 'voice' : undefined,
           now: now(),
         });
 
@@ -2293,6 +2300,8 @@ class BncrBridgeRuntime {
   channelSendMedia = async (ctx: any) => {
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
+    const asVoice = ctx?.asVoice === true;
+    const audioAsVoice = ctx?.audioAsVoice === true;
 
     if (BNCR_DEBUG_VERBOSE) {
       this.api.logger.info?.(
@@ -2302,6 +2311,8 @@ class BncrBridgeRuntime {
           text: asString(ctx?.text || ''),
           mediaUrl: asString(ctx?.mediaUrl || ''),
           mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
+          asVoice,
+          audioAsVoice,
           sessionKey: asString(ctx?.sessionKey || ''),
           mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
           rawCtx: {
@@ -2320,6 +2331,8 @@ class BncrBridgeRuntime {
       to,
       text: asString(ctx.text || ''),
       mediaUrl: asString(ctx.mediaUrl || ''),
+      asVoice,
+      audioAsVoice,
       mediaLocalRoots: ctx.mediaLocalRoots,
       resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
       rememberSessionRoute: (sessionKey, accountId, route) => this.rememberSessionRoute(sessionKey, accountId, route),
@@ -2334,6 +2347,58 @@ export function createBncrBridge(api: OpenClawPluginApi) {
 }
 
 export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
+  const messageActions: ChannelMessageActionAdapter = {
+    listActions: () => ['send'],
+    supportsAction: ({ action }) => action === 'send',
+    extractToolSend: ({ args }) => extractToolSend(args, 'sendMessage'),
+    handleAction: async ({ action, params, accountId, mediaLocalRoots }) => {
+      if (action !== 'send') throw new Error(`Action ${action} is not supported for provider ${CHANNEL_ID}.`);
+      const to = readStringParam(params, 'to', { required: true });
+      const message = readStringParam(params, 'message', { allowEmpty: true }) ?? '';
+      const caption = readStringParam(params, 'caption', { allowEmpty: true }) ?? '';
+      const content = message || caption || '';
+      const mediaUrl =
+        readStringParam(params, 'media', { trim: false }) ??
+        readStringParam(params, 'path', { trim: false }) ??
+        readStringParam(params, 'filePath', { trim: false }) ??
+        readStringParam(params, 'mediaUrl', { trim: false });
+      const asVoice = readBooleanParam(params, 'asVoice') ?? false;
+      const audioAsVoice = readBooleanParam(params, 'audioAsVoice') ?? false;
+      const resolvedAccountId = normalizeAccountId(readStringParam(params, 'accountId') ?? accountId);
+
+      if (!content.trim() && !mediaUrl) throw new Error('send requires text or media');
+
+      const result = mediaUrl
+        ? await sendBncrMedia({
+          channelId: CHANNEL_ID,
+          accountId: resolvedAccountId,
+          to,
+          text: content,
+          mediaUrl,
+          asVoice,
+          audioAsVoice,
+          mediaLocalRoots,
+          resolveVerifiedTarget: (to, accountId) => bridge.resolveVerifiedTarget(to, accountId),
+          rememberSessionRoute: (sessionKey, accountId, route) => bridge.rememberSessionRoute(sessionKey, accountId, route),
+          enqueueFromReply: (args) => bridge.enqueueFromReply(args as any),
+          createMessageId: () => randomUUID(),
+        })
+        : await sendBncrText({
+          channelId: CHANNEL_ID,
+          accountId: resolvedAccountId,
+          to,
+          text: content,
+          mediaLocalRoots,
+          resolveVerifiedTarget: (to, accountId) => bridge.resolveVerifiedTarget(to, accountId),
+          rememberSessionRoute: (sessionKey, accountId, route) => bridge.rememberSessionRoute(sessionKey, accountId, route),
+          enqueueFromReply: (args) => bridge.enqueueFromReply(args as any),
+          createMessageId: () => randomUUID(),
+        });
+
+      return jsonResult({ ok: true, ...result });
+    },
+  };
+
   const plugin = {
     id: CHANNEL_ID,
     meta: {
@@ -2344,6 +2409,7 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
       blurb: 'Bncr Channel.',
       aliases: ['bncr'],
     },
+    actions: messageActions,
     capabilities: {
       chatTypes: ['direct'] as ChatType[],
       media: true,

@@ -10,6 +10,10 @@ test('keeps standard hinted type when supported', () => {
   assert.equal(resolveBncrOutboundMessageType({ hintedType: 'voice', mimeType: 'audio/ogg', hasPayload: true }), 'voice');
 });
 
+test('voice hinted but non-audio falls back to file', () => {
+  assert.equal(resolveBncrOutboundMessageType({ hintedType: 'voice', mimeType: 'application/pdf', hasPayload: true }), 'file');
+});
+
 test('falls back to audio by mime major type when hinted type is unsupported', () => {
   assert.equal(resolveBncrOutboundMessageType({ hintedType: 'weird', mimeType: 'audio/mpeg', hasPayload: true }), 'audio');
 });
