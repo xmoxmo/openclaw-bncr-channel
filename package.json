@@ -27,8 +27,11 @@
     "selfcheck": "node ./scripts/selfcheck.mjs",
     "test": "node --import ./tests/register-ts-hooks.mjs --test ./tests/*.test.mjs"
   },
-  "dependencies": {
-    "openclaw": "2026.3.23-1"
+  "peerDependencies": {
+    "openclaw": ">=2026.3.22"
+  },
+  "devDependencies": {
+    "openclaw": ">=2026.3.22"
   },
   "openclaw": {
     "extensions": [
