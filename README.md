@@ -30,7 +30,7 @@ openclaw gateway restart
 ### 升级插件
 
 ```bash
-openclaw plugins update @xmoxmo/bncr
+openclaw plugins update bncr
 openclaw gateway restart
 ```
 
