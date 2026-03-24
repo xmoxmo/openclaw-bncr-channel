@@ -1,6 +1,6 @@
-import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.js';
+import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.ts';
 
-type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
+type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
 type NativeCommand = {
   command: string;

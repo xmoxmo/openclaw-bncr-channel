@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { normalizeAccountId } from '../../core/accounts.js';
-import type { BncrRoute } from '../../core/types.js';
-import { extractInlineTaskKey } from '../../core/targets.js';
+import { normalizeAccountId } from '../../core/accounts.ts';
+import type { BncrRoute } from '../../core/types.ts';
+import { extractInlineTaskKey } from '../../core/targets.ts';
 
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;

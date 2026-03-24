@@ -5,22 +5,20 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
   GatewayRequestHandlerOptions,
-  ChatType,
-  ChannelMessageActionAdapter,
-} from 'openclaw/plugin-sdk';
+} from 'openclaw/plugin-sdk/core';
 import {
-  createDefaultChannelRuntimeState,
   setAccountEnabledInConfigSection,
   applyAccountNameToChannelSection,
-  writeJsonFileAtomically,
-  readJsonFileWithFallback,
-  readStringParam,
-  readBooleanParam,
-  extractToolSend,
-  jsonResult,
-} from 'openclaw/plugin-sdk';
-import { CHANNEL_ID, BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId, resolveDefaultDisplayName, resolveAccount, listAccountIds } from './core/accounts.js';
-import type { BncrRoute, BncrConnection, OutboxEntry } from './core/types.js';
+} from 'openclaw/plugin-sdk/core';
+import type { ChatType, ChannelMessageActionAdapter } from 'openclaw/plugin-sdk/mattermost';
+import { createDefaultChannelRuntimeState } from 'openclaw/plugin-sdk/status-helpers';
+import { writeJsonFileAtomically, readJsonFileWithFallback } from 'openclaw/plugin-sdk/json-store';
+import { readStringParam } from 'openclaw/plugin-sdk/param-readers';
+import { readBooleanParam } from 'openclaw/plugin-sdk/boolean-param';
+import { extractToolSend } from 'openclaw/plugin-sdk/tool-send';
+import { jsonResult } from 'openclaw/plugin-sdk/telegram-core';
+import { CHANNEL_ID, BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId, resolveDefaultDisplayName, resolveAccount, listAccountIds } from './core/accounts.ts';
+import type { BncrRoute, BncrConnection, OutboxEntry } from './core/types.ts';
 import {
   parseRouteFromScope,
   parseRouteFromDisplayScope,
@@ -36,23 +34,23 @@ import {
   withTaskSessionKey,
   buildFallbackSessionKey,
   routeKey,
-} from './core/targets.js';
-import { parseBncrInboundParams } from './messaging/inbound/parse.js';
-import { dispatchBncrInbound } from './messaging/inbound/dispatch.js';
-import { checkBncrMessageGate } from './messaging/inbound/gate.js';
-import { sendBncrText, sendBncrMedia } from './messaging/outbound/send.js';
-import { buildBncrMediaOutboundFrame, resolveBncrOutboundMessageType } from './messaging/outbound/media.js';
-import { sendBncrReplyAction, deleteBncrMessageAction, reactBncrMessageAction, editBncrMessageAction } from './messaging/outbound/actions.js';
+} from './core/targets.ts';
+import { parseBncrInboundParams } from './messaging/inbound/parse.ts';
+import { dispatchBncrInbound } from './messaging/inbound/dispatch.ts';
+import { checkBncrMessageGate } from './messaging/inbound/gate.ts';
+import { sendBncrText, sendBncrMedia } from './messaging/outbound/send.ts';
+import { buildBncrMediaOutboundFrame, resolveBncrOutboundMessageType } from './messaging/outbound/media.ts';
+import { sendBncrReplyAction, deleteBncrMessageAction, reactBncrMessageAction, editBncrMessageAction } from './messaging/outbound/actions.ts';
 import {
   buildIntegratedDiagnostics as buildIntegratedDiagnosticsFromRuntime,
   buildStatusHeadlineFromRuntime,
   buildStatusMetaFromRuntime,
   buildAccountRuntimeSnapshot,
-} from './core/status.js';
-import { probeBncrAccount } from './core/probe.js';
-import { BncrConfigSchema } from './core/config-schema.js';
-import { resolveBncrChannelPolicy } from './core/policy.js';
-import { buildBncrPermissionSummary } from './core/permissions.js';
+} from './core/status.ts';
+import { probeBncrAccount } from './core/probe.ts';
+import { BncrConfigSchema } from './core/config-schema.ts';
+import { resolveBncrChannelPolicy } from './core/policy.ts';
+import { buildBncrPermissionSummary } from './core/permissions.ts';
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'bncr.push';
 const CONNECT_TTL_MS = 120_000;
@@ -2348,7 +2346,28 @@ export function createBncrBridge(api: OpenClawPluginApi) {
 
 export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
   const messageActions: ChannelMessageActionAdapter = {
-    listActions: () => ['send'],
+    describeMessageTool: ({ cfg }) => {
+      const channelCfg = cfg?.channels?.[CHANNEL_ID];
+      const hasExplicitConfiguredAccount = Boolean(channelCfg && typeof channelCfg === 'object')
+        && resolveBncrChannelPolicy(channelCfg).enabled !== false
+        && Boolean(channelCfg.accounts && typeof channelCfg.accounts === 'object')
+        && Object.keys(channelCfg.accounts).some((accountId) => resolveAccount(cfg, accountId).enabled !== false);
+
+      const hasConnectedRuntime = listAccountIds(cfg).some((accountId) => {
+        const resolved = resolveAccount(cfg, accountId);
+        const runtime = bridge.getAccountRuntimeSnapshot(resolved.accountId);
+        return Boolean(runtime?.connected);
+      });
+
+      if (!hasExplicitConfiguredAccount && !hasConnectedRuntime) {
+        return null;
+      }
+
+      return {
+        actions: ['send'],
+        capabilities: [],
+      };
+    },
     supportsAction: ({ action }) => action === 'send',
     extractToolSend: ({ args }) => extractToolSend(args, 'sendMessage'),
     handleAction: async ({ action, params, accountId, mediaLocalRoots }) => {

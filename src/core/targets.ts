@@ -1,4 +1,4 @@
-import type { BncrRoute } from './types.js';
+import type { BncrRoute } from './types.ts';
 
 const BNCR_SESSION_KEY_PREFIX = 'agent:main:bncr:direct:';
 

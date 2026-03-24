@@ -1,9 +1,9 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import {
-  type GatewayRequestHandlerOptions,
-} from "openclaw/plugin-sdk";
-import { BncrConfigSchema } from "./src/core/config-schema.js";
-import { createBncrBridge, createBncrChannelPlugin } from "./src/channel.js";
+import type {
+  OpenClawPluginApi,
+  GatewayRequestHandlerOptions,
+} from "openclaw/plugin-sdk/core";
+import { BncrConfigSchema } from "./src/core/config-schema.ts";
+import { createBncrBridge, createBncrChannelPlugin } from "./src/channel.ts";
 
 type BridgeSingleton = ReturnType<typeof createBncrBridge>;
 

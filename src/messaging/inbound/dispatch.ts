@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.js';
-import { handleBncrNativeCommand } from './commands.js';
+import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.ts';
+import { handleBncrNativeCommand } from './commands.ts';
 
-type ParsedInbound = ReturnType<typeof import('./parse.js')['parseBncrInboundParams']>;
+type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
 export async function dispatchBncrInbound(params: {
   api: any;

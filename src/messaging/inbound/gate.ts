@@ -1,6 +1,6 @@
-import { normalizeAccountId } from '../../core/accounts.js';
-import { resolveBncrChannelPolicy } from '../../core/policy.js';
-import { buildDisplayScopeCandidates } from '../../core/targets.js';
+import { normalizeAccountId } from '../../core/accounts.ts';
+import { resolveBncrChannelPolicy } from '../../core/policy.ts';
+import { buildDisplayScopeCandidates } from '../../core/targets.ts';
 
 export type BncrGateResult =
   | { allowed: true }
