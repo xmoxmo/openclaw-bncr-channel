@@ -34,6 +34,14 @@ openclaw plugins update bncr
 openclaw gateway restart
 ```
 
+> 兼容范围：`openclaw >= 2026.3.22`
+>
+> 如果你是从精确版本升级，或本地安装记录仍钉在旧版本，也可以显式执行：
+>
+> ```bash
+> openclaw plugins install @xmoxmo/bncr@0.1.1
+> openclaw gateway restart
+> ```
 
 ### Bncr / 无界侧
 
@@ -137,7 +145,35 @@ openclaw health --json
 
 ---
 
-## 8. 自检与测试
+## 8. 常见安装/加载问题
+
+### 报错：`Cannot find module 'openclaw/plugin-sdk/core'`
+
+这通常不是 bncr 没装上，而是：
+
+- bncr 已经安装到 `~/.openclaw/extensions/bncr`
+- 但插件目录当前解析不到宿主 `openclaw` 包
+- 因而在加载 `openclaw/plugin-sdk/core` 时失败
+
+bncr 0.1.1 会先尝试自动修复插件目录下的 `node_modules/openclaw` 解析链；如果仍失败，可手动执行：
+
+```bash
+mkdir -p ~/.openclaw/extensions/bncr/node_modules
+ln -s "$(npm root -g)/openclaw" ~/.openclaw/extensions/bncr/node_modules/openclaw
+openclaw gateway restart
+openclaw plugins inspect bncr
+```
+
+如果 `npm root -g` 指向的不是实际宿主位置，请先检查：
+
+```bash
+which openclaw
+npm root -g
+```
+
+然后把 `openclaw` 的真实安装目录软链接到 `~/.openclaw/extensions/bncr/node_modules/openclaw`。
+
+## 9. 自检与测试
 
 ```bash
 cd plugins/bncr
