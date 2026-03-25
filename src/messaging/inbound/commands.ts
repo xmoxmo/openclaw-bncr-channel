@@ -114,7 +114,8 @@ export async function handleBncrNativeCommand(params: {
     },
     dispatcherOptions: {
       deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean }, info?: { kind?: 'tool' | 'block' | 'final' }) => {
-        if (info?.kind && info.kind !== 'final') return;
+        const kind = info?.kind;
+        if (kind && kind !== 'final') return;
         const hasPayload = Boolean(payload?.text || payload?.mediaUrl || (Array.isArray(payload?.mediaUrls) && payload.mediaUrls.length > 0));
         if (!hasPayload) return;
         responded = true;
@@ -122,7 +123,10 @@ export async function handleBncrNativeCommand(params: {
           accountId,
           sessionKey,
           route,
-          payload,
+          payload: {
+            ...payload,
+            kind: kind as 'block' | 'final' | undefined,
+          },
         });
       },
     },

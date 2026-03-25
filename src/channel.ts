@@ -1606,7 +1606,7 @@ class BncrBridgeRuntime {
     accountId: string;
     sessionKey: string;
     route: BncrRoute;
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; asVoice?: boolean; audioAsVoice?: boolean };
+    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; asVoice?: boolean; audioAsVoice?: boolean; kind?: 'block' | 'final' };
     mediaLocalRoots?: readonly string[];
   }) {
     const { accountId, sessionKey, route, payload, mediaLocalRoots } = params;
@@ -1643,6 +1643,7 @@ class BncrBridgeRuntime {
             mimeType: media.mimeType,
           }),
           hintedType: wantsVoice ? 'voice' : undefined,
+          kind: payload.kind,
           now: now(),
         });
 
@@ -1675,6 +1676,7 @@ class BncrBridgeRuntime {
         groupId: route.groupId,
         userId: route.userId,
         type: 'text',
+        kind: payload.kind,
         msg: text,
         path: '',
         base64: '',

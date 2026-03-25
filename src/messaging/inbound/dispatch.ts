@@ -154,13 +154,17 @@ export async function dispatchBncrInbound(params: {
         payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
         info?: { kind?: 'tool' | 'block' | 'final' },
       ) => {
-        if (info?.kind && info.kind !== 'final') return;
+        const kind = info?.kind;
+        if (kind && kind !== 'final') return;
 
         await enqueueFromReply({
           accountId,
           sessionKey,
           route,
-          payload,
+          payload: {
+            ...payload,
+            kind: kind as 'block' | 'final' | undefined,
+          },
         });
       },
       onError: (err: unknown) => {

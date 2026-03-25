@@ -36,6 +36,7 @@ export function buildBncrMediaOutboundFrame(params: {
   mediaMsg: string;
   fileName: string;
   hintedType?: string;
+  kind?: 'block' | 'final';
   now: number;
 }) {
   return {
@@ -53,6 +54,7 @@ export function buildBncrMediaOutboundFrame(params: {
         hasPayload: !!(params.media.path || params.media.mediaBase64),
         hintedType: params.hintedType,
       }),
+      kind: params.kind,
       mimeType: params.media.mimeType || '',
       msg: params.mediaMsg,
       path: params.media.path || params.mediaUrl,
