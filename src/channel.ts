@@ -63,6 +63,7 @@ const FILE_CHUNK_RETRY = 3;
 const FILE_ACK_TIMEOUT_MS = 30_000;
 const FILE_TRANSFER_ACK_TTL_MS = 30_000;
 const FILE_TRANSFER_KEEP_MS = 6 * 60 * 60 * 1000;
+const REGISTER_WARMUP_WINDOW_MS = 30_000;
 let BNCR_DEBUG_VERBOSE = false; // 全局调试日志开关（默认关闭）
 
 type FileSendTransferState = {
@@ -130,6 +131,18 @@ type PersistedState = {
     accountId: string;
     updatedAt: number;
   }>;
+  lastDriftSnapshot?: {
+    capturedAt: number;
+    registerCount: number | null;
+    apiGeneration: number | null;
+    postWarmupRegisterCount: number | null;
+    apiInstanceId: string | null;
+    registryFingerprint: string | null;
+    dominantBucket: string | null;
+    sourceBuckets: Record<string, number>;
+    traceWindowSize: number;
+    traceRecent: Array<Record<string, unknown>>;
+  } | null;
 };
 
 function now() {
@@ -205,6 +218,56 @@ class BncrBridgeRuntime {
   private api: OpenClawPluginApi;
   private statePath: string | null = null;
   private bridgeId = `${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
+  private gatewayPid = process.pid;
+  private registerCount = 0;
+  private apiGeneration = 0;
+  private firstRegisterAt: number | null = null;
+  private lastRegisterAt: number | null = null;
+  private lastApiRebindAt: number | null = null;
+  private pluginSource: string | null = null;
+  private pluginVersion: string | null = null;
+  private connectionEpoch = 0;
+  private primaryLeaseId: string | null = null;
+  private acceptedConnections = 0;
+  private lastConnectAt: number | null = null;
+  private lastDisconnectAt: number | null = null;
+  private lastInboundAtGlobal: number | null = null;
+  private lastActivityAtGlobal: number | null = null;
+  private lastAckAtGlobal: number | null = null;
+  private recentConnections = new Map<string, {
+    epoch: number;
+    connectedAt: number;
+    lastActivityAt: number | null;
+    isPrimary: boolean;
+  }>();
+  private staleCounters = {
+    staleConnect: 0,
+    staleInbound: 0,
+    staleActivity: 0,
+    staleAck: 0,
+    staleFileInit: 0,
+    staleFileChunk: 0,
+    staleFileComplete: 0,
+    staleFileAbort: 0,
+    lastStaleAt: null as number | null,
+  };
+  private lastApiInstanceId: string | null = null;
+  private lastRegistryFingerprint: string | null = null;
+  private lastDriftSnapshot: PersistedState['lastDriftSnapshot'] = null;
+  private registerTraceRecent: Array<{
+    ts: number;
+    bridgeId: string;
+    gatewayPid: number;
+    registerCount: number;
+    apiGeneration: number;
+    apiRebound: boolean;
+    apiInstanceId: string | null;
+    registryFingerprint: string | null;
+    source: string | null;
+    pluginVersion: string | null;
+    stack: string;
+    stackBucket: string;
+  }> = [];
 
   private connections = new Map<string, BncrConnection>(); // connectionKey -> connection
   private activeConnectionByAccount = new Map<string, string>(); // accountId -> connectionKey
@@ -244,6 +307,266 @@ class BncrBridgeRuntime {
 
   constructor(api: OpenClawPluginApi) {
     this.api = api;
+  }
+
+  bindApi(api: OpenClawPluginApi) {
+    this.api = api;
+  }
+
+  getBridgeId() {
+    return this.bridgeId;
+  }
+
+  private classifyRegisterTrace(stack: string) {
+    if (stack.includes('prepareSecretsRuntimeSnapshot') || stack.includes('resolveRuntimeWebTools') || stack.includes('resolvePluginWebSearchProviders')) {
+      return 'runtime/webtools';
+    }
+    if (stack.includes('startGatewayServer') || stack.includes('loadGatewayPlugins')) {
+      return 'gateway/startup';
+    }
+    if (stack.includes('resolvePluginImplicitProviders')) {
+      return 'provider/discovery/implicit';
+    }
+    if (stack.includes('resolvePluginDiscoveryProviders')) {
+      return 'provider/discovery/discovery';
+    }
+    if (stack.includes('resolvePluginProviders')) {
+      return 'provider/discovery/providers';
+    }
+    return 'other';
+  }
+
+  private dominantRegisterBucket(sourceBuckets: Record<string, number>) {
+    let winner: string | null = null;
+    let winnerCount = -1;
+    for (const [bucket, count] of Object.entries(sourceBuckets)) {
+      if (count > winnerCount) {
+        winner = bucket;
+        winnerCount = count;
+      }
+    }
+    return winner;
+  }
+
+  private captureDriftSnapshot(summary: ReturnType<BncrBridgeRuntime['buildRegisterTraceSummary']>) {
+    this.lastDriftSnapshot = {
+      capturedAt: now(),
+      registerCount: this.registerCount,
+      apiGeneration: this.apiGeneration,
+      postWarmupRegisterCount: summary.postWarmupRegisterCount,
+      apiInstanceId: this.lastApiInstanceId,
+      registryFingerprint: this.lastRegistryFingerprint,
+      dominantBucket: summary.dominantBucket,
+      sourceBuckets: { ...summary.sourceBuckets },
+      traceWindowSize: this.registerTraceRecent.length,
+      traceRecent: this.registerTraceRecent.map((trace) => ({ ...trace })),
+    };
+    this.scheduleSave();
+  }
+
+  private buildRegisterTraceSummary() {
+    const buckets: Record<string, number> = {};
+    let warmupCount = 0;
+    let postWarmupCount = 0;
+    let unexpectedRegisterAfterWarmup = false;
+    let lastUnexpectedRegisterAt: number | null = null;
+    const baseline = this.firstRegisterAt;
+
+    for (const trace of this.registerTraceRecent) {
+      buckets[trace.stackBucket] = (buckets[trace.stackBucket] || 0) + 1;
+      const isWarmup = baseline != null && (trace.ts - baseline) <= REGISTER_WARMUP_WINDOW_MS;
+      if (isWarmup) {
+        warmupCount += 1;
+      } else {
+        postWarmupCount += 1;
+        unexpectedRegisterAfterWarmup = true;
+        lastUnexpectedRegisterAt = trace.ts;
+      }
+    }
+
+    const dominantBucket = this.dominantRegisterBucket(buckets);
+    const likelyRuntimeRegistryDrift = postWarmupCount > 0;
+    const likelyStartupFanoutOnly = warmupCount > 0 && postWarmupCount === 0;
+
+    return {
+      startupWindowMs: REGISTER_WARMUP_WINDOW_MS,
+      traceWindowSize: this.registerTraceRecent.length,
+      sourceBuckets: buckets,
+      dominantBucket,
+      warmupRegisterCount: warmupCount,
+      postWarmupRegisterCount: postWarmupCount,
+      unexpectedRegisterAfterWarmup,
+      lastUnexpectedRegisterAt,
+      likelyRuntimeRegistryDrift,
+      likelyStartupFanoutOnly,
+    };
+  }
+
+  noteRegister(meta: {
+    source?: string;
+    pluginVersion?: string;
+    apiRebound?: boolean;
+    apiInstanceId?: string;
+    registryFingerprint?: string;
+  }) {
+    const ts = now();
+    this.registerCount += 1;
+    if (this.firstRegisterAt == null) this.firstRegisterAt = ts;
+    this.lastRegisterAt = ts;
+    if (meta.apiRebound) {
+      this.apiGeneration += 1;
+      this.lastApiRebindAt = ts;
+    } else if (this.registerCount === 1 && this.apiGeneration === 0) {
+      this.apiGeneration = 1;
+    }
+    if (meta.source) this.pluginSource = meta.source;
+    if (meta.pluginVersion) this.pluginVersion = meta.pluginVersion;
+    if (meta.apiInstanceId) this.lastApiInstanceId = meta.apiInstanceId;
+    if (meta.registryFingerprint) this.lastRegistryFingerprint = meta.registryFingerprint;
+
+    const stack = String(new Error().stack || '')
+      .split('\n')
+      .slice(2, 7)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(' <- ');
+    const stackBucket = this.classifyRegisterTrace(stack);
+
+    const trace = {
+      ts,
+      bridgeId: this.bridgeId,
+      gatewayPid: this.gatewayPid,
+      registerCount: this.registerCount,
+      apiGeneration: this.apiGeneration,
+      apiRebound: meta.apiRebound === true,
+      apiInstanceId: this.lastApiInstanceId,
+      registryFingerprint: this.lastRegistryFingerprint,
+      source: this.pluginSource,
+      pluginVersion: this.pluginVersion,
+      stack,
+      stackBucket,
+    };
+    this.registerTraceRecent.push(trace);
+    if (this.registerTraceRecent.length > 12) this.registerTraceRecent.splice(0, this.registerTraceRecent.length - 12);
+
+    const summary = this.buildRegisterTraceSummary();
+    if (summary.postWarmupRegisterCount > 0) this.captureDriftSnapshot(summary);
+
+    this.api.logger.info?.(
+      `[bncr-register-trace] ${JSON.stringify(trace)}`,
+    );
+  }
+
+  private createLeaseId() {
+    return typeof crypto?.randomUUID === 'function'
+      ? `lease_${crypto.randomUUID()}`
+      : `lease_${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
+  }
+
+  private acceptConnection() {
+    const ts = now();
+    const leaseId = this.createLeaseId();
+    const connectionEpoch = ++this.connectionEpoch;
+    this.primaryLeaseId = leaseId;
+    this.acceptedConnections += 1;
+    this.lastConnectAt = ts;
+    this.recentConnections.set(leaseId, {
+      epoch: connectionEpoch,
+      connectedAt: ts,
+      lastActivityAt: null,
+      isPrimary: true,
+    });
+    for (const [id, entry] of this.recentConnections.entries()) {
+      if (id !== leaseId) entry.isPrimary = false;
+    }
+    while (this.recentConnections.size > 8) {
+      const oldest = this.recentConnections.keys().next().value;
+      if (!oldest) break;
+      this.recentConnections.delete(oldest);
+    }
+    return { leaseId, connectionEpoch, acceptedAt: ts };
+  }
+
+  private observeLease(
+    kind: 'connect' | 'inbound' | 'activity' | 'ack' | 'file.init' | 'file.chunk' | 'file.complete' | 'file.abort',
+    params: { leaseId?: string; connectionEpoch?: number },
+  ) {
+    const leaseId = typeof params.leaseId === 'string' ? params.leaseId.trim() : '';
+    const connectionEpoch = typeof params.connectionEpoch === 'number' ? params.connectionEpoch : undefined;
+    if (!leaseId && connectionEpoch == null) return { stale: false, reason: 'missing' as const };
+    const staleByLease = !!leaseId && this.primaryLeaseId != null && leaseId !== this.primaryLeaseId;
+    const staleByEpoch = connectionEpoch != null && this.connectionEpoch > 0 && connectionEpoch !== this.connectionEpoch;
+    const stale = staleByLease || staleByEpoch;
+    if (!stale) return { stale: false, reason: 'ok' as const };
+    this.staleCounters.lastStaleAt = now();
+    switch (kind) {
+      case 'connect': this.staleCounters.staleConnect += 1; break;
+      case 'inbound': this.staleCounters.staleInbound += 1; break;
+      case 'activity': this.staleCounters.staleActivity += 1; break;
+      case 'ack': this.staleCounters.staleAck += 1; break;
+      case 'file.init': this.staleCounters.staleFileInit += 1; break;
+      case 'file.chunk': this.staleCounters.staleFileChunk += 1; break;
+      case 'file.complete': this.staleCounters.staleFileComplete += 1; break;
+      case 'file.abort': this.staleCounters.staleFileAbort += 1; break;
+    }
+    this.api.logger.warn?.(
+      `[bncr] stale ${kind} observed lease=${leaseId || '-'} epoch=${connectionEpoch ?? '-'} currentLease=${this.primaryLeaseId || '-'} currentEpoch=${this.connectionEpoch}`,
+    );
+    return { stale: true, reason: 'mismatch' as const };
+  }
+
+  private buildExtendedDiagnostics(accountId: string) {
+    const diagnostics = this.buildIntegratedDiagnostics(accountId) as Record<string, any>;
+    return {
+      ...diagnostics,
+      register: {
+        bridgeId: this.bridgeId,
+        gatewayPid: this.gatewayPid,
+        pluginVersion: this.pluginVersion,
+        source: this.pluginSource,
+        apiInstanceId: this.lastApiInstanceId,
+        registryFingerprint: this.lastRegistryFingerprint,
+        registerCount: this.registerCount,
+        firstRegisterAt: this.firstRegisterAt,
+        lastRegisterAt: this.lastRegisterAt,
+        lastApiRebindAt: this.lastApiRebindAt,
+        apiGeneration: this.apiGeneration,
+        traceRecent: this.registerTraceRecent.slice(),
+        traceSummary: this.buildRegisterTraceSummary(),
+        lastDriftSnapshot: this.lastDriftSnapshot,
+      },
+      connection: {
+        active: this.activeConnectionCount(accountId),
+        primaryLeaseId: this.primaryLeaseId,
+        primaryEpoch: this.connectionEpoch || null,
+        acceptedConnections: this.acceptedConnections,
+        lastConnectAt: this.lastConnectAt,
+        lastDisconnectAt: this.lastDisconnectAt,
+        lastActivityAt: this.lastActivityAtGlobal,
+        lastInboundAt: this.lastInboundAtGlobal,
+        lastAckAt: this.lastAckAtGlobal,
+        recent: Array.from(this.recentConnections.entries()).map(([leaseId, entry]) => ({
+          leaseId,
+          epoch: entry.epoch,
+          connectedAt: entry.connectedAt,
+          lastActivityAt: entry.lastActivityAt,
+          isPrimary: entry.isPrimary,
+        })),
+      },
+      protocol: {
+        bridgeVersion: BRIDGE_VERSION,
+        protocolVersion: 2,
+        minClientProtocol: 1,
+        features: {
+          leaseId: true,
+          connectionEpoch: true,
+          staleObserveOnly: true,
+          staleRejectAck: false,
+          staleRejectFile: false,
+        },
+      },
+      stale: { ...this.staleCounters },
+    };
   }
 
   isDebugEnabled(): boolean {
@@ -500,6 +823,25 @@ class BncrBridgeRuntime {
       this.lastOutboundByAccount.set(accountId, updatedAt);
     }
 
+    this.lastDriftSnapshot = data.lastDriftSnapshot && typeof data.lastDriftSnapshot === 'object'
+      ? {
+          capturedAt: Number((data.lastDriftSnapshot as any).capturedAt || 0),
+          registerCount: Number.isFinite(Number((data.lastDriftSnapshot as any).registerCount)) ? Number((data.lastDriftSnapshot as any).registerCount) : null,
+          apiGeneration: Number.isFinite(Number((data.lastDriftSnapshot as any).apiGeneration)) ? Number((data.lastDriftSnapshot as any).apiGeneration) : null,
+          postWarmupRegisterCount: Number.isFinite(Number((data.lastDriftSnapshot as any).postWarmupRegisterCount)) ? Number((data.lastDriftSnapshot as any).postWarmupRegisterCount) : null,
+          apiInstanceId: asString((data.lastDriftSnapshot as any).apiInstanceId || '').trim() || null,
+          registryFingerprint: asString((data.lastDriftSnapshot as any).registryFingerprint || '').trim() || null,
+          dominantBucket: asString((data.lastDriftSnapshot as any).dominantBucket || '').trim() || null,
+          sourceBuckets: ((data.lastDriftSnapshot as any).sourceBuckets && typeof (data.lastDriftSnapshot as any).sourceBuckets === 'object')
+            ? { ...((data.lastDriftSnapshot as any).sourceBuckets as Record<string, number>) }
+            : {},
+          traceWindowSize: Number((data.lastDriftSnapshot as any).traceWindowSize || 0),
+          traceRecent: Array.isArray((data.lastDriftSnapshot as any).traceRecent)
+            ? [ ...((data.lastDriftSnapshot as any).traceRecent as Array<Record<string, unknown>>) ]
+            : [],
+        }
+      : null;
+
     // 兼容旧状态文件：若尚未持久化 lastSession*/lastActivity*，从 sessionRoutes 回填。
     if (this.lastSessionByAccount.size === 0 && this.sessionRoutes.size > 0) {
       for (const [sessionKey, info] of this.sessionRoutes.entries()) {
@@ -560,6 +902,20 @@ class BncrBridgeRuntime {
         accountId,
         updatedAt,
       })),
+      lastDriftSnapshot: this.lastDriftSnapshot
+        ? {
+            capturedAt: this.lastDriftSnapshot.capturedAt,
+            registerCount: this.lastDriftSnapshot.registerCount,
+            apiGeneration: this.lastDriftSnapshot.apiGeneration,
+            postWarmupRegisterCount: this.lastDriftSnapshot.postWarmupRegisterCount,
+            apiInstanceId: this.lastDriftSnapshot.apiInstanceId,
+            registryFingerprint: this.lastDriftSnapshot.registryFingerprint,
+            dominantBucket: this.lastDriftSnapshot.dominantBucket,
+            sourceBuckets: { ...this.lastDriftSnapshot.sourceBuckets },
+            traceWindowSize: this.lastDriftSnapshot.traceWindowSize,
+            traceRecent: this.lastDriftSnapshot.traceRecent.map((trace) => ({ ...trace })),
+          }
+        : null,
     };
 
     await writeJsonFileAtomically(this.statePath, data);
@@ -1718,6 +2074,7 @@ class BncrBridgeRuntime {
     this.markSeen(accountId, connId, clientId);
     this.markActivity(accountId);
     this.incrementCounter(this.connectEventsByAccount, accountId);
+    const lease = this.acceptConnection();
 
     respond(true, {
       channel: CHANNEL_ID,
@@ -1729,7 +2086,13 @@ class BncrBridgeRuntime {
       activeConnections: this.activeConnectionCount(accountId),
       pending: Array.from(this.outbox.values()).filter((v) => v.accountId === accountId).length,
       deadLetter: this.deadLetter.filter((v) => v.accountId === accountId).length,
-      diagnostics: this.buildIntegratedDiagnostics(accountId),
+      diagnostics: this.buildExtendedDiagnostics(accountId),
+      leaseId: lease.leaseId,
+      connectionEpoch: lease.connectionEpoch,
+      protocolVersion: 2,
+      acceptedAt: lease.acceptedAt,
+      serverPid: this.gatewayPid,
+      bridgeId: this.bridgeId,
       now: now(),
     });
 
@@ -1743,6 +2106,8 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.observeLease('ack', params ?? {});
+    this.lastAckAtGlobal = now();
     this.incrementCounter(this.ackEventsByAccount, accountId);
 
     const messageId = asString(params?.messageId || '').trim();
@@ -1802,6 +2167,8 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    this.observeLease('activity', params ?? {});
+    this.lastActivityAtGlobal = now();
     if (BNCR_DEBUG_VERBOSE) {
       this.api.logger.info?.(
         `[bncr-activity] ${JSON.stringify({
@@ -1834,7 +2201,7 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const cfg = await this.api.runtime.config.loadConfig();
     const runtime = this.getAccountRuntimeSnapshot(accountId);
-    const diagnostics = this.buildIntegratedDiagnostics(accountId);
+    const diagnostics = this.buildExtendedDiagnostics(accountId);
     const permissions = buildBncrPermissionSummary(cfg ?? {});
     const probe = probeBncrAccount({
       accountId,
@@ -1869,6 +2236,7 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.observeLease('file.init', params ?? {});
     this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
@@ -1938,6 +2306,7 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.observeLease('file.chunk', params ?? {});
     this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
@@ -1991,6 +2360,7 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.observeLease('file.complete', params ?? {});
     this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
@@ -2054,6 +2424,7 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.observeLease('file.abort', params ?? {});
     this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
@@ -2149,7 +2520,9 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
+    this.observeLease('inbound', params ?? {});
     this.markActivity(accountId);
+    this.lastInboundAtGlobal = now();
     this.incrementCounter(this.inboundEventsByAccount, accountId);
 
     if (!platform || (!userId && !groupId)) {

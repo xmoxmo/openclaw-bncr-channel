@@ -187,6 +187,18 @@ npm pack
 - `npm test`：跑回归测试
 - `npm run selfcheck`：检查插件骨架是否完整
 - `npm pack`：确认当前版本可正常打包
+- `npm run check-register-drift -- --duration-sec 300 --interval-sec 15`：静置采样 `bncr.diagnostics`，观察 `registerCount / apiGeneration / postWarmupRegisterCount` 是否在 warmup 后继续增长
+
+示例输出重点：
+
+- `delta.registerCount`
+- `delta.apiGeneration`
+- `delta.postWarmupRegisterCount`
+- `historicalWarmupExternalDrift`
+- `newDriftDuringWindow`
+- `last.postWarmupRegisterCount`
+- `last.unexpectedRegisterAfterWarmup`
+- `driftDetected`
 
 ---
 
