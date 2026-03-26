@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeAccountId } from '../../core/accounts.ts';
-import type { BncrRoute } from '../../core/types.ts';
 import { extractInlineTaskKey } from '../../core/targets.ts';
+import type { BncrRoute } from '../../core/types.ts';
 
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
@@ -28,7 +28,10 @@ export function inboundDedupKey(params: {
 
   const text = asString(params.text || '').trim();
   const media = asString(params.mediaBase64 || '');
-  const digest = createHash('sha1').update(`${text}\n${media.slice(0, 256)}`).digest('hex').slice(0, 16);
+  const digest = createHash('sha1')
+    .update(`${text}\n${media.slice(0, 256)}`)
+    .digest('hex')
+    .slice(0, 16);
   return `${accountId}|${platform}|${groupId}|${userId}|hash:${digest}`;
 }
 

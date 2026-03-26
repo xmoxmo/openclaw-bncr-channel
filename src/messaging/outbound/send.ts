@@ -4,7 +4,10 @@ export async function sendBncrText(params: {
   to: string;
   text: string;
   mediaLocalRoots?: readonly string[];
-  resolveVerifiedTarget: (to: string, accountId: string) => { sessionKey: string; route: any; displayScope: string };
+  resolveVerifiedTarget: (
+    to: string,
+    accountId: string,
+  ) => { sessionKey: string; route: any; displayScope: string };
   rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
   enqueueFromReply: (args: {
     accountId: string;
@@ -28,7 +31,11 @@ export async function sendBncrText(params: {
     mediaLocalRoots: params.mediaLocalRoots,
   });
 
-  return { channel: params.channelId, messageId: params.createMessageId(), chatId: verified.sessionKey };
+  return {
+    channel: params.channelId,
+    messageId: params.createMessageId(),
+    chatId: verified.sessionKey,
+  };
 }
 
 export async function sendBncrMedia(params: {
@@ -40,13 +47,22 @@ export async function sendBncrMedia(params: {
   asVoice?: boolean;
   audioAsVoice?: boolean;
   mediaLocalRoots?: readonly string[];
-  resolveVerifiedTarget: (to: string, accountId: string) => { sessionKey: string; route: any; displayScope: string };
+  resolveVerifiedTarget: (
+    to: string,
+    accountId: string,
+  ) => { sessionKey: string; route: any; displayScope: string };
   rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
   enqueueFromReply: (args: {
     accountId: string;
     sessionKey: string;
     route: any;
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; asVoice?: boolean; audioAsVoice?: boolean };
+    payload: {
+      text?: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+      asVoice?: boolean;
+      audioAsVoice?: boolean;
+    };
     mediaLocalRoots?: readonly string[];
   }) => Promise<void>;
   createMessageId: () => string;
@@ -67,5 +83,9 @@ export async function sendBncrMedia(params: {
     mediaLocalRoots: params.mediaLocalRoots,
   });
 
-  return { channel: params.channelId, messageId: params.createMessageId(), chatId: verified.sessionKey };
+  return {
+    channel: params.channelId,
+    messageId: params.createMessageId(),
+    chatId: verified.sessionKey,
+  };
 }

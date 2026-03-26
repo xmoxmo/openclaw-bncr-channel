@@ -1,5 +1,5 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import test from 'node:test';
 
 function createApi() {
   return {
@@ -37,18 +37,21 @@ test('bncr register is idempotent on the same api instance', async () => {
 
   assert.equal(api.services.length, 1);
   assert.equal(api.channels.length, 1);
-  assert.deepEqual(api.methods.map((item) => item.name), [
-    'bncr.connect',
-    'bncr.inbound',
-    'bncr.activity',
-    'bncr.ack',
-    'bncr.diagnostics',
-    'bncr.file.init',
-    'bncr.file.chunk',
-    'bncr.file.complete',
-    'bncr.file.abort',
-    'bncr.file.ack',
-  ]);
+  assert.deepEqual(
+    api.methods.map((item) => item.name),
+    [
+      'bncr.connect',
+      'bncr.inbound',
+      'bncr.activity',
+      'bncr.ack',
+      'bncr.diagnostics',
+      'bncr.file.init',
+      'bncr.file.chunk',
+      'bncr.file.complete',
+      'bncr.file.abort',
+      'bncr.file.ack',
+    ],
+  );
 });
 
 test('bncr register reuses bridge but registers on a new api instance', async () => {

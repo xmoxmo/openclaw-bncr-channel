@@ -16,11 +16,14 @@ const options = {
 for (let i = 0; i < args.length; i += 1) {
   const arg = args[i];
   if (arg === '--duration-sec') options.durationSec = readNumber(args[++i], options.durationSec);
-  else if (arg === '--interval-sec') options.intervalSec = readNumber(args[++i], options.intervalSec);
+  else if (arg === '--interval-sec')
+    options.intervalSec = readNumber(args[++i], options.intervalSec);
   else if (arg === '--account-id') options.accountId = args[++i] || options.accountId;
   else if (arg === '--gateway-bin') options.gatewayBin = args[++i] || options.gatewayBin;
   else if (arg === '--help' || arg === '-h') {
-    console.log(`Usage: node ./scripts/check-register-drift.mjs [--duration-sec 300] [--interval-sec 15] [--account-id Primary] [--gateway-bin openclaw]\n\nSamples bncr.diagnostics over time and reports whether register counters drift after warmup.`);
+    console.log(
+      'Usage: node ./scripts/check-register-drift.mjs [--duration-sec 300] [--interval-sec 15] [--account-id Primary] [--gateway-bin openclaw]\n\nSamples bncr.diagnostics over time and reports whether register counters drift after warmup.',
+    );
     process.exit(0);
   }
 }
@@ -33,7 +36,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const fetchDiagnostics = () => {
   const raw = execFileSync(
     options.gatewayBin,
-    ['gateway', 'call', 'bncr.diagnostics', '--json', '--params', JSON.stringify({ accountId: options.accountId })],
+    [
+      'gateway',
+      'call',
+      'bncr.diagnostics',
+      '--json',
+      '--params',
+      JSON.stringify({ accountId: options.accountId }),
+    ],
     { encoding: 'utf8' },
   );
   const parsed = JSON.parse(raw);
@@ -69,10 +79,12 @@ const first = samples[0] || {};
 const last = samples[samples.length - 1] || {};
 const deltaRegisterCount = (last.registerCount ?? 0) - (first.registerCount ?? 0);
 const deltaApiGeneration = (last.apiGeneration ?? 0) - (first.apiGeneration ?? 0);
-const deltaPostWarmupRegisterCount = (last.postWarmupRegisterCount ?? 0) - (first.postWarmupRegisterCount ?? 0);
+const deltaPostWarmupRegisterCount =
+  (last.postWarmupRegisterCount ?? 0) - (first.postWarmupRegisterCount ?? 0);
 const historicalWarmupExternalDrift = Boolean(first.unexpectedRegisterAfterWarmup);
 const newWarmupExternalDriftDuringWindow = deltaPostWarmupRegisterCount > 0;
-const newDriftDuringWindow = deltaRegisterCount > 0 || deltaApiGeneration > 0 || newWarmupExternalDriftDuringWindow;
+const newDriftDuringWindow =
+  deltaRegisterCount > 0 || deltaApiGeneration > 0 || newWarmupExternalDriftDuringWindow;
 const driftDetected = historicalWarmupExternalDrift || newDriftDuringWindow;
 
 const result = {

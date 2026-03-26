@@ -49,7 +49,9 @@ export function buildIntegratedDiagnostics(input: RuntimeStatusInput): BncrDiagn
     health: {
       connected: input.connected,
       pending: input.pending,
-      pendingAdmissions: Array.isArray(input.pendingAdmissions) ? input.pendingAdmissions.length : 0,
+      pendingAdmissions: Array.isArray(input.pendingAdmissions)
+        ? input.pendingAdmissions.length
+        : 0,
       deadLetter: input.deadLetter,
       activeConnections: input.activeConnections,
       connectEvents: input.connectEvents,
@@ -94,11 +96,15 @@ export function buildStatusMetaFromRuntime(input: RuntimeStatusInput) {
   const diagnostics = buildIntegratedDiagnostics(input);
   return {
     pending: input.pending,
-    pendingAdmissionsCount: Array.isArray(input.pendingAdmissions) ? input.pendingAdmissions.length : 0,
+    pendingAdmissionsCount: Array.isArray(input.pendingAdmissions)
+      ? input.pendingAdmissions.length
+      : 0,
     pendingAdmissions: Array.isArray(input.pendingAdmissions)
       ? input.pendingAdmissions.map((item) => ({
           clientId: item.clientId,
-          scope: item.route ? `${item.route.platform}:${item.route.groupId}:${item.route.userId}` : null,
+          scope: item.route
+            ? `${item.route.platform}:${item.route.groupId}:${item.route.userId}`
+            : null,
           scopes: Array.isArray(item.routes)
             ? item.routes.map((route) => `${route.platform}:${route.groupId}:${route.userId}`)
             : [],

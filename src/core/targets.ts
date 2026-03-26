@@ -1,6 +1,6 @@
 import type { BncrRoute } from './types.ts';
 
-const BNCR_SESSION_KEY_PREFIX = 'agent:main:bncr:direct:';
+export type BncrSessionKind = 'direct' | 'group';
 
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
@@ -84,31 +84,76 @@ export function parseRouteLike(input: unknown): BncrRoute | null {
   return { platform, groupId, userId };
 }
 
-export function parseLegacySessionKeyToStrict(input: string): string | null {
+export function resolveCanonicalSessionKind(_input?: {
+  route?: BncrRoute | null;
+  scope?: string | null;
+  sessionKey?: string | null;
+}): BncrSessionKind {
+  return 'direct';
+}
+
+export function buildCanonicalBncrSessionKey(route: BncrRoute, canonicalAgentId: string): string {
+  const agentId = asString(canonicalAgentId).trim() || 'main';
+  const kind = resolveCanonicalSessionKind({ route });
+  return `agent:${agentId}:bncr:${kind}:${routeScopeToHex(route)}`;
+}
+
+export function parseLegacySessionKey(input: string): {
+  route: BncrRoute;
+  inputKind: BncrSessionKind;
+  inputAgentId?: string;
+  source: 'legacy-direct' | 'legacy-bncr' | 'legacy-agent' | 'hex';
+} | null {
   const raw = asString(input).trim();
   if (!raw) return null;
 
-  const directLegacy = raw.match(/^agent:main:bncr:direct:([0-9a-fA-F]+):0$/);
-  if (directLegacy?.[1]) {
-    const route = parseRouteFromHexScope(directLegacy[1].toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
+  const directLegacy = raw.match(/^agent:([^:]+):bncr:direct:([0-9a-fA-F]+):0$/);
+  if (directLegacy?.[1] && directLegacy?.[2]) {
+    const route = parseRouteFromHexScope(directLegacy[2].toLowerCase());
+    if (route) {
+      return {
+        route,
+        inputKind: 'direct',
+        inputAgentId: directLegacy[1],
+        source: 'legacy-direct',
+      };
+    }
   }
 
   const bncrLegacy = raw.match(/^bncr:([0-9a-fA-F]+):0$/);
   if (bncrLegacy?.[1]) {
     const route = parseRouteFromHexScope(bncrLegacy[1].toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
+    if (route) {
+      return {
+        route,
+        inputKind: 'direct',
+        source: 'legacy-bncr',
+      };
+    }
   }
 
-  const agentLegacy = raw.match(/^agent:main:bncr:([0-9a-fA-F]+):0$/);
-  if (agentLegacy?.[1]) {
-    const route = parseRouteFromHexScope(agentLegacy[1].toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
+  const agentLegacy = raw.match(/^agent:([^:]+):bncr:([0-9a-fA-F]+):0$/);
+  if (agentLegacy?.[1] && agentLegacy?.[2]) {
+    const route = parseRouteFromHexScope(agentLegacy[2].toLowerCase());
+    if (route) {
+      return {
+        route,
+        inputKind: 'direct',
+        inputAgentId: agentLegacy[1],
+        source: 'legacy-agent',
+      };
+    }
   }
 
   if (isLowerHex(raw.toLowerCase())) {
     const route = parseRouteFromHexScope(raw.toLowerCase());
-    if (route) return buildFallbackSessionKey(route);
+    if (route) {
+      return {
+        route,
+        inputKind: 'direct',
+        source: 'hex',
+      };
+    }
   }
 
   return null;
@@ -124,20 +169,28 @@ export function isLegacyNoiseRoute(route: BncrRoute): boolean {
   return false;
 }
 
-export function parseStrictBncrSessionKey(input: string): { sessionKey: string; scopeHex: string; route: BncrRoute } | null {
+export function parseStrictBncrSessionKey(input: string): {
+  inputSessionKey: string;
+  inputAgentId: string;
+  inputKind: BncrSessionKind;
+  scopeHex: string;
+  route: BncrRoute;
+} | null {
   const raw = asString(input).trim();
   if (!raw) return null;
 
-  const m = raw.match(/^agent:main:bncr:(direct|group):(.+)$/);
-  if (!m?.[1] || !m?.[2]) return null;
+  const m = raw.match(/^agent:([^:]+):bncr:(direct|group):(.+)$/);
+  if (!m?.[1] || !m?.[2] || !m?.[3]) return null;
 
-  const payload = asString(m[2]).trim();
+  const inputAgentId = asString(m[1]).trim();
+  const inputKind = m[2] as BncrSessionKind;
+  const payload = asString(m[3]).trim();
   let route: BncrRoute | null = null;
   let scopeHex = '';
 
   if (isLowerHex(payload)) {
-    scopeHex = payload;
-    route = parseRouteFromHexScope(payload);
+    scopeHex = payload.toLowerCase();
+    route = parseRouteFromHexScope(scopeHex);
   } else {
     route = parseRouteFromScope(payload);
     if (route) scopeHex = routeScopeToHex(route);
@@ -146,7 +199,9 @@ export function parseStrictBncrSessionKey(input: string): { sessionKey: string; 
   if (!route || !scopeHex) return null;
 
   return {
-    sessionKey: `${BNCR_SESSION_KEY_PREFIX}${scopeHex}`,
+    inputSessionKey: raw,
+    inputAgentId,
+    inputKind,
     scopeHex,
     route,
   };
@@ -155,11 +210,17 @@ export function parseStrictBncrSessionKey(input: string): { sessionKey: string; 
 export function normalizeTaskKey(input: unknown): string | null {
   const raw = asString(input).trim().toLowerCase();
   if (!raw) return null;
-  const normalized = raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+  const normalized = raw
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
   return normalized || null;
 }
 
-export function normalizeStoredSessionKey(input: string): { sessionKey: string; route: BncrRoute } | null {
+export function normalizeStoredSessionKey(
+  input: string,
+  canonicalAgentId?: string | null,
+): { sessionKey: string; route: BncrRoute } | null {
   const raw = asString(input).trim();
   if (!raw) return null;
 
@@ -172,42 +233,91 @@ export function normalizeStoredSessionKey(input: string): { sessionKey: string; 
     taskKey = normalizeTaskKey(taskTagged[2]);
   }
 
+  let route: BncrRoute | null = null;
+  let passthroughAgentId: string | null = null;
+
   const strict = parseStrictBncrSessionKey(base);
   if (strict) {
-    if (isLegacyNoiseRoute(strict.route)) return null;
-    return {
-      sessionKey: taskKey ? `${strict.sessionKey}:task:${taskKey}` : strict.sessionKey,
-      route: strict.route,
-    };
+    route = strict.route;
+    passthroughAgentId = strict.inputAgentId;
   }
 
-  const migrated = parseLegacySessionKeyToStrict(base);
-  if (!migrated) return null;
+  if (!route) {
+    const legacy = parseLegacySessionKey(base);
+    if (legacy) {
+      route = legacy.route;
+      passthroughAgentId = legacy.inputAgentId || null;
+    }
+  }
 
-  const parsed = parseStrictBncrSessionKey(migrated);
-  if (!parsed) return null;
-  if (isLegacyNoiseRoute(parsed.route)) return null;
+  if (!route) return null;
+  if (isLegacyNoiseRoute(route)) return null;
 
+  const finalAgentId = asString(canonicalAgentId).trim() || passthroughAgentId;
+  if (!finalAgentId) return null;
+
+  const finalSessionKey = buildCanonicalBncrSessionKey(route, finalAgentId);
   return {
-    sessionKey: taskKey ? `${parsed.sessionKey}:task:${taskKey}` : parsed.sessionKey,
-    route: parsed.route,
+    sessionKey: taskKey ? `${finalSessionKey}:task:${taskKey}` : finalSessionKey,
+    route,
   };
 }
 
-export function normalizeInboundSessionKey(scope: string, route: BncrRoute): string | null {
+export function normalizeInboundSessionKey(
+  scope: string,
+  route: BncrRoute,
+  canonicalAgentId: string,
+): string | null {
   const raw = asString(scope).trim();
-  if (!raw) return buildFallbackSessionKey(route);
+  let finalRoute: BncrRoute | null = null;
 
-  const parsed = parseStrictBncrSessionKey(raw);
-  if (!parsed) return null;
-  return parsed.sessionKey;
+  if (!raw) {
+    finalRoute = route;
+  }
+
+  if (!finalRoute) {
+    const strict = parseStrictBncrSessionKey(raw);
+    if (strict?.route) {
+      finalRoute = strict.route;
+    }
+  }
+
+  if (!finalRoute) {
+    const legacy = parseLegacySessionKey(raw);
+    if (legacy?.route) {
+      finalRoute = legacy.route;
+    }
+  }
+
+  if (!finalRoute) {
+    const displayRoute = parseRouteFromDisplayScope(raw);
+    if (displayRoute) {
+      finalRoute = displayRoute;
+    }
+  }
+
+  if (!finalRoute) {
+    const scopedRoute = parseRouteFromScope(raw);
+    if (scopedRoute) {
+      finalRoute = scopedRoute;
+    }
+  }
+
+  if (!finalRoute && route) {
+    finalRoute = route;
+  }
+
+  if (!finalRoute) return null;
+  return buildCanonicalBncrSessionKey(finalRoute, canonicalAgentId);
 }
 
 export function extractInlineTaskKey(text: string): { taskKey: string | null; text: string } {
   const raw = asString(text);
   if (!raw) return { taskKey: null, text: '' };
 
-  const tagged = raw.match(/^\s*(?:#task|\/task)\s*[:=]\s*([a-zA-Z0-9_-]{1,32})\s*\n?\s*([\s\S]*)$/i);
+  const tagged = raw.match(
+    /^\s*(?:#task|\/task)\s*[:=]\s*([a-zA-Z0-9_-]{1,32})\s*\n?\s*([\s\S]*)$/i,
+  );
   if (tagged) {
     return {
       taskKey: normalizeTaskKey(tagged[1]),
@@ -234,8 +344,8 @@ export function withTaskSessionKey(sessionKey: string, taskKey?: string | null):
   return `${base}:task:${tk}`;
 }
 
-export function buildFallbackSessionKey(route: BncrRoute): string {
-  return `${BNCR_SESSION_KEY_PREFIX}${routeScopeToHex(route)}`;
+export function buildFallbackSessionKey(route: BncrRoute, canonicalAgentId: string): string {
+  return buildCanonicalBncrSessionKey(route, canonicalAgentId);
 }
 
 export function routeKey(accountId: string, route: BncrRoute): string {

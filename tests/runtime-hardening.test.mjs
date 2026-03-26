@@ -1,5 +1,5 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import test from 'node:test';
 
 function createApi() {
   const logs = [];
@@ -16,7 +16,13 @@ function createApi() {
       channel: {
         media: {
           async saveMediaBuffer(buffer, mimeType, direction, maxBytes, fileName) {
-            return { path: `/tmp/${fileName || 'file.bin'}`, size: buffer.length, mimeType, direction, maxBytes };
+            return {
+              path: `/tmp/${fileName || 'file.bin'}`,
+              size: buffer.length,
+              mimeType,
+              direction,
+              maxBytes,
+            };
           },
         },
         routing: {
@@ -27,9 +33,15 @@ function createApi() {
       },
     },
     logger: {
-      info(...args) { logs.push(['info', ...args]); },
-      warn(...args) { logs.push(['warn', ...args]); },
-      error(...args) { logs.push(['error', ...args]); },
+      info(...args) {
+        logs.push(['info', ...args]);
+      },
+      warn(...args) {
+        logs.push(['warn', ...args]);
+      },
+      error(...args) {
+        logs.push(['error', ...args]);
+      },
     },
     logs,
     services: [],
@@ -121,20 +133,39 @@ test('bncr diagnostics register info updates after api rebind', async () => {
   assert.equal(typeof payload.diagnostics.register.traceRecent[0].apiInstanceId, 'string');
   assert.equal(typeof payload.diagnostics.register.traceRecent[0].registryFingerprint, 'string');
   assert.ok(payload.diagnostics.register.traceSummary);
-  assert.equal(payload.diagnostics.register.traceSummary.traceWindowSize, payload.diagnostics.register.traceRecent.length);
+  assert.equal(
+    payload.diagnostics.register.traceSummary.traceWindowSize,
+    payload.diagnostics.register.traceRecent.length,
+  );
   assert.equal(typeof payload.diagnostics.register.traceSummary.startupWindowMs, 'number');
-  assert.equal(typeof payload.diagnostics.register.traceSummary.unexpectedRegisterAfterWarmup, 'boolean');
+  assert.equal(
+    typeof payload.diagnostics.register.traceSummary.unexpectedRegisterAfterWarmup,
+    'boolean',
+  );
   assert.ok(payload.diagnostics.register.traceSummary.sourceBuckets);
   assert.equal(typeof payload.diagnostics.register.traceSummary.dominantBucket, 'string');
-  assert.equal(typeof payload.diagnostics.register.traceSummary.likelyRuntimeRegistryDrift, 'boolean');
+  assert.equal(
+    typeof payload.diagnostics.register.traceSummary.likelyRuntimeRegistryDrift,
+    'boolean',
+  );
   assert.equal(typeof payload.diagnostics.register.traceSummary.likelyStartupFanoutOnly, 'boolean');
   assert.equal(payload.diagnostics.register.traceSummary.likelyRuntimeRegistryDrift, true);
   assert.ok(payload.diagnostics.register.lastDriftSnapshot);
   assert.equal(typeof payload.diagnostics.register.lastDriftSnapshot.dominantBucket, 'string');
   assert.ok(Array.isArray(payload.diagnostics.register.lastDriftSnapshot.traceRecent));
-  assert.notEqual(payload.diagnostics.register.traceRecent[0].apiInstanceId, payload.diagnostics.register.traceRecent[payload.diagnostics.register.traceRecent.length - 1].apiInstanceId);
-  assert.notEqual(payload.diagnostics.register.traceRecent[0].registryFingerprint, payload.diagnostics.register.traceRecent[payload.diagnostics.register.traceRecent.length - 1].registryFingerprint);
-  assert.ok(api2.logs.some((entry) => entry.some((part) => String(part).includes('[bncr-register-trace]'))));
+  assert.notEqual(
+    payload.diagnostics.register.traceRecent[0].apiInstanceId,
+    payload.diagnostics.register.traceRecent[payload.diagnostics.register.traceRecent.length - 1]
+      .apiInstanceId,
+  );
+  assert.notEqual(
+    payload.diagnostics.register.traceRecent[0].registryFingerprint,
+    payload.diagnostics.register.traceRecent[payload.diagnostics.register.traceRecent.length - 1]
+      .registryFingerprint,
+  );
+  assert.ok(
+    api2.logs.some((entry) => entry.some((part) => String(part).includes('[bncr-register-trace]'))),
+  );
 });
 
 test('stale lease observation increments counters without hard failure', async () => {
@@ -166,7 +197,12 @@ test('stale lease observation increments counters without hard failure', async (
 
   const act = createRespondCapture();
   await activity({
-    params: { accountId: 'Primary', clientId: 'client-a', leaseId: lease1, connectionEpoch: epoch1 },
+    params: {
+      accountId: 'Primary',
+      clientId: 'client-a',
+      leaseId: lease1,
+      connectionEpoch: epoch1,
+    },
     respond: act.respond,
     client: { connId: 'conn-a' },
     context: { broadcastToConnIds() {} },

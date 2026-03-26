@@ -17,7 +17,13 @@ export function normalizeAccountId(accountId?: string | null): string {
 
 export function resolveDefaultDisplayName(rawName: unknown, accountId: string): string {
   const raw = asString(rawName || '').trim();
-  if (!raw || raw === accountId || /^bncr$/i.test(raw) || /^status$/i.test(raw) || /^runtime$/i.test(raw)) {
+  if (
+    !raw ||
+    raw === accountId ||
+    /^bncr$/i.test(raw) ||
+    /^status$/i.test(raw) ||
+    /^runtime$/i.test(raw)
+  ) {
     return 'Monitor';
   }
   return raw;

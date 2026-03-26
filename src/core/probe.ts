@@ -24,7 +24,8 @@ export function probeBncrAccount(params: {
 
   let level: 'ok' | 'warn' | 'error' = 'ok';
   if (issues.length > 0) level = 'warn';
-  if (!params.connected && (params.deadLetter > 0 || params.invalidOutboxSessionKeys > 0)) level = 'error';
+  if (!params.connected && (params.deadLetter > 0 || params.invalidOutboxSessionKeys > 0))
+    level = 'error';
 
   return {
     ok: level === 'ok',

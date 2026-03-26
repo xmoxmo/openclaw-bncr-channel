@@ -2,9 +2,7 @@ import { normalizeAccountId } from '../../core/accounts.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import { buildDisplayScopeCandidates } from '../../core/targets.ts';
 
-export type BncrGateResult =
-  | { allowed: true }
-  | { allowed: false; reason: string };
+export type BncrGateResult = { allowed: true } | { allowed: false; reason: string };
 
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;

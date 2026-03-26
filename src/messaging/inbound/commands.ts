@@ -1,4 +1,8 @@
-import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.ts';
+import {
+  formatDisplayScope,
+  normalizeInboundSessionKey,
+  withTaskSessionKey,
+} from '../../core/targets.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
@@ -14,13 +18,13 @@ export function parseBncrNativeCommand(text: string): NativeCommand | null {
   const match = raw.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/i);
   if (!match) return null;
 
-  const command = String(match[1] || '').trim().toLowerCase();
+  const command = String(match[1] || '')
+    .trim()
+    .toLowerCase();
   if (!command) return null;
 
   const rest = String(match[2] || '').trim();
-  const body = command === 'help'
-    ? ['/commands', rest].filter(Boolean).join(' ')
-    : raw;
+  const body = command === 'help' ? ['/commands', rest].filter(Boolean).join(' ') : raw;
   return { command, raw, body };
 }
 
@@ -29,6 +33,7 @@ export async function handleBncrNativeCommand(params: {
   channelId: string;
   cfg: any;
   parsed: ParsedInbound;
+  canonicalAgentId: string;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
   enqueueFromReply: (args: {
     accountId: string;
@@ -39,7 +44,16 @@ export async function handleBncrNativeCommand(params: {
   }) => Promise<void>;
   logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<{ handled: false } | { handled: true; command: string; sessionKey: string }> {
-  const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply, logger } = params;
+  const {
+    api,
+    channelId,
+    cfg,
+    parsed,
+    canonicalAgentId,
+    rememberSessionRoute,
+    enqueueFromReply,
+    logger,
+  } = params;
   const { accountId, route, peer, sessionKeyfromroute, clientId, extracted, msgId } = parsed;
   const command = parseBncrNativeCommand(extracted.text);
   if (!command) return { handled: false };
@@ -51,11 +65,14 @@ export async function handleBncrNativeCommand(params: {
     peer,
   });
 
-  const baseSessionKey = normalizeInboundSessionKey(sessionKeyfromroute, route) || resolvedRoute.sessionKey;
+  const baseSessionKey =
+    normalizeInboundSessionKey(sessionKeyfromroute, route, canonicalAgentId) ||
+    resolvedRoute.sessionKey;
   const taskSessionKey = withTaskSessionKey(baseSessionKey, extracted.taskKey);
   const sessionKey = taskSessionKey || baseSessionKey;
   rememberSessionRoute(baseSessionKey, accountId, route);
-  if (taskSessionKey && taskSessionKey !== baseSessionKey) rememberSessionRoute(taskSessionKey, accountId, route);
+  if (taskSessionKey && taskSessionKey !== baseSessionKey)
+    rememberSessionRoute(taskSessionKey, accountId, route);
 
   const displayTo = formatDisplayScope(route);
   const body = command.body;
@@ -113,10 +130,17 @@ export async function handleBncrNativeCommand(params: {
       disableBlockStreaming: true,
     },
     dispatcherOptions: {
-      deliver: async (payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean }, info?: { kind?: 'tool' | 'block' | 'final' }) => {
+      deliver: async (
+        payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
+        info?: { kind?: 'tool' | 'block' | 'final' },
+      ) => {
         const kind = info?.kind;
         if (kind && kind !== 'final') return;
-        const hasPayload = Boolean(payload?.text || payload?.mediaUrl || (Array.isArray(payload?.mediaUrls) && payload.mediaUrls.length > 0));
+        const hasPayload = Boolean(
+          payload?.text ||
+            payload?.mediaUrl ||
+            (Array.isArray(payload?.mediaUrls) && payload.mediaUrls.length > 0),
+        );
         if (!hasPayload) return;
         responded = true;
         await enqueueFromReply({

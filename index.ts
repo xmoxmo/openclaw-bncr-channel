@@ -1,7 +1,7 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BncrConfigSchema } from './src/core/config-schema.ts';
 
@@ -121,9 +121,7 @@ const collectOpenClawCandidates = () => {
   }
 
   const packageRoots = unique(
-    directCandidates
-      .map((candidate) => findOpenClawPackageRoot(candidate))
-      .filter(Boolean),
+    directCandidates.map((candidate) => findOpenClawPackageRoot(candidate)).filter(Boolean),
   );
 
   return packageRoots.filter((candidate) => {
@@ -285,7 +283,9 @@ const plugin = {
       api.logger.info?.(...args);
     };
 
-    debugLog(`bncr plugin register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created}`);
+    debugLog(
+      `bncr plugin register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created}`,
+    );
     if (!created) debugLog('bncr bridge api rebound');
 
     const resolveDebug = async () => {
@@ -320,16 +320,61 @@ const plugin = {
       debugLog('bncr register channel skip (already registered on this api)');
     }
 
-    ensureGatewayMethodRegistered(api, 'bncr.connect', (opts) => bridge.handleConnect(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.inbound', (opts) => bridge.handleInbound(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.activity', (opts) => bridge.handleActivity(opts), debugLog);
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.connect',
+      (opts) => bridge.handleConnect(opts),
+      debugLog,
+    );
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.inbound',
+      (opts) => bridge.handleInbound(opts),
+      debugLog,
+    );
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.activity',
+      (opts) => bridge.handleActivity(opts),
+      debugLog,
+    );
     ensureGatewayMethodRegistered(api, 'bncr.ack', (opts) => bridge.handleAck(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.diagnostics', (opts) => bridge.handleDiagnostics(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.init', (opts) => bridge.handleFileInit(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.chunk', (opts) => bridge.handleFileChunk(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.complete', (opts) => bridge.handleFileComplete(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.abort', (opts) => bridge.handleFileAbort(opts), debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.ack', (opts) => bridge.handleFileAck(opts), debugLog);
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.diagnostics',
+      (opts) => bridge.handleDiagnostics(opts),
+      debugLog,
+    );
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.file.init',
+      (opts) => bridge.handleFileInit(opts),
+      debugLog,
+    );
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.file.chunk',
+      (opts) => bridge.handleFileChunk(opts),
+      debugLog,
+    );
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.file.complete',
+      (opts) => bridge.handleFileComplete(opts),
+      debugLog,
+    );
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.file.abort',
+      (opts) => bridge.handleFileAbort(opts),
+      debugLog,
+    );
+    ensureGatewayMethodRegistered(
+      api,
+      'bncr.file.ack',
+      (opts) => bridge.handleFileAck(opts),
+      debugLog,
+    );
     debugLog('bncr plugin register done');
   },
 };

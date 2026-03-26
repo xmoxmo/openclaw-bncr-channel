@@ -7,7 +7,9 @@ function asString(v: unknown, fallback = ''): string {
 export function getBncrElevatedConfig(rootCfg: any) {
   const elevated = rootCfg?.tools?.elevated || {};
   const allowFrom = elevated?.allowFrom || {};
-  const bncrRules = Array.isArray(allowFrom?.bncr) ? allowFrom.bncr.map((x: unknown) => asString(x).trim()).filter(Boolean) : [];
+  const bncrRules = Array.isArray(allowFrom?.bncr)
+    ? allowFrom.bncr.map((x: unknown) => asString(x).trim()).filter(Boolean)
+    : [];
 
   return {
     enabled: elevated?.enabled === true,

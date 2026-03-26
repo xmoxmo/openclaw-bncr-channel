@@ -1,5 +1,9 @@
 import fs from 'node:fs';
-import { formatDisplayScope, normalizeInboundSessionKey, withTaskSessionKey } from '../../core/targets.ts';
+import {
+  formatDisplayScope,
+  normalizeInboundSessionKey,
+  withTaskSessionKey,
+} from '../../core/targets.ts';
 import { handleBncrNativeCommand } from './commands.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
@@ -9,6 +13,7 @@ export async function dispatchBncrInbound(params: {
   channelId: string;
   cfg: any;
   parsed: ParsedInbound;
+  canonicalAgentId: string;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
   enqueueFromReply: (args: {
     accountId: string;
@@ -21,14 +26,43 @@ export async function dispatchBncrInbound(params: {
   scheduleSave: () => void;
   logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
 }) {
-  const { api, channelId, cfg, parsed, rememberSessionRoute, enqueueFromReply, setInboundActivity, scheduleSave, logger } = params;
-  const { accountId, route, peer, sessionKeyfromroute, clientId, text, msgType, mediaBase64, mediaPathFromTransfer, mimeType, fileName, msgId, extracted, platform, groupId, userId } = parsed;
+  const {
+    api,
+    channelId,
+    cfg,
+    parsed,
+    canonicalAgentId,
+    rememberSessionRoute,
+    enqueueFromReply,
+    setInboundActivity,
+    scheduleSave,
+    logger,
+  } = params;
+  const {
+    accountId,
+    route,
+    peer,
+    sessionKeyfromroute,
+    clientId,
+    text,
+    msgType,
+    mediaBase64,
+    mediaPathFromTransfer,
+    mimeType,
+    fileName,
+    msgId,
+    extracted,
+    platform,
+    groupId,
+    userId,
+  } = parsed;
 
   const nativeCommand = await handleBncrNativeCommand({
     api,
     channelId,
     cfg,
     parsed,
+    canonicalAgentId,
     rememberSessionRoute,
     enqueueFromReply,
     logger,
@@ -52,7 +86,9 @@ export async function dispatchBncrInbound(params: {
     peer,
   });
 
-  const baseSessionKey = normalizeInboundSessionKey(sessionKeyfromroute, route) || resolvedRoute.sessionKey;
+  const baseSessionKey =
+    normalizeInboundSessionKey(sessionKeyfromroute, route, canonicalAgentId) ||
+    resolvedRoute.sessionKey;
   const agentText = extracted.text;
   const taskSessionKey = withTaskSessionKey(baseSessionKey, extracted.taskKey);
   const sessionKey = taskSessionKey || baseSessionKey;

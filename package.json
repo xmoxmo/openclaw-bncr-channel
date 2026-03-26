@@ -1,6 +1,6 @@
 {
   "name": "@xmoxmo/bncr",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -26,12 +26,17 @@
   "scripts": {
     "selfcheck": "node ./scripts/selfcheck.mjs",
     "test": "node --import ./tests/register-ts-hooks.mjs --test ./tests/*.test.mjs",
-    "check-register-drift": "node ./scripts/check-register-drift.mjs"
+    "check-register-drift": "node ./scripts/check-register-drift.mjs",
+    "format:check": "biome format --check .",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "check": "biome check ."
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
     "openclaw": ">=2026.3.22"
   },
   "openclaw": {
