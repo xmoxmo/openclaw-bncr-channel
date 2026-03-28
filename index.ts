@@ -59,6 +59,18 @@ const readOpenClawPackageName = (pkgPath: string) => {
   }
 };
 
+const readPluginVersion = () => {
+  try {
+    const raw = fs.readFileSync(path.join(pluginDir, 'package.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.version === 'string' ? parsed.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+};
+
+const pluginVersion = readPluginVersion();
+
 const findOpenClawPackageRoot = (startPath: string) => {
   let current = startPath;
   try {
@@ -273,7 +285,7 @@ const plugin = {
     const { bridge, runtime, created } = getBridgeSingleton(api);
     bridge.noteRegister?.({
       source: '~/.openclaw/workspace/plugins/bncr/index.ts',
-      pluginVersion: '0.1.1',
+      pluginVersion,
       apiRebound: !created,
       apiInstanceId: meta.apiInstanceId,
       registryFingerprint: meta.registryFingerprint,

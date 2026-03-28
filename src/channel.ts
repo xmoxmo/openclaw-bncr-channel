@@ -70,6 +70,7 @@ const BNCR_PUSH_EVENT = 'bncr.push';
 const CONNECT_TTL_MS = 120_000;
 const MAX_RETRY = 10;
 const PUSH_DRAIN_INTERVAL_MS = 500;
+const PUSH_ACK_TIMEOUT_MS = 30_000;
 const FILE_FORCE_CHUNK = true; // 统一走 WS 分块，保留 base64 仅作兜底
 const FILE_INLINE_THRESHOLD = 5 * 1024 * 1024; // fallback 阈值（仅 FILE_FORCE_CHUNK=false 时生效）
 const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
@@ -1179,7 +1180,6 @@ class BncrBridgeRuntime {
           })}`,
         );
       }
-      this.outbox.delete(entry.messageId);
       this.lastOutboundByAccount.set(entry.accountId, now());
       this.markActivity(entry.accountId);
       this.scheduleSave();
@@ -1249,92 +1249,6 @@ class BncrBridgeRuntime {
           })}`,
         );
       }
-      if (!online) {
-        const ctx = this.gatewayContext;
-        const directConnIds = Array.from(this.connections.values())
-          .filter((c) => normalizeAccountId(c.accountId) === acc && c.connId)
-          .map((c) => c.connId as string);
-
-        if (BNCR_DEBUG_VERBOSE) {
-          this.api.logger.info?.(
-            `[bncr-outbox-direct-push] ${JSON.stringify({
-              bridge: this.bridgeId,
-              accountId: acc,
-              outboxSize: this.outbox.size,
-              hasGatewayContext: Boolean(ctx),
-              connCount: directConnIds.length,
-            })}`,
-          );
-        }
-
-        if (!ctx) {
-          if (BNCR_DEBUG_VERBOSE) {
-            this.api.logger.info?.(
-              `[bncr-outbox-direct-push-skip] ${JSON.stringify({
-                bridge: this.bridgeId,
-                accountId: acc,
-                reason: 'no-gateway-context',
-              })}`,
-            );
-          }
-          continue;
-        }
-
-        if (!directConnIds.length) {
-          if (BNCR_DEBUG_VERBOSE) {
-            this.api.logger.info?.(
-              `[bncr-outbox-direct-push-skip] ${JSON.stringify({
-                accountId: acc,
-                reason: 'no-connection',
-              })}`,
-            );
-          }
-          continue;
-        }
-
-        const directPayloads = this.collectDue(acc, 50);
-        if (!directPayloads.length) continue;
-
-        try {
-          ctx.broadcastToConnIds(
-            BNCR_PUSH_EVENT,
-            {
-              forcePush: true,
-              items: directPayloads,
-            },
-            new Set(directConnIds),
-          );
-
-          const pushedIds = directPayloads
-            .map((item: any) => asString(item?.messageId || item?.idempotencyKey || '').trim())
-            .filter(Boolean);
-          for (const id of pushedIds) this.outbox.delete(id);
-          if (pushedIds.length) this.scheduleSave();
-
-          if (BNCR_DEBUG_VERBOSE) {
-            this.api.logger.info?.(
-              `[bncr-outbox-direct-push-ok] ${JSON.stringify({
-                bridge: this.bridgeId,
-                accountId: acc,
-                count: directPayloads.length,
-                connCount: directConnIds.length,
-                dropped: pushedIds.length,
-              })}`,
-            );
-          }
-        } catch (error) {
-          if (BNCR_DEBUG_VERBOSE) {
-            this.api.logger.info?.(
-              `[bncr-outbox-direct-push-fail] ${JSON.stringify({
-                accountId: acc,
-                error: asString((error as any)?.message || error || 'direct-push-error'),
-              })}`,
-            );
-          }
-        }
-        continue;
-      }
-
       this.pushDrainRunningAccounts.add(acc);
       try {
         let localNextDelay: number | null = null;
@@ -1346,7 +1260,6 @@ class BncrBridgeRuntime {
             .sort((a, b) => a.createdAt - b.createdAt);
 
           if (!entries.length) break;
-          if (!this.isOnline(acc)) break;
 
           const entry = entries.find((item) => item.nextAttemptAt <= t);
           if (!entry) {
@@ -1355,11 +1268,33 @@ class BncrBridgeRuntime {
             break;
           }
 
+          const onlineNow = this.isOnline(acc);
           const pushed = this.tryPushEntry(entry);
           if (pushed) {
+            if (onlineNow) {
+              await this.waitForOutbound(acc, PUSH_ACK_TIMEOUT_MS);
+            }
+
+            if (!this.outbox.has(entry.messageId)) {
+              await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
+              continue;
+            }
+
+            entry.retryCount += 1;
+            entry.lastAttemptAt = now();
+            if (entry.retryCount > MAX_RETRY) {
+              this.moveToDeadLetter(entry, entry.lastError || 'push-ack-timeout');
+              continue;
+            }
+            entry.nextAttemptAt = now() + backoffMs(entry.retryCount);
+            entry.lastError = entry.lastError || 'push-ack-timeout';
+            this.outbox.set(entry.messageId, entry);
             this.scheduleSave();
+
+            const wait = Math.max(0, entry.nextAttemptAt - now());
+            localNextDelay = localNextDelay == null ? wait : Math.min(localNextDelay, wait);
             await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
-            continue;
+            break;
           }
 
           const nextAttempt = entry.retryCount + 1;
@@ -2230,7 +2165,7 @@ class BncrBridgeRuntime {
       mediaUrls?: string[];
       asVoice?: boolean;
       audioAsVoice?: boolean;
-      kind?: 'block' | 'final';
+      kind?: 'tool' | 'block' | 'final';
     };
     mediaLocalRoots?: readonly string[];
   }) {
@@ -2413,6 +2348,7 @@ class BncrBridgeRuntime {
     if (ok) {
       this.outbox.delete(messageId);
       this.scheduleSave();
+      this.wakeAccountWaiters(accountId);
       respond(true, { ok: true });
       return;
     }
@@ -3189,7 +3125,6 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
     },
     outbound: {
       deliveryMode: 'gateway' as const,
-      textChunkLimit: 4000,
       sendText: bridge.channelSendText,
       sendMedia: bridge.channelSendMedia,
       replyAction: async (ctx: any) =>

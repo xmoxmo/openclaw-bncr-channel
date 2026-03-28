@@ -5,6 +5,7 @@ import {
   withTaskSessionKey,
 } from '../../core/targets.ts';
 import { handleBncrNativeCommand } from './commands.ts';
+import { buildBncrReplyConfig } from './reply-config.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
@@ -179,19 +180,17 @@ export async function dispatchBncrInbound(params: {
   setInboundActivity(accountId, inboundAt);
   scheduleSave();
 
+  const effectiveReply = buildBncrReplyConfig(cfg);
+
   await api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
-    cfg,
-    replyOptions: {
-      disableBlockStreaming: true,
-    },
+    cfg: effectiveReply.replyCfg,
     dispatcherOptions: {
       deliver: async (
         payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
         info?: { kind?: 'tool' | 'block' | 'final' },
       ) => {
         const kind = info?.kind;
-        if (kind && kind !== 'final') return;
 
         await enqueueFromReply({
           accountId,
@@ -199,13 +198,16 @@ export async function dispatchBncrInbound(params: {
           route,
           payload: {
             ...payload,
-            kind: kind as 'block' | 'final' | undefined,
+            kind: kind as 'tool' | 'block' | 'final' | undefined,
           },
         });
       },
       onError: (err: unknown) => {
         logger?.error?.(`bncr reply failed: ${String(err)}`);
       },
+    },
+    replyOptions: {
+      disableBlockStreaming: !effectiveReply.blockStreaming,
     },
   });
 

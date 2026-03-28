@@ -3,6 +3,7 @@ import {
   normalizeInboundSessionKey,
   withTaskSessionKey,
 } from '../../core/targets.ts';
+import { buildBncrReplyConfig } from './reply-config.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
@@ -122,20 +123,18 @@ export async function handleBncrNativeCommand(params: {
     },
   });
 
+  const effectiveReply = buildBncrReplyConfig(cfg);
+
   let responded = false;
   await api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
-    cfg,
-    replyOptions: {
-      disableBlockStreaming: true,
-    },
+    cfg: effectiveReply.replyCfg,
     dispatcherOptions: {
       deliver: async (
         payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
         info?: { kind?: 'tool' | 'block' | 'final' },
       ) => {
         const kind = info?.kind;
-        if (kind && kind !== 'final') return;
         const hasPayload = Boolean(
           payload?.text ||
             payload?.mediaUrl ||
@@ -149,10 +148,13 @@ export async function handleBncrNativeCommand(params: {
           route,
           payload: {
             ...payload,
-            kind: kind as 'block' | 'final' | undefined,
+            kind: kind as 'tool' | 'block' | 'final' | undefined,
           },
         });
       },
+    },
+    replyOptions: {
+      disableBlockStreaming: !effectiveReply.blockStreaming,
     },
   });
 
