@@ -502,7 +502,9 @@ class BncrBridgeRuntime {
     const summary = this.buildRegisterTraceSummary();
     if (summary.postWarmupRegisterCount > 0) this.captureDriftSnapshot(summary);
 
-    this.api.logger.info?.(`[bncr-register-trace] ${JSON.stringify(trace)}`);
+    if (BNCR_DEBUG_VERBOSE) {
+      this.api.logger.info?.(`[bncr-register-trace] ${JSON.stringify(trace)}`);
+    }
   }
 
   private createLeaseId() {

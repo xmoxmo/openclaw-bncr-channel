@@ -163,8 +163,9 @@ test('bncr diagnostics register info updates after api rebind', async () => {
     payload.diagnostics.register.traceRecent[payload.diagnostics.register.traceRecent.length - 1]
       .registryFingerprint,
   );
-  assert.ok(
+  assert.equal(
     api2.logs.some((entry) => entry.some((part) => String(part).includes('[bncr-register-trace]'))),
+    false,
   );
 });
 
