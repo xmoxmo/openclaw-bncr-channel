@@ -31,6 +31,12 @@ export const BncrConfigSchema = {
           },
         },
       },
+      allowTool: {
+        type: 'boolean',
+        default: false,
+        description:
+          'Allow tool messages to be forwarded when streaming is enabled. Defaults to false; only explicit true enables forwarding. When enabled, bncr also requests upstream tool summaries/results.',
+      },
       requireMention: {
         type: 'boolean',
         default: false,

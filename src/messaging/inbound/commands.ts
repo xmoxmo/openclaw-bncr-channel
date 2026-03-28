@@ -135,6 +135,12 @@ export async function handleBncrNativeCommand(params: {
         info?: { kind?: 'tool' | 'block' | 'final' },
       ) => {
         const kind = info?.kind;
+        const shouldForwardTool = effectiveReply.blockStreaming && effectiveReply.allowTool;
+
+        if (kind === 'tool' && !shouldForwardTool) {
+          return;
+        }
+
         const hasPayload = Boolean(
           payload?.text ||
             payload?.mediaUrl ||
@@ -155,6 +161,7 @@ export async function handleBncrNativeCommand(params: {
     },
     replyOptions: {
       disableBlockStreaming: !effectiveReply.blockStreaming,
+      shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
     },
   });
 

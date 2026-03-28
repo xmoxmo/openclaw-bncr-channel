@@ -1,5 +1,6 @@
 type BncrReplyConfigResult = {
   blockStreaming: boolean;
+  allowTool: boolean;
   replyCfg: any;
 };
 
@@ -29,8 +30,13 @@ export function resolveBncrBlockStreaming(cfg: any): boolean {
   return true;
 }
 
+export function resolveBncrAllowTool(cfg: any): boolean {
+  return cfg?.channels?.bncr?.allowTool === true;
+}
+
 export function buildBncrReplyConfig(cfg: any): BncrReplyConfigResult {
   const blockStreaming = resolveBncrBlockStreaming(cfg);
+  const allowTool = resolveBncrAllowTool(cfg);
 
   const replyCfg = {
     ...cfg,
@@ -46,5 +52,12 @@ export function buildBncrReplyConfig(cfg: any): BncrReplyConfigResult {
     replyCfg.agents.defaults.blockStreamingBreak = 'message_end';
   }
 
-  return { blockStreaming, replyCfg };
+  if (replyCfg.agents.defaults.blockStreamingChunk == null) {
+    replyCfg.agents.defaults.blockStreamingChunk = {
+      minChars: 500,
+      maxChars: 4096,
+    };
+  }
+
+  return { blockStreaming, allowTool, replyCfg };
 }

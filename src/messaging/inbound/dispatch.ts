@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import {
   formatDisplayScope,
   normalizeInboundSessionKey,
@@ -191,6 +190,11 @@ export async function dispatchBncrInbound(params: {
         info?: { kind?: 'tool' | 'block' | 'final' },
       ) => {
         const kind = info?.kind;
+        const shouldForwardTool = effectiveReply.blockStreaming && effectiveReply.allowTool;
+
+        if (kind === 'tool' && !shouldForwardTool) {
+          return;
+        }
 
         await enqueueFromReply({
           accountId,
@@ -208,6 +212,7 @@ export async function dispatchBncrInbound(params: {
     },
     replyOptions: {
       disableBlockStreaming: !effectiveReply.blockStreaming,
+      shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
     },
   });
 
