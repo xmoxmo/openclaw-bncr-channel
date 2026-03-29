@@ -4,8 +4,10 @@ import test from 'node:test';
 import {
   buildFallbackSessionKey,
   formatDisplayScope,
+  formatTargetDisplay,
   normalizeInboundSessionKey,
   normalizeStoredSessionKey,
+  parseExplicitTarget,
   parseRouteFromDisplayScope,
   parseStrictBncrSessionKey,
   withTaskSessionKey,
@@ -96,4 +98,45 @@ test('withTaskSessionKey appends task suffix once', () => {
   const base = buildFallbackSessionKey(route, canonicalAgentId);
   assert.equal(withTaskSessionKey(base, 'review-1'), `${base}:task:review-1`);
   assert.equal(withTaskSessionKey(`${base}:task:review-1`, 'review-2'), `${base}:task:review-1`);
+});
+
+test('parseExplicitTarget parses direct display target and keeps chatType locked direct', () => {
+  const parsed = parseExplicitTarget('Bncr:tgBot:6278285192', { canonicalAgentId });
+  assert.ok(parsed);
+  assert.equal(parsed.source, 'display-scope');
+  assert.equal(parsed.kind, 'direct');
+  assert.equal(parsed.chatType, 'direct');
+  assert.equal(parsed.platform, 'tgBot');
+  assert.equal(parsed.userId, '6278285192');
+  assert.equal(parsed.groupId, undefined);
+  assert.equal(parsed.displayScope, 'Bncr:tgBot:6278285192');
+  assert.equal(parsed.canonicalSessionKey, buildFallbackSessionKey(route, canonicalAgentId));
+});
+
+test('parseExplicitTarget parses group display target but keeps chatType locked direct', () => {
+  const parsed = parseExplicitTarget('Bncr:tgBot:-1003776014601:6278285192', {
+    canonicalAgentId,
+  });
+  assert.ok(parsed);
+  assert.equal(parsed.source, 'display-scope');
+  assert.equal(parsed.kind, 'group');
+  assert.equal(parsed.chatType, 'direct');
+  assert.equal(parsed.platform, 'tgBot');
+  assert.equal(parsed.groupId, '-1003776014601');
+  assert.equal(parsed.userId, '6278285192');
+  assert.equal(parsed.displayScope, 'Bncr:tgBot:-1003776014601:6278285192');
+  assert.equal(
+    parsed.canonicalSessionKey,
+    buildFallbackSessionKey(
+      { platform: 'tgBot', groupId: '-1003776014601', userId: '6278285192' },
+      canonicalAgentId,
+    ),
+  );
+});
+
+test('formatTargetDisplay always returns canonical Bncr display scope', () => {
+  assert.equal(formatTargetDisplay(route), 'Bncr:tgBot:6278285192');
+  const parsed = parseExplicitTarget('Bncr:tgBot:-1003776014601:6278285192');
+  assert.ok(parsed);
+  assert.equal(formatTargetDisplay(parsed), 'Bncr:tgBot:-1003776014601:6278285192');
 });

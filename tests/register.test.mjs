@@ -70,3 +70,30 @@ test('bncr register reuses bridge but registers on a new api instance', async ()
   assert.equal(api2.channels.length, 1);
   assert.equal(api2.methods.length, 10);
 });
+
+test('bncr messaging exposes parse/display/session target helpers', async () => {
+  const mod = await import('../index.ts');
+  const api = createApi();
+  mod.default.register(api);
+
+  const channel = api.channels[0]?.plugin;
+  assert.ok(channel);
+  assert.equal(typeof channel.messaging?.parseExplicitTarget, 'function');
+  assert.equal(typeof channel.messaging?.formatTargetDisplay, 'function');
+  assert.equal(typeof channel.messaging?.resolveSessionTarget, 'function');
+
+  const direct = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:6278285192' });
+  assert.ok(direct);
+  assert.equal(direct.displayScope, 'Bncr:tgBot:6278285192');
+
+  const group = channel.messaging.parseExplicitTarget({
+    raw: 'Bncr:tgBot:-1003776014601:6278285192',
+  });
+  assert.ok(group);
+  assert.equal(group.displayScope, 'Bncr:tgBot:-1003776014601:6278285192');
+  assert.equal(channel.messaging.formatTargetDisplay({ target: group }), group.displayScope);
+  assert.equal(
+    channel.messaging.resolveSessionTarget({ id: 'Bncr:tgBot:6278285192' }),
+    'Bncr:tgBot:6278285192',
+  );
+});

@@ -1,6 +1,24 @@
 import type { BncrRoute } from './types.ts';
 
 export type BncrSessionKind = 'direct' | 'group';
+export type BncrExplicitTarget = {
+  raw: string;
+  normalized: string;
+  source:
+    | 'display-scope'
+    | 'strict-session-key'
+    | 'legacy-session-key'
+    | 'hex-scope'
+    | 'route-scope';
+  kind: BncrSessionKind;
+  chatType: 'direct';
+  displayScope: string;
+  route: BncrRoute;
+  canonicalSessionKey?: string;
+  platform: string;
+  userId: string;
+  groupId?: string;
+};
 
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
@@ -52,6 +70,85 @@ export function formatDisplayScope(route: BncrRoute): string {
 export function buildDisplayScopeCandidates(route: BncrRoute): string[] {
   const candidates = [formatDisplayScope(route)].filter(Boolean);
   return Array.from(new Set(candidates.map((x) => asString(x).trim()).filter(Boolean)));
+}
+
+export function formatTargetDisplay(
+  input: BncrRoute | BncrExplicitTarget | null | undefined,
+): string {
+  if (!input) return '';
+  const route = parseRouteLike((input as any)?.route) || parseRouteLike(input);
+  if (!route) return '';
+  return formatDisplayScope(route);
+}
+
+export function parseExplicitTarget(
+  input: string,
+  options?: { canonicalAgentId?: string | null },
+): BncrExplicitTarget | null {
+  const raw = asString(input).trim();
+  if (!raw) return null;
+
+  const canonicalAgentId = asString(options?.canonicalAgentId).trim() || undefined;
+  let route: BncrRoute | null = null;
+  let source: BncrExplicitTarget['source'] | null = null;
+
+  const strict = parseStrictBncrSessionKey(raw);
+  if (strict?.route) {
+    route = strict.route;
+    source = 'strict-session-key';
+  }
+
+  if (!route) {
+    const displayRoute = parseRouteFromDisplayScope(raw);
+    if (displayRoute) {
+      route = displayRoute;
+      source = 'display-scope';
+    }
+  }
+
+  if (!route) {
+    const legacy = parseLegacySessionKey(raw);
+    if (legacy?.route) {
+      route = legacy.route;
+      source = legacy.source === 'hex' ? 'hex-scope' : 'legacy-session-key';
+    }
+  }
+
+  if (!route) {
+    const hexRoute = parseRouteFromHexScope(raw);
+    if (hexRoute) {
+      route = hexRoute;
+      source = 'hex-scope';
+    }
+  }
+
+  if (!route) {
+    const scopedRoute = parseRouteFromScope(raw);
+    if (scopedRoute) {
+      route = scopedRoute;
+      source = 'route-scope';
+    }
+  }
+
+  if (!route || !source) return null;
+
+  const kind: BncrSessionKind = route.groupId === '0' ? 'direct' : 'group';
+  const displayScope = formatDisplayScope(route);
+  return {
+    raw,
+    normalized: displayScope,
+    source,
+    kind,
+    chatType: 'direct',
+    displayScope,
+    route,
+    ...(canonicalAgentId
+      ? { canonicalSessionKey: buildCanonicalBncrSessionKey(route, canonicalAgentId) }
+      : {}),
+    platform: route.platform,
+    userId: route.userId,
+    ...(route.groupId === '0' ? {} : { groupId: route.groupId }),
+  };
 }
 
 export function isLowerHex(input: string): boolean {

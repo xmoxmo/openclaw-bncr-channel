@@ -55,7 +55,7 @@ export function buildBncrMediaOutboundFrame(params: {
   mediaMsg: string;
   fileName: string;
   hintedType?: string;
-  kind?: 'block' | 'final';
+  kind?: 'tool' | 'block' | 'final';
   now: number;
 }) {
   return {

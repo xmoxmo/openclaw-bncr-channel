@@ -38,9 +38,11 @@ import {
 import {
   buildCanonicalBncrSessionKey,
   formatDisplayScope,
+  formatTargetDisplay,
   isLowerHex,
   normalizeInboundSessionKey,
   normalizeStoredSessionKey,
+  parseExplicitTarget,
   parseRouteFromDisplayScope,
   parseRouteFromHexScope,
   parseRouteFromScope,
@@ -65,6 +67,11 @@ import {
   resolveBncrOutboundMessageType,
 } from './messaging/outbound/media.ts';
 import { sendBncrMedia, sendBncrText } from './messaging/outbound/send.ts';
+import { resolveBncrOutboundSessionRoute } from './messaging/outbound/session-route.ts';
+import {
+  looksLikeBncrExplicitTarget,
+  resolveBncrOutboundTarget,
+} from './messaging/outbound/target-resolver.ts';
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'bncr.push';
 const CONNECT_TTL_MS = 120_000;
@@ -1556,77 +1563,35 @@ class BncrBridgeRuntime {
       );
     }
 
-    const wantedRouteKey = routeKey(acc, route);
-    let best: { sessionKey: string; route: BncrRoute; updatedAt: number } | null = null;
+    const canonicalAgentId =
+      this.canonicalAgentId ||
+      this.ensureCanonicalAgentId({
+        cfg: this.api.runtime.config?.get?.() || {},
+        accountId: acc,
+        channelId: CHANNEL_ID,
+        peer: { kind: 'direct', id: route.groupId === '0' ? route.userId : route.groupId },
+      });
+    const verified = {
+      sessionKey: buildCanonicalBncrSessionKey(route, canonicalAgentId),
+      route,
+      displayScope: formatDisplayScope(route),
+    };
 
     if (BNCR_DEBUG_VERBOSE) {
       this.api.logger.info?.(
-        `[bncr-target-incoming-route] raw=${raw} accountId=${acc} route=${JSON.stringify(route)}`,
+        `[bncr-target-incoming-canonical] raw=${raw} accountId=${acc} verified=${JSON.stringify(verified)}`,
       );
-      this.api.logger.info?.(
-        `[bncr-target-incoming-sessionRoutes] raw=${raw} accountId=${acc} sessionRoutes=${JSON.stringify(this.sessionRoutes.entries())}`,
-      );
-    }
-
-    for (const [key, info] of this.sessionRoutes.entries()) {
-      if (normalizeAccountId(info.accountId) !== acc) continue;
-      const parsed = parseStrictBncrSessionKey(key);
-      if (!parsed) continue;
-      if (routeKey(acc, parsed.route) !== wantedRouteKey) continue;
-
-      const updatedAt = Number(info.updatedAt || 0);
-      if (!best || updatedAt >= best.updatedAt) {
-        best = {
-          sessionKey: key,
-          route: parsed.route,
-          updatedAt,
-        };
-      }
-    }
-
-    if (!best) {
-      const updatedAt = 0;
-      const canonicalAgentId =
-        this.canonicalAgentId ||
-        this.ensureCanonicalAgentId({
-          cfg: this.api.runtime.config?.get?.() || {},
-          accountId: acc,
-          channelId: CHANNEL_ID,
-          peer: { kind: 'direct', id: route.groupId === '0' ? route.userId : route.groupId },
-        });
-      best = {
-        sessionKey: buildCanonicalBncrSessionKey(route, canonicalAgentId),
-        route,
-        updatedAt,
-      };
-    }
-
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-target-incoming-best] raw=${raw} accountId=${acc} best=${JSON.stringify(best)}`,
-      );
-    }
-
-    if (!best) {
-      this.api.logger.warn?.(
-        `[bncr-target-miss] raw=${raw} accountId=${acc} sessionRoutes=${this.sessionRoutes.size}`,
-      );
-      throw new Error(`bncr target not found in known sessions: ${raw}`);
     }
 
     // 发送链路命中目标时，同步刷新 lastSession，避免状态页显示过期会话。
     this.lastSessionByAccount.set(acc, {
-      sessionKey: best.sessionKey,
-      scope: formatDisplayScope(best.route),
+      sessionKey: verified.sessionKey,
+      scope: verified.displayScope,
       updatedAt: now(),
     });
     this.scheduleSave();
 
-    return {
-      sessionKey: best.sessionKey,
-      route: best.route,
-      displayScope: formatDisplayScope(best.route),
-    };
+    return verified;
   }
 
   private markActivity(accountId: string, at = now()) {
@@ -3070,9 +3035,68 @@ export function createBncrChannelPlugin(bridge: BncrBridgeRuntime) {
         const input = asString(raw).trim();
         return input || undefined;
       },
+      parseExplicitTarget: ({ raw, accountId, cfg }: any) => {
+        const resolvedAccountId = normalizeAccountId(
+          asString(accountId || BNCR_DEFAULT_ACCOUNT_ID),
+        );
+        const canonicalAgentId =
+          bridge.canonicalAgentId ||
+          bridge.ensureCanonicalAgentId({ cfg, accountId: resolvedAccountId });
+        return parseExplicitTarget(asString(raw).trim(), { canonicalAgentId });
+      },
+      formatTargetDisplay: ({ target }: any) => {
+        return formatTargetDisplay(target);
+      },
+      resolveSessionTarget: ({ id, accountId, cfg }: any) => {
+        const raw = asString(id).trim();
+        if (!raw) return undefined;
+        const resolvedAccountId = normalizeAccountId(
+          asString(accountId || BNCR_DEFAULT_ACCOUNT_ID),
+        );
+        const canonicalAgentId =
+          bridge.canonicalAgentId ||
+          bridge.ensureCanonicalAgentId({ cfg, accountId: resolvedAccountId });
+
+        let parsed = parseExplicitTarget(raw, { canonicalAgentId });
+        if (!parsed) {
+          const route = bridge.resolveRouteBySession(raw, resolvedAccountId);
+          if (route) {
+            parsed = parseExplicitTarget(formatDisplayScope(route), { canonicalAgentId });
+          }
+        }
+        return parsed?.displayScope || undefined;
+      },
+      resolveOutboundSessionRoute: (params: any) => {
+        const accountId = normalizeAccountId(
+          asString(params?.accountId || BNCR_DEFAULT_ACCOUNT_ID),
+        );
+        const canonicalAgentId =
+          bridge.canonicalAgentId || bridge.ensureCanonicalAgentId({ cfg: params?.cfg, accountId });
+        return resolveBncrOutboundSessionRoute({
+          ...params,
+          canonicalAgentId,
+          resolveRouteBySession: (raw: string, acc: string) =>
+            bridge.resolveRouteBySession(raw, acc),
+        });
+      },
       targetResolver: {
         looksLikeId: (raw: string, normalized?: string) => {
-          return Boolean(asString(normalized || raw).trim());
+          return looksLikeBncrExplicitTarget(asString(normalized || raw).trim());
+        },
+        resolveTarget: async ({ accountId, input, normalized }) => {
+          const resolved = resolveBncrOutboundTarget({
+            target: asString(normalized || input).trim(),
+            accountId: normalizeAccountId(asString(accountId || BNCR_DEFAULT_ACCOUNT_ID)),
+            resolveRouteBySession: (raw: string, acc: string) =>
+              this.resolveRouteBySession(raw, acc),
+          });
+          if (!resolved) return null;
+          return {
+            to: resolved.displayScope,
+            kind: resolved.kind,
+            display: resolved.displayScope,
+            source: 'normalized' as const,
+          };
         },
         hint: 'Standard to=Bncr:<platform>:<group>:<user> or Bncr:<platform>:<user>; sessionKey keeps existing strict/legacy compatibility, canonical sessionKey=agent:<agentId>:bncr:direct:<hex>',
       },
