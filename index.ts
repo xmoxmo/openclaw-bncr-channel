@@ -302,9 +302,7 @@ const plugin = {
       );
     };
 
-    debugLog(
-      `register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created}`,
-    );
+    debugLog(`register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created}`);
     if (!created) debugLog('bridge api rebound');
 
     const resolveDebug = async () => {

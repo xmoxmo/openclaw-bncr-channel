@@ -25,11 +25,8 @@ import {
   resolveAccount,
   resolveDefaultDisplayName,
 } from './core/accounts.ts';
-import {
-  emitBncrLog,
-  emitBncrLogLine,
-} from './core/logging.ts';
 import { BncrConfigSchema } from './core/config-schema.ts';
+import { emitBncrLog, emitBncrLogLine } from './core/logging.ts';
 import { buildBncrPermissionSummary } from './core/permissions.ts';
 import { resolveBncrChannelPolicy } from './core/policy.ts';
 import { probeBncrAccount } from './core/probe.ts';
@@ -371,10 +368,6 @@ class BncrBridgeRuntime {
     return this.bridgeId;
   }
 
-  private isDebugEnabled() {
-    return BNCR_DEBUG_VERBOSE;
-  }
-
   private logInfo(scope: string | undefined, message: string, options?: { debugOnly?: boolean }) {
     emitBncrLog('info', scope, message, options, () => this.isDebugEnabled());
   }
@@ -387,9 +380,10 @@ class BncrBridgeRuntime {
     emitBncrLog('error', scope, message, options, () => this.isDebugEnabled());
   }
 
-
   private summarizeTextPreview(raw: string, limit = 8) {
-    const compact = asString(raw || '').replace(/\s+/g, ' ').trim();
+    const compact = asString(raw || '')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!compact) return '-';
     const chars = Array.from(compact);
     return chars.length > limit ? `${chars.slice(0, Math.max(1, limit)).join('')}…` : compact;
@@ -648,6 +642,7 @@ class BncrBridgeRuntime {
     this.logWarn(
       'stale',
       `observed kind=${kind} lease=${leaseId || '-'} epoch=${connectionEpoch ?? '-'} currentLease=${this.primaryLeaseId || '-'} currentEpoch=${this.connectionEpoch}`,
+      { debugOnly: true },
     );
     return { stale: true, reason: 'mismatch' as const };
   }
@@ -707,12 +702,7 @@ class BncrBridgeRuntime {
   }
 
   isDebugEnabled(): boolean {
-    try {
-      const cfg = (this.api.runtime.config?.get?.() as any) || {};
-      return Boolean(cfg?.channels?.[CHANNEL_ID]?.debug?.verbose);
-    } catch {
-      return false;
-    }
+    return BNCR_DEBUG_VERBOSE;
   }
 
   startService = async (ctx: OpenClawPluginServiceContext, debug?: boolean) => {
@@ -727,6 +717,10 @@ class BncrBridgeRuntime {
     if (typeof debug === 'boolean') BNCR_DEBUG_VERBOSE = debug;
     await this.refreshDebugFlagFromConfig({ forceLog: true });
     const bootDiag = this.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
+    this.logInfo(
+      'startup',
+      `bridge=${this.bridgeId} routes=${bootDiag.regression.totalKnownRoutes}`,
+    );
     this.logInfo(
       'debug',
       `service started bridge=${this.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter} debug=${BNCR_DEBUG_VERBOSE}`,
@@ -768,15 +762,15 @@ class BncrBridgeRuntime {
       const changed = next !== BNCR_DEBUG_VERBOSE;
       BNCR_DEBUG_VERBOSE = next;
       if (changed || options?.forceLog) {
-        this.logInfo('debug', `verbose=${BNCR_DEBUG_VERBOSE}`);
+        this.logInfo('debug', `verbose=${BNCR_DEBUG_VERBOSE}`, { debugOnly: true });
       }
     } catch {
       // ignore config read errors
     }
   }
 
-  private syncDebugFlag() {
-    void this.refreshDebugFlagFromConfig();
+  private async syncDebugFlag() {
+    await this.refreshDebugFlagFromConfig();
   }
 
   private tryResolveBindingAgentId(args: {
@@ -832,7 +826,11 @@ class BncrBridgeRuntime {
     this.canonicalAgentId = 'main';
     this.canonicalAgentSource = 'fallback-main';
     this.canonicalAgentResolvedAt = now();
-    this.logWarn('target', 'binding agent unresolved; fallback to main for current process lifetime');
+    this.logWarn(
+      'target',
+      'binding agent unresolved; fallback to main for current process lifetime',
+      { debugOnly: true },
+    );
     return this.canonicalAgentId;
   }
 
@@ -1609,6 +1607,7 @@ class BncrBridgeRuntime {
       this.logWarn(
         'target',
         `invalid raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=Bncr:<platform>:<groupId>:<userId>|Bncr:<platform>:<userId> standardSessionKey=agent:<agentId>:bncr:direct:<hex(scope)>`,
+        { debugOnly: true },
       );
       throw new Error(
         `bncr invalid target(standard: Bncr:<platform>:<groupId>:<userId> | Bncr:<platform>:<userId>): ${raw}`,
@@ -2283,7 +2282,7 @@ class BncrBridgeRuntime {
   }
 
   handleConnect = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    this.syncDebugFlag();
+    await this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
@@ -2331,7 +2330,7 @@ class BncrBridgeRuntime {
   };
 
   handleAck = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    this.syncDebugFlag();
+    await this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
@@ -2395,7 +2394,7 @@ class BncrBridgeRuntime {
   };
 
   handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    this.syncDebugFlag();
+    await this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
@@ -2756,7 +2755,7 @@ class BncrBridgeRuntime {
   };
 
   handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    this.syncDebugFlag();
+    await this.syncDebugFlag();
     const parsed = parseBncrInboundParams(params);
     const {
       accountId,
@@ -2884,7 +2883,7 @@ class BncrBridgeRuntime {
         error: (msg: string) => emitBncrLogLine('error', msg),
       },
     }).catch((err) => {
-      this.logError('inbound', `process failed: ${String(err)}`);
+      this.logError('inbound', `process failed: ${String(err)}`, { debugOnly: true });
     });
   };
 
@@ -2932,6 +2931,7 @@ class BncrBridgeRuntime {
   };
 
   channelSendText = async (ctx: any) => {
+    await this.syncDebugFlag();
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
 
@@ -2970,6 +2970,7 @@ class BncrBridgeRuntime {
   };
 
   channelSendMedia = async (ctx: any) => {
+    await this.syncDebugFlag();
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
     const asVoice = ctx?.asVoice === true;

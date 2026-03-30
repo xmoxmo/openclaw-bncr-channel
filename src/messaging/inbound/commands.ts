@@ -120,7 +120,10 @@ export async function handleBncrNativeCommand(params: {
     sessionKey,
     ctx: ctxPayload,
     onRecordError: (err: unknown) => {
-      emitBncrLogLine('warn', `[bncr] inbound record native command session failed: ${String(err)}`);
+      emitBncrLogLine(
+        'warn',
+        `[bncr] inbound record native command session failed: ${String(err)}`,
+      );
     },
   });
 
