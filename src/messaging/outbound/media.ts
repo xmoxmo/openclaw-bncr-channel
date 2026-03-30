@@ -56,6 +56,7 @@ export function buildBncrMediaOutboundFrame(params: {
   fileName: string;
   hintedType?: string;
   kind?: 'tool' | 'block' | 'final';
+  replyToId?: string;
   now: number;
 }) {
   return {
@@ -63,6 +64,7 @@ export function buildBncrMediaOutboundFrame(params: {
     messageId: params.messageId,
     idempotencyKey: params.messageId,
     sessionKey: params.sessionKey,
+    replyToId: asString(params.replyToId || '').trim() || undefined,
     message: {
       platform: params.route.platform,
       groupId: params.route.groupId,

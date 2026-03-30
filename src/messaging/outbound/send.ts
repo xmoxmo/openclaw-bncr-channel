@@ -3,6 +3,7 @@ export async function sendBncrText(params: {
   accountId: string;
   to: string;
   text: string;
+  replyToId?: string;
   mediaLocalRoots?: readonly string[];
   resolveVerifiedTarget: (
     to: string,
@@ -13,7 +14,12 @@ export async function sendBncrText(params: {
     accountId: string;
     sessionKey: string;
     route: any;
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
+    payload: {
+      text?: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+      replyToId?: string;
+    };
     mediaLocalRoots?: readonly string[];
   }) => Promise<void>;
   createMessageId: () => string;
@@ -27,6 +33,7 @@ export async function sendBncrText(params: {
     route: verified.route,
     payload: {
       text: params.text,
+      replyToId: params.replyToId,
     },
     mediaLocalRoots: params.mediaLocalRoots,
   });
@@ -46,6 +53,7 @@ export async function sendBncrMedia(params: {
   mediaUrl?: string;
   asVoice?: boolean;
   audioAsVoice?: boolean;
+  replyToId?: string;
   mediaLocalRoots?: readonly string[];
   resolveVerifiedTarget: (
     to: string,
@@ -62,6 +70,7 @@ export async function sendBncrMedia(params: {
       mediaUrls?: string[];
       asVoice?: boolean;
       audioAsVoice?: boolean;
+      replyToId?: string;
     };
     mediaLocalRoots?: readonly string[];
   }) => Promise<void>;
@@ -79,6 +88,7 @@ export async function sendBncrMedia(params: {
       mediaUrl: params.mediaUrl || '',
       asVoice: params.asVoice === true ? true : undefined,
       audioAsVoice: params.audioAsVoice === true ? true : undefined,
+      replyToId: params.replyToId,
     },
     mediaLocalRoots: params.mediaLocalRoots,
   });

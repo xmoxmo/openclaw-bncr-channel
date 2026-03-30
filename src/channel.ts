@@ -25,6 +25,10 @@ import {
   resolveAccount,
   resolveDefaultDisplayName,
 } from './core/accounts.ts';
+import {
+  emitBncrLog,
+  emitBncrLogLine,
+} from './core/logging.ts';
 import { BncrConfigSchema } from './core/config-schema.ts';
 import { buildBncrPermissionSummary } from './core/permissions.ts';
 import { resolveBncrChannelPolicy } from './core/policy.ts';
@@ -367,6 +371,54 @@ class BncrBridgeRuntime {
     return this.bridgeId;
   }
 
+  private isDebugEnabled() {
+    return BNCR_DEBUG_VERBOSE;
+  }
+
+  private logInfo(scope: string | undefined, message: string, options?: { debugOnly?: boolean }) {
+    emitBncrLog('info', scope, message, options, () => this.isDebugEnabled());
+  }
+
+  private logWarn(scope: string | undefined, message: string, options?: { debugOnly?: boolean }) {
+    emitBncrLog('warn', scope, message, options, () => this.isDebugEnabled());
+  }
+
+  private logError(scope: string | undefined, message: string, options?: { debugOnly?: boolean }) {
+    emitBncrLog('error', scope, message, options, () => this.isDebugEnabled());
+  }
+
+
+  private summarizeTextPreview(raw: string, limit = 8) {
+    const compact = asString(raw || '').replace(/\s+/g, ' ').trim();
+    if (!compact) return '-';
+    const chars = Array.from(compact);
+    return chars.length > limit ? `${chars.slice(0, Math.max(1, limit)).join('')}…` : compact;
+  }
+
+  private summarizeScope(route: BncrRoute) {
+    return formatDisplayScope(route);
+  }
+
+  private logInboundSummary(params: {
+    accountId: string;
+    route: BncrRoute;
+    msgType: string;
+    text: string;
+    hasMedia: boolean;
+  }) {
+    const type = params.hasMedia ? `${params.msgType}+media` : params.msgType;
+    const preview = this.summarizeTextPreview(params.text);
+    this.logInfo('inbound', [type, this.summarizeScope(params.route), preview].join('|'));
+  }
+
+  private logOutboundSummary(entry: OutboxEntry) {
+    const msg = (entry.payload as any)?.message || {};
+    const type = asString(msg.type || (entry.payload as any)?.type || 'unknown');
+    const text = asString(msg.msg || '');
+    const preview = this.summarizeTextPreview(text);
+    this.logInfo('outbound', [type, this.summarizeScope(entry.route), preview].join('|'));
+  }
+
   private classifyRegisterTrace(stack: string) {
     if (
       stack.includes('prepareSecretsRuntimeSnapshot') ||
@@ -509,9 +561,7 @@ class BncrBridgeRuntime {
     const summary = this.buildRegisterTraceSummary();
     if (summary.postWarmupRegisterCount > 0) this.captureDriftSnapshot(summary);
 
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(`[bncr-register-trace] ${JSON.stringify(trace)}`);
-    }
+    this.logInfo('debug', `register-trace ${JSON.stringify(trace)}`, { debugOnly: true });
   }
 
   private createLeaseId() {
@@ -595,8 +645,9 @@ class BncrBridgeRuntime {
         this.staleCounters.staleFileAbort += 1;
         break;
     }
-    this.api.logger.warn?.(
-      `[bncr] stale ${kind} observed lease=${leaseId || '-'} epoch=${connectionEpoch ?? '-'} currentLease=${this.primaryLeaseId || '-'} currentEpoch=${this.connectionEpoch}`,
+    this.logWarn(
+      'stale',
+      `observed kind=${kind} lease=${leaseId || '-'} epoch=${connectionEpoch ?? '-'} currentLease=${this.primaryLeaseId || '-'} currentEpoch=${this.connectionEpoch}`,
     );
     return { stale: true, reason: 'mismatch' as const };
   }
@@ -674,12 +725,13 @@ class BncrBridgeRuntime {
       // ignore startup canonical agent initialization errors
     }
     if (typeof debug === 'boolean') BNCR_DEBUG_VERBOSE = debug;
+    await this.refreshDebugFlagFromConfig({ forceLog: true });
     const bootDiag = this.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info(
-        `bncr-channel service started (bridge=${this.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter} debug=${BNCR_DEBUG_VERBOSE})`,
-      );
-    }
+    this.logInfo(
+      'debug',
+      `service started bridge=${this.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter} debug=${BNCR_DEBUG_VERBOSE}`,
+      { debugOnly: true },
+    );
   };
 
   stopService = async () => {
@@ -688,9 +740,7 @@ class BncrBridgeRuntime {
       this.pushTimer = null;
     }
     await this.flushState();
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info('bncr-channel service stopped');
-    }
+    this.logInfo('debug', 'service stopped', { debugOnly: true });
   };
 
   private scheduleSave() {
@@ -710,18 +760,23 @@ class BncrBridgeRuntime {
     return map.get(normalizeAccountId(accountId)) || 0;
   }
 
-  private async syncDebugFlag() {
+  private async refreshDebugFlagFromConfig(options?: { forceLog?: boolean }) {
     try {
       const cfg = await this.api.runtime.config.loadConfig();
       const raw = (cfg as any)?.channels?.[CHANNEL_ID]?.debug?.verbose;
-      if (typeof raw !== 'boolean') return;
-      if (raw !== BNCR_DEBUG_VERBOSE) {
-        BNCR_DEBUG_VERBOSE = raw;
-        this.api.logger.info?.(`[bncr-debug] verbose=${BNCR_DEBUG_VERBOSE}`);
+      const next = typeof raw === 'boolean' ? raw : false;
+      const changed = next !== BNCR_DEBUG_VERBOSE;
+      BNCR_DEBUG_VERBOSE = next;
+      if (changed || options?.forceLog) {
+        this.logInfo('debug', `verbose=${BNCR_DEBUG_VERBOSE}`);
       }
     } catch {
       // ignore config read errors
     }
+  }
+
+  private syncDebugFlag() {
+    void this.refreshDebugFlagFromConfig();
   }
 
   private tryResolveBindingAgentId(args: {
@@ -777,9 +832,7 @@ class BncrBridgeRuntime {
     this.canonicalAgentId = 'main';
     this.canonicalAgentSource = 'fallback-main';
     this.canonicalAgentResolvedAt = now();
-    this.api.logger.warn?.(
-      '[bncr-canonical-agent] binding agent unresolved; fallback to main for current process lifetime',
-    );
+    this.logWarn('target', 'binding agent unresolved; fallback to main for current process lifetime');
     return this.canonicalAgentId;
   }
 
@@ -1146,29 +1199,29 @@ class BncrBridgeRuntime {
   private tryPushEntry(entry: OutboxEntry): boolean {
     const ctx = this.gatewayContext;
     if (!ctx) {
-      if (BNCR_DEBUG_VERBOSE) {
-        this.api.logger.info?.(
-          `[bncr-outbox-push-skip] ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            reason: 'no-gateway-context',
-          })}`,
-        );
-      }
+      this.logInfo(
+        'outbox',
+        `push-skip ${JSON.stringify({
+          messageId: entry.messageId,
+          accountId: entry.accountId,
+          reason: 'no-gateway-context',
+        })}`,
+        { debugOnly: true },
+      );
       return false;
     }
 
     const connIds = this.resolvePushConnIds(entry.accountId);
     if (!connIds.size) {
-      if (BNCR_DEBUG_VERBOSE) {
-        this.api.logger.info?.(
-          `[bncr-outbox-push-skip] ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            reason: 'no-active-connection',
-          })}`,
-        );
-      }
+      this.logInfo(
+        'outbox',
+        `push-skip ${JSON.stringify({
+          messageId: entry.messageId,
+          accountId: entry.accountId,
+          reason: 'no-active-connection',
+        })}`,
+        { debugOnly: true },
+      );
       return false;
     }
 
@@ -1179,16 +1232,16 @@ class BncrBridgeRuntime {
       };
 
       ctx.broadcastToConnIds(BNCR_PUSH_EVENT, payload, connIds);
-      if (BNCR_DEBUG_VERBOSE) {
-        this.api.logger.info?.(
-          `[bncr-outbox-push-ok] ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            connIds: Array.from(connIds),
-            event: BNCR_PUSH_EVENT,
-          })}`,
-        );
-      }
+      this.logInfo(
+        'outbox',
+        `push-ok ${JSON.stringify({
+          messageId: entry.messageId,
+          accountId: entry.accountId,
+          connIds: Array.from(connIds),
+          event: BNCR_PUSH_EVENT,
+        })}`,
+        { debugOnly: true },
+      );
       this.lastOutboundByAccount.set(entry.accountId, now());
       this.markActivity(entry.accountId);
       this.scheduleSave();
@@ -1196,15 +1249,15 @@ class BncrBridgeRuntime {
     } catch (error) {
       entry.lastError = asString((error as any)?.message || error || 'push-error');
       this.outbox.set(entry.messageId, entry);
-      if (BNCR_DEBUG_VERBOSE) {
-        this.api.logger.info?.(
-          `[bncr-outbox-push-fail] ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            error: entry.lastError,
-          })}`,
-        );
-      }
+      this.logInfo(
+        'outbox',
+        `push-fail ${JSON.stringify({
+          messageId: entry.messageId,
+          accountId: entry.accountId,
+          error: entry.lastError,
+        })}`,
+        { debugOnly: true },
+      );
       return false;
     }
   }
@@ -1227,37 +1280,37 @@ class BncrBridgeRuntime {
             Array.from(this.outbox.values()).map((entry) => normalizeAccountId(entry.accountId)),
           ),
         );
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-outbox-flush] ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId: filterAcc,
-          targetAccounts,
-          outboxSize: this.outbox.size,
-        })}`,
-      );
-    }
+    this.logInfo(
+      'outbox',
+      `flush ${JSON.stringify({
+        bridge: this.bridgeId,
+        accountId: filterAcc,
+        targetAccounts,
+        outboxSize: this.outbox.size,
+      })}`,
+      { debugOnly: true },
+    );
 
     let globalNextDelay: number | null = null;
 
     for (const acc of targetAccounts) {
       if (!acc || this.pushDrainRunningAccounts.has(acc)) continue;
       const online = this.isOnline(acc);
-      if (BNCR_DEBUG_VERBOSE) {
-        this.api.logger.info?.(
-          `[bncr-outbox-online] ${JSON.stringify({
-            bridge: this.bridgeId,
-            accountId: acc,
-            online,
-            connections: Array.from(this.connections.values()).map((c) => ({
-              accountId: c.accountId,
-              connId: c.connId,
-              clientId: c.clientId,
-              lastSeenAt: c.lastSeenAt,
-            })),
-          })}`,
-        );
-      }
+      this.logInfo(
+        'outbox',
+        `online ${JSON.stringify({
+          bridge: this.bridgeId,
+          accountId: acc,
+          online,
+          connections: Array.from(this.connections.values()).map((c) => ({
+            accountId: c.accountId,
+            connId: c.connId,
+            clientId: c.clientId,
+            lastSeenAt: c.lastSeenAt,
+          })),
+        })}`,
+        { debugOnly: true },
+      );
       this.pushDrainRunningAccounts.add(acc);
       try {
         let localNextDelay: number | null = null;
@@ -1375,19 +1428,19 @@ class BncrBridgeRuntime {
     const staleBefore = t - CONNECT_TTL_MS * 2;
     for (const [key, c] of this.connections.entries()) {
       if (c.lastSeenAt < staleBefore) {
-        if (BNCR_DEBUG_VERBOSE) {
-          this.api.logger.info?.(
-            `[bncr-conn-gc] ${JSON.stringify({
-              bridge: this.bridgeId,
-              key,
-              accountId: c.accountId,
-              connId: c.connId,
-              clientId: c.clientId,
-              lastSeenAt: c.lastSeenAt,
-              staleBefore,
-            })}`,
-          );
-        }
+        this.logInfo(
+          'connection',
+          `gc ${JSON.stringify({
+            bridge: this.bridgeId,
+            key,
+            accountId: c.accountId,
+            connId: c.connId,
+            clientId: c.clientId,
+            lastSeenAt: c.lastSeenAt,
+            staleBefore,
+          })}`,
+          { debugOnly: true },
+        );
         this.connections.delete(key);
       }
     }
@@ -1428,18 +1481,18 @@ class BncrBridgeRuntime {
     };
 
     this.connections.set(key, nextConn);
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-conn-seen] ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId: acc,
-          connId,
-          clientId: nextConn.clientId,
-          connectedAt: nextConn.connectedAt,
-          lastSeenAt: nextConn.lastSeenAt,
-        })}`,
-      );
-    }
+    this.logInfo(
+      'connection',
+      `seen ${JSON.stringify({
+        bridge: this.bridgeId,
+        accountId: acc,
+        connId,
+        clientId: nextConn.clientId,
+        connectedAt: nextConn.connectedAt,
+        lastSeenAt: nextConn.lastSeenAt,
+      })}`,
+      { debugOnly: true },
+    );
 
     const current = this.activeConnectionByAccount.get(acc);
     if (!current) {
@@ -1541,9 +1594,7 @@ class BncrBridgeRuntime {
     const raw = asString(rawTarget).trim();
     if (!raw) throw new Error('bncr invalid target(empty)');
 
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(`[bncr-target-incoming] raw=${raw} accountId=${acc}`);
-    }
+    this.logInfo('target', `incoming raw=${raw} accountId=${acc}`, { debugOnly: true });
 
     let route: BncrRoute | null = null;
 
@@ -1555,8 +1606,9 @@ class BncrBridgeRuntime {
     }
 
     if (!route) {
-      this.api.logger.warn?.(
-        `[bncr-target-invalid] raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=Bncr:<platform>:<groupId>:<userId>|Bncr:<platform>:<userId> standardSessionKey=agent:<agentId>:bncr:direct:<hex(scope)>`,
+      this.logWarn(
+        'target',
+        `invalid raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=Bncr:<platform>:<groupId>:<userId>|Bncr:<platform>:<userId> standardSessionKey=agent:<agentId>:bncr:direct:<hex(scope)>`,
       );
       throw new Error(
         `bncr invalid target(standard: Bncr:<platform>:<groupId>:<userId> | Bncr:<platform>:<userId>): ${raw}`,
@@ -1577,11 +1629,11 @@ class BncrBridgeRuntime {
       displayScope: formatDisplayScope(route),
     };
 
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-target-incoming-canonical] raw=${raw} accountId=${acc} verified=${JSON.stringify(verified)}`,
-      );
-    }
+    this.logInfo(
+      'target',
+      `canonical raw=${raw} accountId=${acc} verified=${JSON.stringify(verified)}`,
+      { debugOnly: true },
+    );
 
     // 发送链路命中目标时，同步刷新 lastSession，避免状态页显示过期会话。
     this.lastSessionByAccount.set(acc, {
@@ -1805,22 +1857,25 @@ class BncrBridgeRuntime {
   }
 
   private enqueueOutbound(entry: OutboxEntry) {
-    if (BNCR_DEBUG_VERBOSE) {
-      const msg = (entry.payload as any)?.message || {};
-      const type = asString(msg.type || (entry.payload as any)?.type || 'unknown');
-      const text = asString(msg.msg || '');
-      this.api.logger.info?.(
-        `[bncr-outbox-enqueue] ${JSON.stringify({
-          bridge: this.bridgeId,
-          messageId: entry.messageId,
-          accountId: entry.accountId,
-          sessionKey: entry.sessionKey,
-          route: entry.route,
-          type,
-          textLen: text.length,
-        })}`,
-      );
-    }
+    const msg = (entry.payload as any)?.message || {};
+    const type = asString(msg.type || (entry.payload as any)?.type || 'unknown');
+    const text = asString(msg.msg || '');
+    const displayScope = formatDisplayScope(entry.route);
+    this.logInfo(
+      'outbound',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        messageId: entry.messageId,
+        accountId: entry.accountId,
+        sessionKey: entry.sessionKey,
+        scope: displayScope,
+        type,
+        textLen: text.length,
+        textPreview: text.slice(0, 120),
+      }),
+      { debugOnly: true },
+    );
+    this.logOutboundSummary(entry);
     this.outbox.set(entry.messageId, entry);
     this.scheduleSave();
     this.wakeAccountWaiters(entry.accountId);
@@ -2133,6 +2188,7 @@ class BncrBridgeRuntime {
       asVoice?: boolean;
       audioAsVoice?: boolean;
       kind?: 'tool' | 'block' | 'final';
+      replyToId?: string;
     };
     mediaLocalRoots?: readonly string[];
   }) {
@@ -2171,6 +2227,7 @@ class BncrBridgeRuntime {
           }),
           hintedType: wantsVoice ? 'voice' : undefined,
           kind: payload.kind,
+          replyToId: asString(payload.replyToId || '').trim() || undefined,
           now: now(),
         });
 
@@ -2198,6 +2255,7 @@ class BncrBridgeRuntime {
       messageId,
       idempotencyKey: messageId,
       sessionKey,
+      replyToId: asString(payload.replyToId || '').trim() || undefined,
       message: {
         platform: route.platform,
         groupId: route.groupId,
@@ -2225,21 +2283,22 @@ class BncrBridgeRuntime {
   }
 
   handleConnect = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
 
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-connect] ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId,
-          connId,
-          clientId,
-          hasContext: Boolean(context),
-        })}`,
-      );
-    }
+    this.logInfo(
+      'connection',
+      `connect ${JSON.stringify({
+        bridge: this.bridgeId,
+        accountId,
+        connId,
+        clientId,
+        hasContext: Boolean(context),
+      })}`,
+      { debugOnly: true },
+    );
 
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
@@ -2272,6 +2331,7 @@ class BncrBridgeRuntime {
   };
 
   handleAck = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
@@ -2282,17 +2342,17 @@ class BncrBridgeRuntime {
     this.incrementCounter(this.ackEventsByAccount, accountId);
 
     const messageId = asString(params?.messageId || '').trim();
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-outbox-ack] ${JSON.stringify({
-          accountId,
-          messageId,
-          ok: params?.ok !== false,
-          fatal: params?.fatal === true,
-          error: asString(params?.error || ''),
-        })}`,
-      );
-    }
+    this.logInfo(
+      'outbox',
+      `ack ${JSON.stringify({
+        accountId,
+        messageId,
+        ok: params?.ok !== false,
+        fatal: params?.fatal === true,
+        error: asString(params?.error || ''),
+      })}`,
+      { debugOnly: true },
+    );
     if (!messageId) {
       respond(false, { error: 'messageId required' });
       return;
@@ -2335,23 +2395,23 @@ class BncrBridgeRuntime {
   };
 
   handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    void this.syncDebugFlag();
+    this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     this.observeLease('activity', params ?? {});
     this.lastActivityAtGlobal = now();
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-activity] ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId,
-          connId,
-          clientId,
-          hasContext: Boolean(context),
-        })}`,
-      );
-    }
+    this.logInfo(
+      'activity',
+      `event ${JSON.stringify({
+        bridge: this.bridgeId,
+        accountId,
+        connId,
+        clientId,
+        hasContext: Boolean(context),
+      })}`,
+      { debugOnly: true },
+    );
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
     this.markActivity(accountId);
@@ -2696,6 +2756,7 @@ class BncrBridgeRuntime {
   };
 
   handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    this.syncDebugFlag();
     const parsed = parseBncrInboundParams(params);
     const {
       accountId,
@@ -2771,6 +2832,30 @@ class BncrBridgeRuntime {
       resolvedRoute.sessionKey;
     const taskSessionKey = withTaskSessionKey(baseSessionKey, extracted.taskKey);
     const sessionKey = taskSessionKey || baseSessionKey;
+    const inboundText = asString(extracted.text || text || '');
+    this.logInfo(
+      'inbound',
+      JSON.stringify({
+        accountId,
+        msgId: msgId ?? null,
+        platform,
+        chatType: peer.kind,
+        scope: formatDisplayScope(route),
+        sessionKey,
+        msgType,
+        textLen: inboundText.length,
+        textPreview: inboundText.slice(0, 120),
+        hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
+      }),
+      { debugOnly: true },
+    );
+    this.logInboundSummary({
+      accountId,
+      route,
+      msgType,
+      text: inboundText,
+      hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
+    });
 
     respond(true, {
       accepted: true,
@@ -2794,9 +2879,12 @@ class BncrBridgeRuntime {
         this.markActivity(accountId, at);
       },
       scheduleSave: () => this.scheduleSave(),
-      logger: this.api.logger,
+      logger: {
+        warn: (msg: string) => emitBncrLogLine('warn', msg),
+        error: (msg: string) => emitBncrLogLine('error', msg),
+      },
     }).catch((err) => {
-      this.api.logger.error?.(`bncr inbound process failed: ${String(err)}`);
+      this.logError('inbound', `process failed: ${String(err)}`);
     });
   };
 
@@ -2847,30 +2935,31 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(ctx.accountId);
     const to = asString(ctx.to || '').trim();
 
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-send-entry:text] ${JSON.stringify({
-          accountId,
-          to,
-          text: asString(ctx?.text || ''),
-          mediaUrl: asString(ctx?.mediaUrl || ''),
-          sessionKey: asString(ctx?.sessionKey || ''),
-          mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
-          rawCtx: {
-            to: ctx?.to,
-            accountId: ctx?.accountId,
-            threadId: ctx?.threadId,
-            replyToId: ctx?.replyToId,
-          },
-        })}`,
-      );
-    }
+    this.logInfo(
+      'outbound',
+      `send-entry:text ${JSON.stringify({
+        accountId,
+        to,
+        text: asString(ctx?.text || ''),
+        mediaUrl: asString(ctx?.mediaUrl || ''),
+        sessionKey: asString(ctx?.sessionKey || ''),
+        mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
+        rawCtx: {
+          to: ctx?.to,
+          accountId: ctx?.accountId,
+          threadId: ctx?.threadId,
+          replyToId: ctx?.replyToId,
+        },
+      })}`,
+      { debugOnly: true },
+    );
 
     return sendBncrText({
       channelId: CHANNEL_ID,
       accountId,
       to,
       text: asString(ctx.text || ''),
+      replyToId: asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
       mediaLocalRoots: ctx.mediaLocalRoots,
       resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
       rememberSessionRoute: (sessionKey, accountId, route) =>
@@ -2886,27 +2975,27 @@ class BncrBridgeRuntime {
     const asVoice = ctx?.asVoice === true;
     const audioAsVoice = ctx?.audioAsVoice === true;
 
-    if (BNCR_DEBUG_VERBOSE) {
-      this.api.logger.info?.(
-        `[bncr-send-entry:media] ${JSON.stringify({
-          accountId,
-          to,
-          text: asString(ctx?.text || ''),
-          mediaUrl: asString(ctx?.mediaUrl || ''),
-          mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
-          asVoice,
-          audioAsVoice,
-          sessionKey: asString(ctx?.sessionKey || ''),
-          mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
-          rawCtx: {
-            to: ctx?.to,
-            accountId: ctx?.accountId,
-            threadId: ctx?.threadId,
-            replyToId: ctx?.replyToId,
-          },
-        })}`,
-      );
-    }
+    this.logInfo(
+      'outbound',
+      `send-entry:media ${JSON.stringify({
+        accountId,
+        to,
+        text: asString(ctx?.text || ''),
+        mediaUrl: asString(ctx?.mediaUrl || ''),
+        mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
+        asVoice,
+        audioAsVoice,
+        sessionKey: asString(ctx?.sessionKey || ''),
+        mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
+        rawCtx: {
+          to: ctx?.to,
+          accountId: ctx?.accountId,
+          threadId: ctx?.threadId,
+          replyToId: ctx?.replyToId,
+        },
+      })}`,
+      { debugOnly: true },
+    );
 
     return sendBncrMedia({
       channelId: CHANNEL_ID,
@@ -2916,6 +3005,7 @@ class BncrBridgeRuntime {
       mediaUrl: asString(ctx.mediaUrl || ''),
       asVoice,
       audioAsVoice,
+      replyToId: asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
       mediaLocalRoots: ctx.mediaLocalRoots,
       resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
       rememberSessionRoute: (sessionKey, accountId, route) =>

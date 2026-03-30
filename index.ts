@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BncrConfigSchema } from './src/core/config-schema.ts';
+import { emitBncrLogLine } from './src/core/logging.ts';
 
 const pluginFile = fileURLToPath(import.meta.url);
 const pluginDir = path.dirname(pluginFile);
@@ -254,12 +255,12 @@ const ensureGatewayMethodRegistered = (
 ) => {
   const meta = getRegisterMeta(api);
   if (meta.methods?.has(name)) {
-    debugLog(`bncr register method skip ${name} (already registered on this api)`);
+    debugLog(`register method skip ${name} (already registered on this api)`);
     return;
   }
   api.registerGatewayMethod(name, handler);
   meta.methods?.add(name);
-  debugLog(`bncr register method ok ${name}`);
+  debugLog(`register method ok ${name}`);
 };
 
 const getBridgeSingleton = (api: OpenClawPluginApi) => {
@@ -291,14 +292,20 @@ const plugin = {
       registryFingerprint: meta.registryFingerprint,
     });
     const debugLog = (...args: any[]) => {
-      if (!bridge.isDebugEnabled?.()) return;
-      api.logger.info?.(...args);
+      const rendered = args
+        .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+        .join(' ')
+        .trim();
+      if (!rendered) return;
+      emitBncrLogLine('info', `[bncr] debug ${rendered}`, { debugOnly: true }, () =>
+        Boolean(bridge.isDebugEnabled?.()),
+      );
     };
 
     debugLog(
-      `bncr plugin register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created}`,
+      `register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created}`,
     );
-    if (!created) debugLog('bncr bridge api rebound');
+    if (!created) debugLog('bridge api rebound');
 
     const resolveDebug = async () => {
       try {
@@ -319,17 +326,17 @@ const plugin = {
         stop: bridge.stopService,
       });
       meta.service = true;
-      debugLog('bncr register service ok');
+      debugLog('register service ok');
     } else {
-      debugLog('bncr register service skip (already registered on this api)');
+      debugLog('register service skip (already registered on this api)');
     }
 
     if (!meta.channel) {
       api.registerChannel({ plugin: runtime.createBncrChannelPlugin(bridge) });
       meta.channel = true;
-      debugLog('bncr register channel ok');
+      debugLog('register channel ok');
     } else {
-      debugLog('bncr register channel skip (already registered on this api)');
+      debugLog('register channel skip (already registered on this api)');
     }
 
     ensureGatewayMethodRegistered(
@@ -387,7 +394,7 @@ const plugin = {
       (opts) => bridge.handleFileAck(opts),
       debugLog,
     );
-    debugLog('bncr plugin register done');
+    debugLog('register done');
   },
 };
 

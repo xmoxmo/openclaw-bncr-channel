@@ -1,3 +1,4 @@
+import { emitBncrLogLine } from '../../core/logging.ts';
 import {
   formatDisplayScope,
   normalizeInboundSessionKey,
@@ -78,7 +79,7 @@ export async function handleBncrNativeCommand(params: {
   const displayTo = formatDisplayScope(route);
   const body = command.body;
   if (!clientId) {
-    logger?.warn?.('bncr: missing clientId for inbound command identity');
+    emitBncrLogLine('warn', '[bncr] inbound missing clientId for native command identity');
     return { handled: false };
   }
   const senderIdForContext = clientId;
@@ -119,7 +120,7 @@ export async function handleBncrNativeCommand(params: {
     sessionKey,
     ctx: ctxPayload,
     onRecordError: (err: unknown) => {
-      logger?.warn?.(`bncr: record native command session failed: ${String(err)}`);
+      emitBncrLogLine('warn', `[bncr] inbound record native command session failed: ${String(err)}`);
     },
   });
 
@@ -155,6 +156,7 @@ export async function handleBncrNativeCommand(params: {
           payload: {
             ...payload,
             kind: kind as 'tool' | 'block' | 'final' | undefined,
+            replyToId: msgId || undefined,
           },
         });
       },

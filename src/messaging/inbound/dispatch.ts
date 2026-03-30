@@ -1,3 +1,4 @@
+import { emitBncrLogLine } from '../../core/logging.ts';
 import {
   formatDisplayScope,
   normalizeInboundSessionKey,
@@ -132,7 +133,7 @@ export async function dispatchBncrInbound(params: {
 
   const displayTo = formatDisplayScope(route);
   if (!clientId) {
-    logger?.warn?.('bncr: missing clientId for inbound chat identity');
+    emitBncrLogLine('warn', '[bncr] inbound missing clientId for chat identity');
     return {
       accountId,
       sessionKey,
@@ -171,7 +172,7 @@ export async function dispatchBncrInbound(params: {
     sessionKey,
     ctx: ctxPayload,
     onRecordError: (err: unknown) => {
-      logger?.warn?.(`bncr: record session failed: ${String(err)}`);
+      emitBncrLogLine('warn', `[bncr] inbound record session failed: ${String(err)}`);
     },
   });
 
@@ -207,7 +208,7 @@ export async function dispatchBncrInbound(params: {
         });
       },
       onError: (err: unknown) => {
-        logger?.error?.(`bncr reply failed: ${String(err)}`);
+        emitBncrLogLine('error', `[bncr] outbound reply failed: ${String(err)}`);
       },
     },
     replyOptions: {
