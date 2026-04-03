@@ -276,12 +276,65 @@ const getBridgeSingleton = (api: OpenClawPluginApi) => {
   return { bridge: g.__bncrBridge, runtime: loaded, created };
 };
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const registerBncrCli = (api: OpenClawPluginApi & { registerCli?: (...args: any[]) => void }) => {
+  if (typeof api.registerCli !== 'function') return;
+  api.registerCli(
+    ({ program }: any) => {
+      const bncr = program.command('bncr').description('Bncr channel utilities');
+      bncr
+        .command('miniconfig')
+        .description(
+          'Seed minimal channels.bncr config (adds enabled=true and allowTool=false only when missing)',
+        )
+        .action(async () => {
+          const cfg = (await api.runtime.config.loadConfig()) as Record<string, unknown>;
+          if (!isPlainObject(cfg.channels)) cfg.channels = {};
+
+          const existing = isPlainObject(cfg.channels.bncr) ? cfg.channels.bncr : {};
+          const bncrCfg: Record<string, unknown> = { ...existing };
+          const added: string[] = [];
+
+          if (bncrCfg.enabled === undefined) {
+            bncrCfg.enabled = true;
+            added.push('enabled=true');
+          }
+
+          if (bncrCfg.allowTool === undefined) {
+            bncrCfg.allowTool = false;
+            added.push('allowTool=false');
+          }
+
+          cfg.channels.bncr = bncrCfg;
+
+          if (added.length === 0) {
+            console.log('Minimal bncr config already present. No changes made.');
+            return;
+          }
+
+          await api.runtime.config.writeConfigFile(cfg);
+          console.log('Seeded minimal bncr config at channels.bncr.');
+          console.log(`Added missing fields: ${added.join(', ')}`);
+          console.log('Restart the gateway to apply changes.');
+        });
+    },
+    { commands: ['bncr'] },
+  );
+};
+
 const plugin = {
   id: 'bncr',
   name: 'Bncr',
   description: 'Bncr channel plugin',
   configSchema: BncrConfigSchema,
-  register(api: OpenClawPluginApi) {
+  register(
+    api: OpenClawPluginApi & { registerCli?: (...args: any[]) => void; registrationMode?: string },
+  ) {
+    registerBncrCli(api);
+    if (api.registrationMode === 'cli-metadata') return;
+
     const meta = getRegisterMeta(api);
     const { bridge, runtime, created } = getBridgeSingleton(api);
     bridge.noteRegister?.({
