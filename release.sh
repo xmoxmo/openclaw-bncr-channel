@@ -17,6 +17,16 @@ fi
 PKG_NAME="$(node -p "require('./package.json').name")"
 PKG_VERSION="$(node -p "require('./package.json').version")"
 
+IFS='.' read -r VERSION_MAJOR VERSION_MINOR VERSION_PATCH <<<"$PKG_VERSION"
+if [[ ! "$PKG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "[release] invalid version format: $PKG_VERSION (expected x.y.z)" >&2
+  exit 1
+fi
+if (( VERSION_PATCH > 9 )); then
+  echo "[release] invalid version policy: patch=$VERSION_PATCH is not allowed; bump minor instead (example: 0.1.9 -> 0.2.0)" >&2
+  exit 1
+fi
+
 echo "[release] package: $PKG_NAME@$PKG_VERSION"
 
 echo "[release] check npm login"
