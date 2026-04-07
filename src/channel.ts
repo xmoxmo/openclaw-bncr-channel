@@ -9,13 +9,12 @@ import type {
 } from 'openclaw/plugin-sdk/core';
 import {
   applyAccountNameToChannelSection,
+  jsonResult,
   setAccountEnabledInConfigSection,
 } from 'openclaw/plugin-sdk/core';
 import { readJsonFileWithFallback, writeJsonFileAtomically } from 'openclaw/plugin-sdk/json-store';
-import type { ChannelMessageActionAdapter, ChatType } from 'openclaw/plugin-sdk/mattermost';
 import { readStringParam } from 'openclaw/plugin-sdk/param-readers';
 import { createDefaultChannelRuntimeState } from 'openclaw/plugin-sdk/status-helpers';
-import { jsonResult } from 'openclaw/plugin-sdk/telegram-core';
 import { extractToolSend } from 'openclaw/plugin-sdk/tool-send';
 import {
   BNCR_DEFAULT_ACCOUNT_ID,
@@ -125,6 +124,20 @@ type FileRecvTransferState = {
   receivedChunks: Set<number>;
   completedPath?: string;
   error?: string;
+};
+
+type ChatType = 'direct' | 'group' | (string & {});
+
+type ChannelMessageActionAdapter = {
+  describeMessageTool: (ctx: { cfg: any }) => { actions: string[]; capabilities: unknown[] } | null;
+  supportsAction: (ctx: { action: string }) => boolean;
+  extractToolSend: (ctx: { args: unknown }) => unknown;
+  handleAction: (ctx: {
+    action: string;
+    params: unknown;
+    accountId: string;
+    mediaLocalRoots?: string[];
+  }) => Promise<unknown>;
 };
 
 type PersistedState = {
