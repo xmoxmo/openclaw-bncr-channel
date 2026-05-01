@@ -122,7 +122,8 @@ plugins/bncr/src/
 补充：
 
 - `dmPolicy` / `groupPolicy` 支持：`open | allowlist | disabled`
-- `outboundRequireAck` 控制文本外发是否等待 `bncr.ack` 再出队
+- `outboundRequireAck` 是当前**单账号场景**使用的顶层字段：`channels.bncr.outboundRequireAck`
+- `outboundRequireAck=true` 时，文本外发会等待 `bncr.ack` 再出队；关闭后不再强制等待文本 ACK，超时类错误会显示为 `push-delivery-unconfirmed`
 - `requireMention` 当前仍是保留字段
 
 ---
@@ -142,6 +143,9 @@ openclaw health --json
 - `pending`
 - `deadLetter`
 - diagnostics / probe / status 摘要
+- diagnostics 里的 `runtimeFlags.outboundRequireAck`
+- diagnostics 里的 `runtimeFlags.ackPolicySource`
+- diagnostics 里的 `waiters.messageAck` / `waiters.fileAck`
 
 ---
 

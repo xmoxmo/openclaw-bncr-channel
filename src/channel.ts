@@ -73,8 +73,13 @@ import {
   resolveBncrOutboundTarget,
 } from './messaging/outbound/target-resolver.ts';
 const BRIDGE_VERSION = 2;
-const BNCR_PUSH_EVENT = 'bncr.push';
+const BNCR_PUSH_EVENT = 'plugin.bncr.push';
+const BNCR_FILE_INIT_EVENT = 'plugin.bncr.file.init';
+const BNCR_FILE_CHUNK_EVENT = 'plugin.bncr.file.chunk';
+const BNCR_FILE_COMPLETE_EVENT = 'plugin.bncr.file.complete';
+const BNCR_FILE_ABORT_EVENT = 'plugin.bncr.file.abort';
 const CONNECT_TTL_MS = 120_000;
+const RECENT_INBOUND_SEND_WINDOW_MS = 60_000;
 const MAX_RETRY = 10;
 const PUSH_DRAIN_INTERVAL_MS = 500;
 const PUSH_ACK_TIMEOUT_MS = 30_000;
@@ -103,6 +108,8 @@ type FileSendTransferState = {
   status: 'init' | 'transferring' | 'completed' | 'aborted';
   ackedChunks: Set<number>;
   failedChunks: Map<number, string>;
+  ownerConnId?: string;
+  ownerClientId?: string;
   completedPath?: string;
   error?: string;
 };
@@ -122,6 +129,8 @@ type FileRecvTransferState = {
   status: 'init' | 'transferring' | 'completed' | 'aborted';
   bufferByChunk: Map<number, Buffer>;
   receivedChunks: Set<number>;
+  ownerConnId?: string;
+  ownerClientId?: string;
   completedPath?: string;
   error?: string;
 };
@@ -354,7 +363,13 @@ class BncrBridgeRuntime {
   private saveTimer: NodeJS.Timeout | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
   private pushDrainRunningAccounts = new Set<string>();
-  private waiters = new Map<string, Array<() => void>>();
+  private messageAckWaiters = new Map<
+    string,
+    {
+      resolve: (result: 'acked' | 'timeout') => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
   private gatewayContext: GatewayRequestHandlerOptions['context'] | null = null;
 
   // 文件互传状态（V1：尽力而为，重连不续传）
@@ -660,6 +675,45 @@ class BncrBridgeRuntime {
     return { stale: true, reason: 'mismatch' as const };
   }
 
+  private shouldIgnoreStaleEvent(params: {
+    kind:
+      | 'inbound'
+      | 'activity'
+      | 'ack'
+      | 'file.init'
+      | 'file.chunk'
+      | 'file.complete'
+      | 'file.abort';
+    payload: { leaseId?: string; connectionEpoch?: number };
+    accountId: string;
+    connId: string;
+    clientId?: string;
+  }) {
+    const observed = this.observeLease(params.kind, params.payload);
+    if (!observed.stale) return false;
+    this.logWarn(
+      'stale',
+      `ignore kind=${params.kind} accountId=${params.accountId} connId=${params.connId} clientId=${params.clientId || '-'} reason=${observed.reason}`,
+      { debugOnly: true },
+    );
+    return true;
+  }
+
+  private matchesTransferOwner(params: {
+    ownerConnId?: string;
+    ownerClientId?: string;
+    connId: string;
+    clientId?: string;
+  }) {
+    const sameConn = !!params.ownerConnId && params.ownerConnId === params.connId;
+    const sameClient =
+      !params.ownerConnId &&
+      !!params.ownerClientId &&
+      !!params.clientId &&
+      params.ownerClientId === params.clientId;
+    return sameConn || sameClient;
+  }
+
   private buildExtendedDiagnostics(accountId: string) {
     const diagnostics = this.buildIntegratedDiagnostics(accountId) as Record<string, any>;
     return {
@@ -722,7 +776,7 @@ class BncrBridgeRuntime {
     this.statePath = path.join(ctx.stateDir, 'bncr-bridge-state.json');
     await this.loadState();
     try {
-      const cfg = await this.api.runtime.config.loadConfig();
+      const cfg = this.api.runtime.config.current();
       this.initializeCanonicalAgentId(cfg);
     } catch {
       // ignore startup canonical agent initialization errors
@@ -750,6 +804,25 @@ class BncrBridgeRuntime {
     this.logInfo('debug', 'service stopped', { debugOnly: true });
   };
 
+  shutdown() {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.pushTimer) {
+      clearTimeout(this.pushTimer);
+      this.pushTimer = null;
+    }
+    for (const waiter of this.messageAckWaiters.values()) {
+      clearTimeout(waiter.timer);
+    }
+    this.messageAckWaiters.clear();
+    for (const waiter of this.fileAckWaiters.values()) {
+      clearTimeout(waiter.timer);
+    }
+    this.fileAckWaiters.clear();
+  }
+
   private scheduleSave() {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
@@ -769,7 +842,7 @@ class BncrBridgeRuntime {
 
   private async refreshDebugFlagFromConfig(options?: { forceLog?: boolean }) {
     try {
-      const cfg = await this.api.runtime.config.loadConfig();
+      const cfg = this.api.runtime.config.current();
       const raw = (cfg as any)?.channels?.[CHANNEL_ID]?.debug?.verbose;
       const next = typeof raw === 'boolean' ? raw : false;
       const changed = next !== BNCR_DEBUG_VERBOSE;
@@ -1170,16 +1243,30 @@ class BncrBridgeRuntime {
     await writeJsonFileAtomically(this.statePath, data);
   }
 
-  private wakeAccountWaiters(accountId: string) {
-    const key = normalizeAccountId(accountId);
-    const waits = this.waiters.get(key);
-    if (!waits?.length) return;
-    this.waiters.delete(key);
-    for (const resolve of waits) resolve();
+  private resolveMessageAck(messageId: string, result: 'acked' | 'timeout' = 'acked') {
+    const key = asString(messageId).trim();
+    if (!key) return false;
+    const waiter = this.messageAckWaiters.get(key);
+    if (!waiter) return false;
+    this.messageAckWaiters.delete(key);
+    clearTimeout(waiter.timer);
+    waiter.resolve(result);
+    return true;
   }
 
   private rememberGatewayContext(context: GatewayRequestHandlerOptions['context']) {
     if (context) this.gatewayContext = context;
+  }
+
+  private resolveOutboxPushOwner(accountId: string): BncrConnection | null {
+    const acc = normalizeAccountId(accountId);
+    const t = now();
+    const primaryKey = this.activeConnectionByAccount.get(acc);
+    if (!primaryKey) return null;
+    const primary = this.connections.get(primaryKey);
+    if (!primary?.connId) return null;
+    if (t - primary.lastSeenAt > CONNECT_TTL_MS) return null;
+    return primary;
   }
 
   private resolvePushConnIds(accountId: string): Set<string> {
@@ -1207,6 +1294,31 @@ class BncrBridgeRuntime {
     return connIds;
   }
 
+  private hasRecentInboundReachability(accountId: string): boolean {
+    const acc = normalizeAccountId(accountId);
+    const t = now();
+    const lastInboundAt = this.lastInboundByAccount.get(acc) || 0;
+    const lastActivityAt = this.lastActivityByAccount.get(acc) || 0;
+    const lastReachableAt = Math.max(lastInboundAt, lastActivityAt);
+    return lastReachableAt > 0 && t - lastReachableAt <= RECENT_INBOUND_SEND_WINDOW_MS;
+  }
+
+  private resolveRecentInboundConnIds(accountId: string): Set<string> {
+    const acc = normalizeAccountId(accountId);
+    const t = now();
+    const connIds = new Set<string>();
+    if (!this.hasRecentInboundReachability(acc)) return connIds;
+
+    for (const c of this.connections.values()) {
+      if (c.accountId !== acc) continue;
+      if (!c.connId) continue;
+      if (t - c.lastSeenAt > CONNECT_TTL_MS * 2) continue;
+      connIds.add(c.connId);
+    }
+
+    return connIds;
+  }
+
   private tryPushEntry(entry: OutboxEntry): boolean {
     const ctx = this.gatewayContext;
     if (!ctx) {
@@ -1222,7 +1334,14 @@ class BncrBridgeRuntime {
       return false;
     }
 
-    const connIds = this.resolvePushConnIds(entry.accountId);
+    const owner = this.resolveOutboxPushOwner(entry.accountId);
+    let connIds = owner?.connId
+      ? new Set([owner.connId])
+      : this.resolvePushConnIds(entry.accountId);
+    const recentInboundReachable = this.hasRecentInboundReachability(entry.accountId);
+    if (!connIds.size && recentInboundReachable) {
+      connIds = this.resolveRecentInboundConnIds(entry.accountId);
+    }
     if (!connIds.size) {
       this.logInfo(
         'outbox',
@@ -1230,6 +1349,7 @@ class BncrBridgeRuntime {
           messageId: entry.messageId,
           accountId: entry.accountId,
           reason: 'no-active-connection',
+          recentInboundReachable,
         })}`,
         { debugOnly: true },
       );
@@ -1243,18 +1363,26 @@ class BncrBridgeRuntime {
       };
 
       ctx.broadcastToConnIds(BNCR_PUSH_EVENT, payload, connIds);
+      entry.lastPushAt = now();
+      entry.lastPushConnId =
+        owner?.connId || (connIds.size === 1 ? Array.from(connIds)[0] : undefined);
+      entry.lastPushClientId = owner?.clientId;
+      this.outbox.set(entry.messageId, entry);
       this.logInfo(
         'outbox',
         `push-ok ${JSON.stringify({
           messageId: entry.messageId,
           accountId: entry.accountId,
           connIds: Array.from(connIds),
+          ownerConnId: entry.lastPushConnId || '',
+          ownerClientId: entry.lastPushClientId || '',
+          recentInboundReachable,
           event: BNCR_PUSH_EVENT,
         })}`,
         { debugOnly: true },
       );
-      this.lastOutboundByAccount.set(entry.accountId, now());
-      this.markActivity(entry.accountId);
+      this.lastOutboundByAccount.set(entry.accountId, entry.lastPushAt);
+      this.markActivity(entry.accountId, entry.lastPushAt);
       this.scheduleSave();
       return true;
     } catch (error) {
@@ -1282,6 +1410,42 @@ class BncrBridgeRuntime {
     }, delay);
   }
 
+  private isOutboundAckRequired(accountId?: string) {
+    try {
+      const cfg = this.api.runtime.config.current();
+      const channelCfg = (cfg as any)?.channels?.[CHANNEL_ID];
+      const accountCfg =
+        accountId && channelCfg?.accounts && typeof channelCfg.accounts === 'object'
+          ? (channelCfg.accounts as Record<string, any>)[normalizeAccountId(accountId)]
+          : null;
+      const scoped = accountCfg?.outboundRequireAck;
+      const global = channelCfg?.outboundRequireAck;
+      if (typeof scoped === 'boolean') return scoped;
+      if (typeof global === 'boolean') return global;
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  private buildRuntimeFlags(accountId?: string) {
+    let ackPolicySource: 'channel' | 'default' = 'default';
+    try {
+      const cfg = this.api.runtime.config.current();
+      const global = (cfg as any)?.channels?.[CHANNEL_ID]?.outboundRequireAck;
+      if (typeof global === 'boolean') ackPolicySource = 'channel';
+    } catch {
+      // keep default source
+    }
+    return {
+      outboundRequireAck: this.isOutboundAckRequired(accountId),
+      ackPolicySource,
+      messageAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+      fileAckTimeoutMs: FILE_ACK_TIMEOUT_MS,
+      debugVerbose: BNCR_DEBUG_VERBOSE,
+    };
+  }
+
   private async flushPushQueue(accountId?: string): Promise<void> {
     const filterAcc = accountId ? normalizeAccountId(accountId) : null;
     const targetAccounts = filterAcc
@@ -1307,12 +1471,14 @@ class BncrBridgeRuntime {
     for (const acc of targetAccounts) {
       if (!acc || this.pushDrainRunningAccounts.has(acc)) continue;
       const online = this.isOnline(acc);
+      const recentInboundReachable = this.hasRecentInboundReachability(acc);
       this.logInfo(
         'outbox',
         `online ${JSON.stringify({
           bridge: this.bridgeId,
           accountId: acc,
           online,
+          recentInboundReachable,
           connections: Array.from(this.connections.values()).map((c) => ({
             accountId: c.accountId,
             connId: c.connId,
@@ -1341,14 +1507,33 @@ class BncrBridgeRuntime {
             break;
           }
 
-          const onlineNow = this.isOnline(acc);
+          const onlineNow = this.isOnline(acc) || this.hasRecentInboundReachability(acc);
           const pushed = this.tryPushEntry(entry);
           if (pushed) {
-            if (onlineNow) {
-              await this.waitForOutbound(acc, PUSH_ACK_TIMEOUT_MS);
+            const requireAck = this.isOutboundAckRequired(acc);
+            let ackResult: 'acked' | 'timeout' = requireAck ? 'timeout' : 'acked';
+            if (onlineNow && requireAck) {
+              ackResult = await this.waitForMessageAck(entry.messageId, PUSH_ACK_TIMEOUT_MS);
             }
 
+            this.logInfo(
+              'outbox',
+              `ack ${JSON.stringify({
+                messageId: entry.messageId,
+                accountId: entry.accountId,
+                requireAck,
+                ackResult,
+                onlineNow,
+              })}`,
+              { debugOnly: true },
+            );
+
             if (!this.outbox.has(entry.messageId)) {
+              await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
+              continue;
+            }
+
+            if (onlineNow && (!requireAck || ackResult !== 'timeout')) {
               await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
               continue;
             }
@@ -1356,11 +1541,14 @@ class BncrBridgeRuntime {
             entry.retryCount += 1;
             entry.lastAttemptAt = now();
             if (entry.retryCount > MAX_RETRY) {
-              this.moveToDeadLetter(entry, entry.lastError || 'push-ack-timeout');
+              this.moveToDeadLetter(
+                entry,
+                entry.lastError || (requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed'),
+              );
               continue;
             }
             entry.nextAttemptAt = now() + backoffMs(entry.retryCount);
-            entry.lastError = entry.lastError || 'push-ack-timeout';
+            entry.lastError = requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed';
             this.outbox.set(entry.messageId, entry);
             this.scheduleSave();
 
@@ -1400,29 +1588,18 @@ class BncrBridgeRuntime {
     if (globalNextDelay != null) this.schedulePushDrain(globalNextDelay);
   }
 
-  private async waitForOutbound(accountId: string, waitMs: number): Promise<void> {
-    const key = normalizeAccountId(accountId);
+  private async waitForMessageAck(messageId: string, waitMs: number): Promise<'acked' | 'timeout'> {
+    const key = asString(messageId).trim();
     const timeoutMs = Math.max(0, Math.min(waitMs, 25_000));
-    if (!timeoutMs) return;
+    if (!key || !timeoutMs) return 'timeout';
 
-    await new Promise<void>((resolve) => {
+    return await new Promise<'acked' | 'timeout'>((resolve) => {
       const timer = setTimeout(() => {
-        const arr = this.waiters.get(key) || [];
-        this.waiters.set(
-          key,
-          arr.filter((fn) => fn !== done),
-        );
-        resolve();
+        this.messageAckWaiters.delete(key);
+        resolve('timeout');
       }, timeoutMs);
 
-      const done = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-
-      const arr = this.waiters.get(key) || [];
-      arr.push(done);
-      this.waiters.set(key, arr);
+      this.messageAckWaiters.set(key, { resolve, timer });
     });
   }
 
@@ -1723,7 +1900,17 @@ class BncrBridgeRuntime {
     if (!connIds.size || !this.gatewayContext) {
       throw new Error(`no active bncr connection for account=${accountId}`);
     }
-    this.gatewayContext.broadcastToConnIds(event, payload, connIds);
+    const normalizedEvent =
+      event === 'bncr.file.init'
+        ? BNCR_FILE_INIT_EVENT
+        : event === 'bncr.file.chunk'
+          ? BNCR_FILE_CHUNK_EVENT
+          : event === 'bncr.file.complete'
+            ? BNCR_FILE_COMPLETE_EVENT
+            : event === 'bncr.file.abort'
+              ? BNCR_FILE_ABORT_EVENT
+              : event;
+    this.gatewayContext.broadcastToConnIds(normalizedEvent, payload, connIds);
   }
 
   private resolveInboundFileType(mimeType: string, fileName: string): string {
@@ -1890,7 +2077,6 @@ class BncrBridgeRuntime {
     this.logOutboundSummary(entry);
     this.outbox.set(entry.messageId, entry);
     this.scheduleSave();
-    this.wakeAccountWaiters(entry.accountId);
     this.flushPushQueue(entry.accountId);
   }
 
@@ -1902,6 +2088,7 @@ class BncrBridgeRuntime {
     this.deadLetter.push(dead);
     if (this.deadLetter.length > 1000) this.deadLetter = this.deadLetter.slice(-1000);
     this.outbox.delete(entry.messageId);
+    this.resolveMessageAck(entry.messageId, 'timeout');
     this.scheduleSave();
   }
 
@@ -2077,6 +2264,7 @@ class BncrBridgeRuntime {
     const totalChunks = Math.ceil(size / chunkSize);
     const fileSha256 = createHash('sha256').update(loaded.buffer).digest('hex');
 
+    const owner = this.resolveOutboxPushOwner(params.accountId);
     const st: FileSendTransferState = {
       transferId,
       accountId: normalizeAccountId(params.accountId),
@@ -2092,11 +2280,13 @@ class BncrBridgeRuntime {
       status: 'init',
       ackedChunks: new Set(),
       failedChunks: new Map(),
+      ownerConnId: owner?.connId,
+      ownerClientId: owner?.clientId,
     };
     this.fileSendTransfers.set(transferId, st);
 
     ctx.broadcastToConnIds(
-      'bncr.file.init',
+      BNCR_FILE_INIT_EVENT,
       {
         transferId,
         direction: 'oc2bncr',
@@ -2126,7 +2316,7 @@ class BncrBridgeRuntime {
       let lastErr: unknown = null;
       for (let attempt = 1; attempt <= 3; attempt++) {
         ctx.broadcastToConnIds(
-          'bncr.file.chunk',
+          BNCR_FILE_CHUNK_EVENT,
           {
             transferId,
             chunkIndex: idx,
@@ -2158,7 +2348,7 @@ class BncrBridgeRuntime {
         st.error = String((lastErr as any)?.message || lastErr || `chunk-${idx}-failed`);
         this.fileSendTransfers.set(transferId, st);
         ctx.broadcastToConnIds(
-          'bncr.file.abort',
+          BNCR_FILE_ABORT_EVENT,
           {
             transferId,
             reason: st.error,
@@ -2171,7 +2361,7 @@ class BncrBridgeRuntime {
     }
 
     ctx.broadcastToConnIds(
-      'bncr.file.complete',
+      BNCR_FILE_COMPLETE_EVENT,
       {
         transferId,
         ts: now(),
@@ -2329,6 +2519,11 @@ class BncrBridgeRuntime {
       pending: Array.from(this.outbox.values()).filter((v) => v.accountId === accountId).length,
       deadLetter: this.deadLetter.filter((v) => v.accountId === accountId).length,
       diagnostics: this.buildExtendedDiagnostics(accountId),
+      runtimeFlags: this.buildRuntimeFlags(accountId),
+      waiters: {
+        messageAck: this.messageAckWaiters.size,
+        fileAck: this.fileAckWaiters.size,
+      },
       leaseId: lease.leaseId,
       connectionEpoch: lease.connectionEpoch,
       protocolVersion: 2,
@@ -2347,13 +2542,9 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.observeLease('ack', params ?? {});
-    this.lastAckAtGlobal = now();
-    this.incrementCounter(this.ackEventsByAccount, accountId);
-
     const messageId = asString(params?.messageId || '').trim();
+    const staleObserved = this.observeLease('ack', params ?? {});
+
     this.logInfo(
       'outbox',
       `ack ${JSON.stringify({
@@ -2362,6 +2553,7 @@ class BncrBridgeRuntime {
         ok: params?.ok !== false,
         fatal: params?.fatal === true,
         error: asString(params?.error || ''),
+        stale: staleObserved.stale,
       })}`,
       { debugOnly: true },
     );
@@ -2372,7 +2564,7 @@ class BncrBridgeRuntime {
 
     const entry = this.outbox.get(messageId);
     if (!entry) {
-      respond(true, { ok: true, message: 'already-acked-or-missing' });
+      respond(true, { ok: true, message: 'already-acked-or-missing', stale: staleObserved.stale });
       return;
     }
 
@@ -2381,20 +2573,52 @@ class BncrBridgeRuntime {
       return;
     }
 
+    if (staleObserved.stale) {
+      const sameConn = !!entry.lastPushConnId && entry.lastPushConnId === connId;
+      const sameClient =
+        !entry.lastPushConnId &&
+        !!entry.lastPushClientId &&
+        !!clientId &&
+        entry.lastPushClientId === clientId;
+      if (!(sameConn || sameClient)) {
+        this.logWarn(
+          'stale',
+          `ignore kind=ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} messageId=${messageId} reason=owner-mismatch lastPushConnId=${entry.lastPushConnId || '-'} lastPushClientId=${entry.lastPushClientId || '-'}`,
+          { debugOnly: true },
+        );
+        respond(true, { ok: true, stale: true, ignored: true });
+        return;
+      }
+    } else {
+      this.rememberGatewayContext(context);
+      this.markSeen(accountId, connId, clientId);
+    }
+    this.lastAckAtGlobal = now();
+    this.incrementCounter(this.ackEventsByAccount, accountId);
+
     const ok = params?.ok !== false;
     const fatal = params?.fatal === true;
 
     if (ok) {
       this.outbox.delete(messageId);
       this.scheduleSave();
-      this.wakeAccountWaiters(accountId);
-      respond(true, { ok: true });
+      this.resolveMessageAck(messageId, 'acked');
+      respond(
+        true,
+        staleObserved.stale ? { ok: true, stale: true, staleAccepted: true } : { ok: true },
+      );
+      this.flushPushQueue(accountId);
       return;
     }
 
     if (fatal) {
       this.moveToDeadLetter(entry, asString(params?.error || 'fatal-ack'));
-      respond(true, { ok: true, movedToDeadLetter: true });
+      respond(
+        true,
+        staleObserved.stale
+          ? { ok: true, movedToDeadLetter: true, stale: true, staleAccepted: true }
+          : { ok: true, movedToDeadLetter: true },
+      );
       return;
     }
 
@@ -2403,7 +2627,12 @@ class BncrBridgeRuntime {
     this.outbox.set(messageId, entry);
     this.scheduleSave();
 
-    respond(true, { ok: true, willRetry: true });
+    respond(
+      true,
+      staleObserved.stale
+        ? { ok: true, willRetry: true, stale: true, staleAccepted: true }
+        : { ok: true, willRetry: true },
+    );
   };
 
   handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
@@ -2411,7 +2640,18 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    this.observeLease('activity', params ?? {});
+    if (
+      this.shouldIgnoreStaleEvent({
+        kind: 'activity',
+        payload: params ?? {},
+        accountId,
+        connId,
+        clientId,
+      })
+    ) {
+      respond(true, { accountId, ok: true, event: 'activity', stale: true, ignored: true });
+      return;
+    }
     this.lastActivityAtGlobal = now();
     this.logInfo(
       'activity',
@@ -2439,11 +2679,12 @@ class BncrBridgeRuntime {
       deadLetter: this.deadLetter.filter((v) => v.accountId === accountId).length,
       now: now(),
     });
+    this.flushPushQueue(accountId);
   };
 
   handleDiagnostics = async ({ params, respond }: GatewayRequestHandlerOptions) => {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const cfg = await this.api.runtime.config.loadConfig();
+    const cfg = this.api.runtime.config.current();
     const runtime = this.getAccountRuntimeSnapshot(accountId);
     const diagnostics = this.buildExtendedDiagnostics(accountId);
     const permissions = buildBncrPermissionSummary(cfg ?? {});
@@ -2468,6 +2709,11 @@ class BncrBridgeRuntime {
       accountId,
       runtime,
       diagnostics,
+      runtimeFlags: this.buildRuntimeFlags(accountId),
+      waiters: {
+        messageAck: this.messageAckWaiters.size,
+        fileAck: this.fileAckWaiters.size,
+      },
       permissions,
       probe,
       now: now(),
@@ -2478,9 +2724,20 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    if (
+      this.shouldIgnoreStaleEvent({
+        kind: 'file.init',
+        payload: params ?? {},
+        accountId,
+        connId,
+        clientId,
+      })
+    ) {
+      respond(true, { ok: true, stale: true, ignored: true });
+      return;
+    }
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
-    this.observeLease('file.init', params ?? {});
     this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
@@ -2536,6 +2793,8 @@ class BncrBridgeRuntime {
       status: 'init',
       bufferByChunk: new Map(),
       receivedChunks: new Set(),
+      ownerConnId: connId,
+      ownerClientId: clientId,
     });
 
     respond(true, {
@@ -2549,10 +2808,6 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.observeLease('file.chunk', params ?? {});
-    this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
     const chunkIndex = Number(params?.chunkIndex ?? -1);
@@ -2572,6 +2827,30 @@ class BncrBridgeRuntime {
       return;
     }
 
+    const staleObserved = this.observeLease('file.chunk', params ?? {});
+    if (staleObserved.stale) {
+      if (
+        !this.matchesTransferOwner({
+          ownerConnId: st.ownerConnId,
+          ownerClientId: st.ownerClientId,
+          connId,
+          clientId,
+        })
+      ) {
+        this.logWarn(
+          'stale',
+          `ignore kind=file.chunk accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} reason=owner-mismatch ownerConnId=${st.ownerConnId || '-'} ownerClientId=${st.ownerClientId || '-'}`,
+          { debugOnly: true },
+        );
+        respond(true, { ok: true, stale: true, ignored: true });
+        return;
+      }
+    } else {
+      this.rememberGatewayContext(context);
+      this.markSeen(accountId, connId, clientId);
+      this.markActivity(accountId);
+    }
+
     try {
       const buf = Buffer.from(base64, 'base64');
       if (size > 0 && buf.length !== size) {
@@ -2586,14 +2865,28 @@ class BncrBridgeRuntime {
       st.status = 'transferring';
       this.fileRecvTransfers.set(transferId, st);
 
-      respond(true, {
-        ok: true,
-        transferId,
-        chunkIndex,
-        offset,
-        received: st.receivedChunks.size,
-        totalChunks: st.totalChunks,
-      });
+      respond(
+        true,
+        staleObserved.stale
+          ? {
+              ok: true,
+              transferId,
+              chunkIndex,
+              offset,
+              received: st.receivedChunks.size,
+              totalChunks: st.totalChunks,
+              stale: true,
+              staleAccepted: true,
+            }
+          : {
+              ok: true,
+              transferId,
+              chunkIndex,
+              offset,
+              received: st.receivedChunks.size,
+              totalChunks: st.totalChunks,
+            },
+      );
     } catch (error) {
       respond(false, { error: String((error as any)?.message || error || 'chunk invalid') });
     }
@@ -2608,10 +2901,6 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.observeLease('file.complete', params ?? {});
-    this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
     if (!transferId) {
@@ -2623,6 +2912,30 @@ class BncrBridgeRuntime {
     if (!st) {
       respond(false, { error: 'transfer not found' });
       return;
+    }
+
+    const staleObserved = this.observeLease('file.complete', params ?? {});
+    if (staleObserved.stale) {
+      if (
+        !this.matchesTransferOwner({
+          ownerConnId: st.ownerConnId,
+          ownerClientId: st.ownerClientId,
+          connId,
+          clientId,
+        })
+      ) {
+        this.logWarn(
+          'stale',
+          `ignore kind=file.complete accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} reason=owner-mismatch ownerConnId=${st.ownerConnId || '-'} ownerClientId=${st.ownerClientId || '-'}`,
+          { debugOnly: true },
+        );
+        respond(true, { ok: true, stale: true, ignored: true });
+        return;
+      }
+    } else {
+      this.rememberGatewayContext(context);
+      this.markSeen(accountId, connId, clientId);
+      this.markActivity(accountId);
     }
 
     try {
@@ -2655,15 +2968,30 @@ class BncrBridgeRuntime {
       st.status = 'completed';
       this.fileRecvTransfers.set(transferId, st);
 
-      respond(true, {
-        ok: true,
-        transferId,
-        path: saved.path,
-        size: merged.length,
-        fileName: st.fileName,
-        mimeType: st.mimeType,
-        fileSha256: digest,
-      });
+      respond(
+        true,
+        staleObserved.stale
+          ? {
+              ok: true,
+              transferId,
+              path: saved.path,
+              size: merged.length,
+              fileName: st.fileName,
+              mimeType: st.mimeType,
+              fileSha256: digest,
+              stale: true,
+              staleAccepted: true,
+            }
+          : {
+              ok: true,
+              transferId,
+              path: saved.path,
+              size: merged.length,
+              fileName: st.fileName,
+              mimeType: st.mimeType,
+              fileSha256: digest,
+            },
+      );
     } catch (error) {
       st.status = 'aborted';
       st.error = String((error as any)?.message || error || 'complete failed');
@@ -2676,10 +3004,6 @@ class BncrBridgeRuntime {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.observeLease('file.abort', params ?? {});
-    this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
     if (!transferId) {
@@ -2693,24 +3017,56 @@ class BncrBridgeRuntime {
       return;
     }
 
+    const staleObserved = this.observeLease('file.abort', params ?? {});
+    if (staleObserved.stale) {
+      if (
+        !this.matchesTransferOwner({
+          ownerConnId: st.ownerConnId,
+          ownerClientId: st.ownerClientId,
+          connId,
+          clientId,
+        })
+      ) {
+        this.logWarn(
+          'stale',
+          `ignore kind=file.abort accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} reason=owner-mismatch ownerConnId=${st.ownerConnId || '-'} ownerClientId=${st.ownerClientId || '-'}`,
+          { debugOnly: true },
+        );
+        respond(true, { ok: true, stale: true, ignored: true });
+        return;
+      }
+    } else {
+      this.rememberGatewayContext(context);
+      this.markSeen(accountId, connId, clientId);
+      this.markActivity(accountId);
+    }
+
     st.status = 'aborted';
     st.error = asString(params?.reason || 'aborted');
     this.fileRecvTransfers.set(transferId, st);
 
-    respond(true, {
-      ok: true,
-      transferId,
-      status: 'aborted',
-    });
+    respond(
+      true,
+      staleObserved.stale
+        ? {
+            ok: true,
+            transferId,
+            status: 'aborted',
+            stale: true,
+            staleAccepted: true,
+          }
+        : {
+            ok: true,
+            transferId,
+            status: 'aborted',
+          },
+    );
   };
 
   handleFileAck = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.markActivity(accountId);
 
     const transferId = asString(params?.transferId || '').trim();
     const stage = asString(params?.stage || '').trim();
@@ -2723,6 +3079,34 @@ class BncrBridgeRuntime {
     }
 
     const st = this.fileSendTransfers.get(transferId);
+    const staleKind =
+      stage === 'init'
+        ? 'file.init'
+        : stage === 'chunk'
+          ? 'file.chunk'
+          : stage === 'abort'
+            ? 'file.abort'
+            : 'file.complete';
+    const staleObserved = this.observeLease(staleKind, params ?? {});
+    if (staleObserved.stale) {
+      const sameConn = !!st?.ownerConnId && st.ownerConnId === connId;
+      const sameClient =
+        !st?.ownerConnId && !!st?.ownerClientId && !!clientId && st.ownerClientId === clientId;
+      if (!(sameConn || sameClient)) {
+        this.logWarn(
+          'stale',
+          `ignore kind=file.ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} stage=${stage} reason=owner-mismatch ownerConnId=${st?.ownerConnId || '-'} ownerClientId=${st?.ownerClientId || '-'}`,
+          { debugOnly: true },
+        );
+        respond(true, { ok: true, stale: true, ignored: true });
+        return;
+      }
+    } else {
+      this.rememberGatewayContext(context);
+      this.markSeen(accountId, connId, clientId);
+      this.markActivity(accountId);
+    }
+
     if (st) {
       if (!ok) {
         const code = asString(params?.errorCode || 'ACK_FAILED');
@@ -2759,12 +3143,24 @@ class BncrBridgeRuntime {
       ok,
     });
 
-    respond(true, {
-      ok: true,
-      transferId,
-      stage,
-      state: st?.status || 'late',
-    });
+    respond(
+      true,
+      staleObserved.stale
+        ? {
+            ok: true,
+            transferId,
+            stage,
+            state: st?.status || 'late',
+            stale: true,
+            staleAccepted: true,
+          }
+        : {
+            ok: true,
+            transferId,
+            stage,
+            state: st?.status || 'late',
+          },
+    );
   };
 
   handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
@@ -2790,9 +3186,26 @@ class BncrBridgeRuntime {
     } = parsed;
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    if (
+      this.shouldIgnoreStaleEvent({
+        kind: 'inbound',
+        payload: params ?? {},
+        accountId,
+        connId,
+        clientId,
+      })
+    ) {
+      respond(true, {
+        accepted: false,
+        stale: true,
+        ignored: true,
+        accountId,
+        msgId: msgId ?? null,
+      });
+      return;
+    }
     this.rememberGatewayContext(context);
     this.markSeen(accountId, connId, clientId);
-    this.observeLease('inbound', params ?? {});
     this.markActivity(accountId);
     this.lastInboundAtGlobal = now();
     this.incrementCounter(this.inboundEventsByAccount, accountId);
@@ -2811,7 +3224,7 @@ class BncrBridgeRuntime {
       return;
     }
 
-    const cfg = await this.api.runtime.config.loadConfig();
+    const cfg = this.api.runtime.config.current();
     const gate = checkBncrMessageGate({
       parsed,
       cfg,
@@ -2876,6 +3289,7 @@ class BncrBridgeRuntime {
       msgId: msgId ?? null,
       taskKey: extracted.taskKey ?? null,
     });
+    this.flushPushQueue(accountId);
 
     void dispatchBncrInbound({
       api: this.api,

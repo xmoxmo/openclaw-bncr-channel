@@ -43,6 +43,12 @@ export const BncrConfigSchema = {
         description:
           'Whether group messages must explicitly mention the bot before bncr handles them. Default false. Current version keeps this as a reserved field and does not enforce it yet.',
       },
+      outboundRequireAck: {
+        type: 'boolean',
+        default: true,
+        description:
+          'Whether outbound text waits for bncr.ack before leaving the retry queue. Default true to preserve current ack/dead-letter behavior.',
+      },
       accounts: {
         type: 'object',
         additionalProperties: {

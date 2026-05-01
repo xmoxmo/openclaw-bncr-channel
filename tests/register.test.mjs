@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 function createApi() {
+  const currentConfig = { channels: { bncr: { debug: { verbose: false } } } };
   return {
     runtime: {
       config: {
+        current() {
+          return currentConfig;
+        },
         async loadConfig() {
-          return { channels: { bncr: { debug: { verbose: false } } } };
+          return currentConfig;
         },
       },
     },

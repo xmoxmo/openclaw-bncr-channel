@@ -1,0 +1,9 @@
+node_modules/
+*.bak
+*.bak.*
+*.backup-*
+*.backup
+src/**/*.bak
+src/**/*.bak.*
+index.ts.bak*
+openclaw.plugin.json.bak*

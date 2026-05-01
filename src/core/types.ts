@@ -32,6 +32,9 @@ export type OutboxEntry = {
   nextAttemptAt: number;
   lastAttemptAt?: number;
   lastError?: string;
+  lastPushAt?: number;
+  lastPushConnId?: string;
+  lastPushClientId?: string;
 };
 
 export type BncrDiagnosticsSummary = {

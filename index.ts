@@ -22,6 +22,10 @@ type LoadedRuntime = {
 };
 
 const BNCR_REGISTER_META = Symbol.for('bncr.register.meta');
+const BNCR_GLOBAL_REGISTER_TRACE = Symbol.for('bncr.global.register.trace');
+const BNCR_BRIDGE_OWNER = Symbol.for('bncr.bridge.owner');
+const BNCR_GATEWAY_RUNTIME = Symbol.for('bncr.gateway.runtime');
+const MODULE_EPOCH = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 type RegisterMeta = {
   service?: boolean;
@@ -29,10 +33,72 @@ type RegisterMeta = {
   methods?: Set<string>;
   apiInstanceId?: string;
   registryFingerprint?: string;
+  registrationMode?: string;
+};
+
+type GlobalRegisterTrace = {
+  lastApiInstanceId?: string;
+  lastRegistryFingerprint?: string;
+  seenRegistryFingerprints: Set<string>;
+  seenApiInstanceIds: Set<string>;
+};
+
+type BridgeOwner = {
+  moduleEpoch: string;
+  bridgeFactoryId: string;
+  apiInstanceId: string;
+  registryFingerprint: string;
+  registrationMode?: string;
+};
+
+type BridgeRegisterStateSnapshot = {
+  registerCount: number;
+  apiGeneration: number;
+  firstRegisterAt: number | null;
+  lastRegisterAt: number | null;
+  lastApiRebindAt: number | null;
+  pluginSource: string | null;
+  pluginVersion: string | null;
+  lastApiInstanceId: string | null;
+  lastRegistryFingerprint: string | null;
+  lastDriftSnapshot: unknown;
+  registerTraceRecent: Array<Record<string, unknown>>;
+};
+
+type GatewayMethodName =
+  | 'bncr.connect'
+  | 'bncr.inbound'
+  | 'bncr.activity'
+  | 'bncr.ack'
+  | 'bncr.diagnostics'
+  | 'bncr.file.init'
+  | 'bncr.file.chunk'
+  | 'bncr.file.complete'
+  | 'bncr.file.abort'
+  | 'bncr.file.ack';
+
+type BridgeSingletonWithOwner = BridgeSingleton & {
+  [BNCR_BRIDGE_OWNER]?: BridgeOwner;
+  registerCount?: number;
+  apiGeneration?: number;
+  firstRegisterAt?: number | null;
+  lastRegisterAt?: number | null;
+  lastApiRebindAt?: number | null;
+  pluginSource?: string | null;
+  pluginVersion?: string | null;
+  lastApiInstanceId?: string | null;
+  lastRegistryFingerprint?: string | null;
+  lastDriftSnapshot?: unknown;
+  registerTraceRecent?: Array<Record<string, unknown>>;
 };
 
 type OpenClawPluginApiWithMeta = OpenClawPluginApi & {
   [BNCR_REGISTER_META]?: RegisterMeta;
+};
+
+type BncrGatewayRuntime = {
+  currentBridge?: BridgeSingletonWithOwner;
+  registeredMethodsByRegistry: Map<string, Set<GatewayMethodName>>;
 };
 
 let runtime: LoadedRuntime | null = null;
@@ -218,7 +284,7 @@ const loadRuntimeSync = (): LoadedRuntime => {
 const getIdentityId = (obj: object, prefix: string) => {
   const existing = identityIds.get(obj);
   if (existing) return existing;
-  const next = `${prefix}_${++identitySeq}`;
+  const next = `${prefix}_${MODULE_EPOCH}_${++identitySeq}`;
   identityIds.set(obj, next);
   return next;
 };
@@ -247,33 +313,219 @@ const getRegisterMeta = (api: OpenClawPluginApi): RegisterMeta => {
   return host[BNCR_REGISTER_META]!;
 };
 
+const getProcessStore = () => {
+  const p = process as NodeJS.Process & {
+    [BNCR_GLOBAL_REGISTER_TRACE]?: GlobalRegisterTrace;
+    [BNCR_GATEWAY_RUNTIME]?: BncrGatewayRuntime;
+  };
+  return p;
+};
+
+const getGlobalRegisterTrace = () => {
+  const p = getProcessStore();
+  if (!p[BNCR_GLOBAL_REGISTER_TRACE]) {
+    p[BNCR_GLOBAL_REGISTER_TRACE] = {
+      seenRegistryFingerprints: new Set<string>(),
+      seenApiInstanceIds: new Set<string>(),
+    };
+  }
+  return p[BNCR_GLOBAL_REGISTER_TRACE]!;
+};
+
+const getGatewayRuntime = (): BncrGatewayRuntime => {
+  const p = getProcessStore();
+  if (!p[BNCR_GATEWAY_RUNTIME]) {
+    p[BNCR_GATEWAY_RUNTIME] = {
+      registeredMethodsByRegistry: new Map<string, Set<GatewayMethodName>>(),
+    };
+  }
+  return p[BNCR_GATEWAY_RUNTIME]!;
+};
+
+const gatewayMethodDispatchers: Record<
+  GatewayMethodName,
+  (bridge: BridgeSingletonWithOwner, opts: any) => any
+> = {
+  'bncr.connect': (bridge, opts) => bridge.handleConnect(opts),
+  'bncr.inbound': (bridge, opts) => bridge.handleInbound(opts),
+  'bncr.activity': (bridge, opts) => bridge.handleActivity(opts),
+  'bncr.ack': (bridge, opts) => bridge.handleAck(opts),
+  'bncr.diagnostics': (bridge, opts) => bridge.handleDiagnostics(opts),
+  'bncr.file.init': (bridge, opts) => bridge.handleFileInit(opts),
+  'bncr.file.chunk': (bridge, opts) => bridge.handleFileChunk(opts),
+  'bncr.file.complete': (bridge, opts) => bridge.handleFileComplete(opts),
+  'bncr.file.abort': (bridge, opts) => bridge.handleFileAbort(opts),
+  'bncr.file.ack': (bridge, opts) => bridge.handleFileAck(opts),
+};
+
+const dispatchGatewayMethod = (name: GatewayMethodName, opts: any) => {
+  const gatewayRuntime = getGatewayRuntime();
+  const bridge = gatewayRuntime.currentBridge;
+  if (!bridge) {
+    throw new Error(`bncr gateway runtime unavailable for ${name}`);
+  }
+  return gatewayMethodDispatchers[name](bridge, opts);
+};
+
+const mirrorGatewayMethodForMockApi = (api: OpenClawPluginApi, name: GatewayMethodName) => {
+  const host = api as OpenClawPluginApi & {
+    methods?: Array<{ name: string; handler: (opts: any) => any }>;
+  };
+  if (!Array.isArray(host.methods)) return;
+  if (host.methods.some((item) => item?.name === name)) return;
+  host.methods.push({ name, handler: (opts) => dispatchGatewayMethod(name, opts) });
+};
+
 const ensureGatewayMethodRegistered = (
   api: OpenClawPluginApi,
-  name: string,
-  handler: (opts: any) => any,
+  name: GatewayMethodName,
   debugLog: (...args: any[]) => void,
 ) => {
   const meta = getRegisterMeta(api);
+  const gatewayRuntime = getGatewayRuntime();
+  const registryFingerprint = meta.registryFingerprint || getRegistryFingerprint(api);
+  let registryMethods = gatewayRuntime.registeredMethodsByRegistry.get(registryFingerprint);
+  if (!registryMethods) {
+    registryMethods = new Set<GatewayMethodName>();
+    gatewayRuntime.registeredMethodsByRegistry.set(registryFingerprint, registryMethods);
+  }
   if (meta.methods?.has(name)) {
     debugLog(`register method skip ${name} (already registered on this api)`);
     return;
   }
-  api.registerGatewayMethod(name, handler);
+  if (registryMethods.has(name)) {
+    mirrorGatewayMethodForMockApi(api, name);
+    meta.methods?.add(name);
+    debugLog(`register method reuse ${name} (already registered in registry)`);
+    return;
+  }
+  api.registerGatewayMethod(name, (opts) => dispatchGatewayMethod(name, opts));
+  mirrorGatewayMethodForMockApi(api, name);
+  registryMethods.add(name);
   meta.methods?.add(name);
   debugLog(`register method ok ${name}`);
 };
 
+const getBridgeOwner = (api: OpenClawPluginApi, loaded: LoadedRuntime): BridgeOwner => {
+  const meta = getRegisterMeta(api);
+  return {
+    moduleEpoch: MODULE_EPOCH,
+    bridgeFactoryId: getIdentityId(loaded.createBncrBridge as object, 'bridgeFactory'),
+    apiInstanceId: meta.apiInstanceId || 'unknown',
+    registryFingerprint: meta.registryFingerprint || 'unknown',
+    registrationMode: meta.registrationMode,
+  };
+};
+
+const sameBridgeOwner = (left?: BridgeOwner, right?: BridgeOwner) => {
+  if (!left || !right) return false;
+  return (
+    left.moduleEpoch === right.moduleEpoch &&
+    left.bridgeFactoryId === right.bridgeFactoryId &&
+    left.apiInstanceId === right.apiInstanceId &&
+    left.registryFingerprint === right.registryFingerprint
+  );
+};
+
+const snapshotBridgeRegisterState = (
+  bridge?: BridgeSingletonWithOwner,
+): BridgeRegisterStateSnapshot | null => {
+  if (!bridge) return null;
+  return {
+    registerCount: Number(bridge.registerCount || 0),
+    apiGeneration: Number(bridge.apiGeneration || 0),
+    firstRegisterAt:
+      typeof bridge.firstRegisterAt === 'number'
+        ? bridge.firstRegisterAt
+        : (bridge.firstRegisterAt ?? null),
+    lastRegisterAt:
+      typeof bridge.lastRegisterAt === 'number'
+        ? bridge.lastRegisterAt
+        : (bridge.lastRegisterAt ?? null),
+    lastApiRebindAt:
+      typeof bridge.lastApiRebindAt === 'number'
+        ? bridge.lastApiRebindAt
+        : (bridge.lastApiRebindAt ?? null),
+    pluginSource: typeof bridge.pluginSource === 'string' ? bridge.pluginSource : null,
+    pluginVersion: typeof bridge.pluginVersion === 'string' ? bridge.pluginVersion : null,
+    lastApiInstanceId:
+      typeof bridge.lastApiInstanceId === 'string' ? bridge.lastApiInstanceId : null,
+    lastRegistryFingerprint:
+      typeof bridge.lastRegistryFingerprint === 'string' ? bridge.lastRegistryFingerprint : null,
+    lastDriftSnapshot: bridge.lastDriftSnapshot ?? null,
+    registerTraceRecent: Array.isArray(bridge.registerTraceRecent)
+      ? bridge.registerTraceRecent.map((trace) => ({ ...trace }))
+      : [],
+  };
+};
+
+const hydrateBridgeRegisterState = (
+  bridge: BridgeSingletonWithOwner,
+  snapshot: BridgeRegisterStateSnapshot | null,
+) => {
+  if (!snapshot) return bridge;
+  bridge.registerCount = snapshot.registerCount;
+  bridge.apiGeneration = snapshot.apiGeneration;
+  bridge.firstRegisterAt = snapshot.firstRegisterAt;
+  bridge.lastRegisterAt = snapshot.lastRegisterAt;
+  bridge.lastApiRebindAt = snapshot.lastApiRebindAt;
+  bridge.pluginSource = snapshot.pluginSource;
+  bridge.pluginVersion = snapshot.pluginVersion;
+  bridge.lastApiInstanceId = snapshot.lastApiInstanceId;
+  bridge.lastRegistryFingerprint = snapshot.lastRegistryFingerprint;
+  bridge.lastDriftSnapshot = snapshot.lastDriftSnapshot;
+  bridge.registerTraceRecent = snapshot.registerTraceRecent.map((trace) => ({ ...trace }));
+  return bridge;
+};
+
+const assignBridgeOwner = (bridge: BridgeSingleton, owner: BridgeOwner) => {
+  (bridge as BridgeSingletonWithOwner)[BNCR_BRIDGE_OWNER] = owner;
+  return bridge as BridgeSingletonWithOwner;
+};
+
 const getBridgeSingleton = (api: OpenClawPluginApi) => {
   const loaded = loadRuntimeSync();
-  const g = globalThis as typeof globalThis & { __bncrBridge?: BridgeSingleton };
+  const g = globalThis as typeof globalThis & { __bncrBridge?: BridgeSingletonWithOwner };
+  const owner = getBridgeOwner(api, loaded);
+  const previousOwner = g.__bncrBridge?.[BNCR_BRIDGE_OWNER];
+
   let created = false;
-  if (!g.__bncrBridge) {
-    g.__bncrBridge = loaded.createBncrBridge(api);
-    created = true;
+  let rebuilt = false;
+
+  if (g.__bncrBridge) {
+    const mustRebuild =
+      !sameBridgeOwner(previousOwner, owner) &&
+      (previousOwner?.moduleEpoch !== owner.moduleEpoch ||
+        previousOwner?.bridgeFactoryId !== owner.bridgeFactoryId ||
+        previousOwner?.registrationMode !== owner.registrationMode ||
+        previousOwner?.apiInstanceId !== owner.apiInstanceId ||
+        previousOwner?.registryFingerprint !== owner.registryFingerprint);
+
+    if (mustRebuild) {
+      const registerState = snapshotBridgeRegisterState(g.__bncrBridge);
+      try {
+        g.__bncrBridge.stopService?.();
+      } catch {
+        // ignore stop errors during hot-restart recovery
+      }
+      g.__bncrBridge = hydrateBridgeRegisterState(
+        assignBridgeOwner(loaded.createBncrBridge(api), owner),
+        registerState,
+      );
+      created = true;
+      rebuilt = true;
+    } else {
+      g.__bncrBridge.bindApi?.(api);
+      assignBridgeOwner(g.__bncrBridge, owner);
+      created = false;
+      rebuilt = false;
+    }
   } else {
-    g.__bncrBridge.bindApi?.(api);
+    g.__bncrBridge = assignBridgeOwner(loaded.createBncrBridge(api), owner);
+    created = true;
   }
-  return { bridge: g.__bncrBridge, runtime: loaded, created };
+
+  return { bridge: g.__bncrBridge, runtime: loaded, created, rebuilt, owner, previousOwner };
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -290,10 +542,11 @@ const registerBncrCli = (api: OpenClawPluginApi & { registerCli?: (...args: any[
           'Seed minimal channels.bncr config (adds enabled=true and allowTool=false only when missing)',
         )
         .action(async () => {
-          const cfg = (await api.runtime.config.loadConfig()) as Record<string, unknown>;
-          if (!isPlainObject(cfg.channels)) cfg.channels = {};
+          const cfg = api.runtime.config.current() as Record<string, unknown>;
+          const next = structuredClone(cfg);
+          if (!isPlainObject(next.channels)) next.channels = {};
 
-          const existing = isPlainObject(cfg.channels.bncr) ? cfg.channels.bncr : {};
+          const existing = isPlainObject(next.channels.bncr) ? next.channels.bncr : {};
           const bncrCfg: Record<string, unknown> = { ...existing };
           const added: string[] = [];
 
@@ -307,14 +560,14 @@ const registerBncrCli = (api: OpenClawPluginApi & { registerCli?: (...args: any[
             added.push('allowTool=false');
           }
 
-          cfg.channels.bncr = bncrCfg;
+          next.channels.bncr = bncrCfg;
 
           if (added.length === 0) {
             console.log('Minimal bncr config already present. No changes made.');
             return;
           }
 
-          await api.runtime.config.writeConfigFile(cfg);
+          await api.runtime.config.writeConfigFile(next);
           console.log('Seeded minimal bncr config at channels.bncr.');
           console.log(`Added missing fields: ${added.join(', ')}`);
           console.log('Restart the gateway to apply changes.');
@@ -323,6 +576,9 @@ const registerBncrCli = (api: OpenClawPluginApi & { registerCli?: (...args: any[
     { commands: ['bncr'] },
   );
 };
+
+const shouldSkipNonRuntimeRegister = (mode?: string) =>
+  mode === 'cli-metadata' || mode === 'discovery';
 
 const plugin = {
   id: 'bncr',
@@ -333,14 +589,31 @@ const plugin = {
     api: OpenClawPluginApi & { registerCli?: (...args: any[]) => void; registrationMode?: string },
   ) {
     registerBncrCli(api);
-    if (api.registrationMode === 'cli-metadata') return;
+    if (shouldSkipNonRuntimeRegister(api.registrationMode)) return;
 
     const meta = getRegisterMeta(api);
-    const { bridge, runtime, created } = getBridgeSingleton(api);
+    meta.registrationMode = api.registrationMode;
+    const globalTrace = getGlobalRegisterTrace();
+    const previousApiInstanceId = globalTrace.lastApiInstanceId;
+    const previousRegistryFingerprint = globalTrace.lastRegistryFingerprint;
+    const apiInstanceId = meta.apiInstanceId || 'unknown';
+    const registryFingerprint = meta.registryFingerprint || 'unknown';
+    const sameApiAsPrevious = previousApiInstanceId === apiInstanceId;
+    const sameRegistryAsPrevious = previousRegistryFingerprint === registryFingerprint;
+    const firstSeenApi = !globalTrace.seenApiInstanceIds.has(apiInstanceId);
+    const firstSeenRegistry = !globalTrace.seenRegistryFingerprints.has(registryFingerprint);
+
+    const { bridge, runtime, created, rebuilt, owner, previousOwner } = getBridgeSingleton(api);
+    getGatewayRuntime().currentBridge = bridge;
+
+    globalTrace.seenApiInstanceIds.add(apiInstanceId);
+    globalTrace.seenRegistryFingerprints.add(registryFingerprint);
+    globalTrace.lastApiInstanceId = apiInstanceId;
+    globalTrace.lastRegistryFingerprint = registryFingerprint;
     bridge.noteRegister?.({
       source: '~/.openclaw/workspace/plugins/bncr/index.ts',
       pluginVersion,
-      apiRebound: !created,
+      apiRebound: !created && !rebuilt,
       apiInstanceId: meta.apiInstanceId,
       registryFingerprint: meta.registryFingerprint,
     });
@@ -355,12 +628,22 @@ const plugin = {
       );
     };
 
-    debugLog(`register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created}`);
-    if (!created) debugLog('bridge api rebound');
+    debugLog(
+      `register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created} rebuilt=${rebuilt} ` +
+        `ownerApi=${owner.apiInstanceId} ownerRegistry=${owner.registryFingerprint} ` +
+        `previousOwnerApi=${previousOwner?.apiInstanceId || 'none'} previousOwnerRegistry=${previousOwner?.registryFingerprint || 'none'}`,
+    );
+    debugLog(
+      `register classify mode=${meta.registrationMode || 'unknown'} api=${apiInstanceId} registry=${registryFingerprint} ` +
+        `sameApiAsPrevious=${sameApiAsPrevious} sameRegistryAsPrevious=${sameRegistryAsPrevious} ` +
+        `firstSeenApi=${firstSeenApi} firstSeenRegistry=${firstSeenRegistry}`,
+    );
+    if (!created && !rebuilt) debugLog('bridge api rebound');
+    if (rebuilt) debugLog('bridge rebuilt due to owner/runtime change');
 
     const resolveDebug = async () => {
       try {
-        const cfg = await api.runtime.config.loadConfig();
+        const cfg = api.runtime.config.current();
         return Boolean((cfg as any)?.channels?.bncr?.debug?.verbose);
       } catch {
         return false;
@@ -390,61 +673,16 @@ const plugin = {
       debugLog('register channel skip (already registered on this api)');
     }
 
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.connect',
-      (opts) => bridge.handleConnect(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.inbound',
-      (opts) => bridge.handleInbound(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.activity',
-      (opts) => bridge.handleActivity(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(api, 'bncr.ack', (opts) => bridge.handleAck(opts), debugLog);
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.diagnostics',
-      (opts) => bridge.handleDiagnostics(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.file.init',
-      (opts) => bridge.handleFileInit(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.file.chunk',
-      (opts) => bridge.handleFileChunk(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.file.complete',
-      (opts) => bridge.handleFileComplete(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.file.abort',
-      (opts) => bridge.handleFileAbort(opts),
-      debugLog,
-    );
-    ensureGatewayMethodRegistered(
-      api,
-      'bncr.file.ack',
-      (opts) => bridge.handleFileAck(opts),
-      debugLog,
-    );
+    ensureGatewayMethodRegistered(api, 'bncr.connect', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.inbound', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.activity', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.ack', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.diagnostics', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.file.init', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.file.chunk', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.file.complete', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.file.abort', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.file.ack', debugLog);
     debugLog('register done');
   },
 };
