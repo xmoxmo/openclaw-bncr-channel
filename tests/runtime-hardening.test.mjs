@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 
+const BNCR_GATEWAY_RUNTIME = Symbol.for('bncr.gateway.runtime');
+
+function resetBncrGlobals() {
+  delete globalThis.__bncrBridge;
+  delete process[BNCR_GATEWAY_RUNTIME];
+}
+
 afterEach(() => {
   const bridge = globalThis.__bncrBridge;
   if (bridge && typeof bridge.shutdown === 'function') {
     bridge.shutdown();
   }
+  resetBncrGlobals();
 });
 
 function createApi() {
@@ -114,7 +122,7 @@ test('bncr.connect exposes lease/epoch and diagnostics include hardening fields'
 });
 
 test('bncr diagnostics register info updates after api rebind', async () => {
-  delete globalThis.__bncrBridge;
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api1 = createApi();
   const api2 = createApi();
@@ -189,7 +197,7 @@ test('bncr diagnostics register info updates after api rebind', async () => {
 });
 
 test('stale lease observation increments counters without hard failure', async () => {
-  delete globalThis.__bncrBridge;
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
   mod.default.register(api);
@@ -239,7 +247,7 @@ test('stale lease observation increments counters without hard failure', async (
 });
 
 test('stale activity from an older lease must not rewrite active connId for the same clientId', async () => {
-  delete globalThis.__bncrBridge;
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
   mod.default.register(api);
@@ -290,7 +298,7 @@ test('stale activity from an older lease must not rewrite active connId for the 
 });
 
 test('stale ack from last pushed owner should still ack message without rewriting active conn', async () => {
-  delete globalThis.__bncrBridge;
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
   mod.default.register(api);
@@ -357,7 +365,7 @@ test('stale ack from last pushed owner should still ack message without rewritin
 });
 
 test('stale ack from non-owner should stay ignored', async () => {
-  delete globalThis.__bncrBridge;
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
   mod.default.register(api);
@@ -419,7 +427,7 @@ test('stale ack from non-owner should stay ignored', async () => {
 });
 
 test('stale file chunk and complete from owner should continue transfer without rewriting active conn', async () => {
-  delete globalThis.__bncrBridge;
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
   mod.default.register(api);
@@ -520,7 +528,7 @@ test('stale file chunk and complete from owner should continue transfer without 
 });
 
 test('stale file chunk from non-owner should stay ignored', async () => {
-  delete globalThis.__bncrBridge;
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
   mod.default.register(api);

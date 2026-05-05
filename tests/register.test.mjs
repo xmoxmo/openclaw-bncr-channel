@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+const BNCR_GATEWAY_RUNTIME = Symbol.for('bncr.gateway.runtime');
+
+function resetBncrGlobals() {
+  delete globalThis.__bncrBridge;
+  delete process[BNCR_GATEWAY_RUNTIME];
+}
+
 function createApi() {
   const currentConfig = { channels: { bncr: { debug: { verbose: false } } } };
   return {
@@ -58,7 +65,8 @@ test('bncr register is idempotent on the same api instance', async () => {
   );
 });
 
-test('bncr register reuses bridge but registers on a new api instance', async () => {
+test('bncr register reuses bridge but only registers methods on a new api instance', async () => {
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api1 = createApi();
   const api2 = createApi();
@@ -70,12 +78,13 @@ test('bncr register reuses bridge but registers on a new api instance', async ()
   assert.equal(api1.channels.length, 1);
   assert.equal(api1.methods.length, 10);
 
-  assert.equal(api2.services.length, 1);
-  assert.equal(api2.channels.length, 1);
+  assert.equal(api2.services.length, 0);
+  assert.equal(api2.channels.length, 0);
   assert.equal(api2.methods.length, 10);
 });
 
-test('bncr messaging exposes parse/display/session target helpers', async () => {
+test('bncr messaging exposes parse/display/session target helpers on the owning api channel plugin', async () => {
+  resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
   mod.default.register(api);

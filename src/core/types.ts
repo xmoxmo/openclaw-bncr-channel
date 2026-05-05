@@ -26,7 +26,21 @@ export type OutboxEntry = {
   accountId: string;
   sessionKey: string;
   route: BncrRoute;
-  payload: Record<string, unknown>;
+  payload: Record<string, unknown> & {
+    _meta?: {
+      kind?: 'message' | 'file-transfer';
+      retryCount?: number;
+      nextAttemptAt?: number;
+      mediaUrl?: string;
+      mediaLocalRoots?: string[];
+      text?: string;
+      asVoice?: boolean;
+      audioAsVoice?: boolean;
+      replyToId?: string;
+      finalEvent?: string;
+      [key: string]: unknown;
+    };
+  };
   createdAt: number;
   retryCount: number;
   nextAttemptAt: number;

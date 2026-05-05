@@ -34,7 +34,7 @@ openclaw plugins update bncr
 openclaw gateway restart
 ```
 
-> 兼容范围：`openclaw >= 2026.3.22`
+> 兼容范围：`openclaw >= 2026.5.3-1`
 >
 > 如果你是从精确版本升级，或本地安装记录仍钉在旧版本，也可以显式执行：
 >

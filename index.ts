@@ -15,6 +15,7 @@ const linkType = process.platform === 'win32' ? 'junction' : 'dir';
 type ChannelModule = typeof import('./src/channel.ts');
 type OpenClawPluginApi = Parameters<ChannelModule['createBncrBridge']>[0];
 type BridgeSingleton = ReturnType<ChannelModule['createBncrBridge']>;
+type ChannelPlugin = ReturnType<ChannelModule['createBncrChannelPlugin']>;
 
 type LoadedRuntime = {
   createBncrBridge: ChannelModule['createBncrBridge'];
@@ -99,9 +100,14 @@ type OpenClawPluginApiWithMeta = OpenClawPluginApi & {
 type BncrGatewayRuntime = {
   currentBridge?: BridgeSingletonWithOwner;
   registeredMethodsByRegistry: Map<string, Set<GatewayMethodName>>;
+  serviceRegistered?: boolean;
+  channelRegistered?: boolean;
+  serviceOwnerApiInstanceId?: string;
+  channelOwnerApiInstanceId?: string;
 };
 
 let runtime: LoadedRuntime | null = null;
+let activeServiceStop: (() => Promise<void>) | null = null;
 const identityIds = new WeakMap<object, string>();
 let identitySeq = 0;
 
@@ -337,9 +343,47 @@ const getGatewayRuntime = (): BncrGatewayRuntime => {
   if (!p[BNCR_GATEWAY_RUNTIME]) {
     p[BNCR_GATEWAY_RUNTIME] = {
       registeredMethodsByRegistry: new Map<string, Set<GatewayMethodName>>(),
+      serviceRegistered: false,
+      channelRegistered: false,
     };
   }
   return p[BNCR_GATEWAY_RUNTIME]!;
+};
+
+const getProcessOwnerApiInstanceId = (gatewayRuntime: BncrGatewayRuntime) =>
+  gatewayRuntime.serviceOwnerApiInstanceId ||
+  gatewayRuntime.channelOwnerApiInstanceId ||
+  undefined;
+
+const shouldAdoptProcessOwner = (
+  apiInstanceId: string,
+  gatewayRuntime: BncrGatewayRuntime,
+) => {
+  const existingOwnerApiInstanceId = getProcessOwnerApiInstanceId(gatewayRuntime);
+  const hasSingletonOwner =
+    Boolean(gatewayRuntime.serviceRegistered) || Boolean(gatewayRuntime.channelRegistered);
+
+  if (!hasSingletonOwner) {
+    return {
+      adoptOwner: true,
+      existingOwnerApiInstanceId,
+      reason: 'no-singleton-owner',
+    };
+  }
+
+  if (existingOwnerApiInstanceId && existingOwnerApiInstanceId === apiInstanceId) {
+    return {
+      adoptOwner: true,
+      existingOwnerApiInstanceId,
+      reason: 'same-owner-api',
+    };
+  }
+
+  return {
+    adoptOwner: false,
+    existingOwnerApiInstanceId,
+    reason: 'singleton-owned-by-other-api',
+  };
 };
 
 const gatewayMethodDispatchers: Record<
@@ -528,8 +572,59 @@ const getBridgeSingleton = (api: OpenClawPluginApi) => {
   return { bridge: g.__bncrBridge, runtime: loaded, created, rebuilt, owner, previousOwner };
 };
 
+const getExistingBridgeSingleton = (): BridgeSingletonWithOwner | undefined => {
+  const g = globalThis as typeof globalThis & { __bncrBridge?: BridgeSingletonWithOwner };
+  return g.__bncrBridge;
+};
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const getCurrentBridge = (): BridgeSingletonWithOwner => {
+  const bridge = getGatewayRuntime().currentBridge;
+  if (!bridge) throw new Error('bncr current bridge unavailable');
+  return bridge;
+};
+
+const createDynamicChannelPlugin = (loaded: LoadedRuntime): ChannelPlugin => {
+  const base = loaded.createBncrChannelPlugin(() => getCurrentBridge());
+
+  return {
+    ...base,
+    outbound: {
+      ...base.outbound,
+      sendText: (ctx: any) => getCurrentBridge().channelSendText(ctx),
+      sendMedia: (ctx: any) => getCurrentBridge().channelSendMedia(ctx),
+    },
+    status: {
+      ...base.status,
+      buildChannelSummary: async ({ defaultAccountId }: any) =>
+        getCurrentBridge().getChannelSummary(defaultAccountId || 'Primary'),
+      buildAccountSnapshot: async ({ account, runtime }: any) => {
+        const bridgeNow = getCurrentBridge();
+        return base.status.buildAccountSnapshot({
+          account,
+          runtime: runtime || bridgeNow.getAccountRuntimeSnapshot(account?.accountId),
+        });
+      },
+      resolveAccountState: ({ enabled, configured, account, cfg, runtime }: any) => {
+        const bridgeNow = getCurrentBridge();
+        return base.status.resolveAccountState({
+          enabled,
+          configured,
+          account,
+          cfg,
+          runtime: runtime || bridgeNow.getAccountRuntimeSnapshot(account?.accountId),
+        });
+      },
+    },
+    gateway: {
+      ...base.gateway,
+      startAccount: (ctx: any) => getCurrentBridge().channelStartAccount(ctx),
+      stopAccount: (ctx: any) => getCurrentBridge().channelStopAccount(ctx),
+    },
+  };
+};
 
 const registerBncrCli = (api: OpenClawPluginApi & { registerCli?: (...args: any[]) => void }) => {
   if (typeof api.registerCli !== 'function') return;
@@ -591,6 +686,10 @@ const plugin = {
     registerBncrCli(api);
     if (shouldSkipNonRuntimeRegister(api.registrationMode)) return;
 
+    // 注意：OpenClaw 要求 plugin register 必须是同步函数；
+    // 不要在这里 await 停旧 service / 清理旧 runtime，否则 loader 会直接拒绝加载。
+    // 旧实例清理由 service stop / runtime 自愈逻辑兜底，这里只做同步声明式注册。
+
     const meta = getRegisterMeta(api);
     meta.registrationMode = api.registrationMode;
     const globalTrace = getGlobalRegisterTrace();
@@ -603,17 +702,43 @@ const plugin = {
     const firstSeenApi = !globalTrace.seenApiInstanceIds.has(apiInstanceId);
     const firstSeenRegistry = !globalTrace.seenRegistryFingerprints.has(registryFingerprint);
 
-    const { bridge, runtime, created, rebuilt, owner, previousOwner } = getBridgeSingleton(api);
-    getGatewayRuntime().currentBridge = bridge;
+    const gatewayRuntime = getGatewayRuntime();
+    const ownerDecision = shouldAdoptProcessOwner(apiInstanceId, gatewayRuntime);
+
+    let bridge: BridgeSingletonWithOwner | undefined;
+    let runtime: LoadedRuntime;
+    let created = false;
+    let rebuilt = false;
+    let owner: BridgeOwner | undefined;
+    let previousOwner: BridgeOwner | undefined;
+
+    if (ownerDecision.adoptOwner) {
+      const adopted = getBridgeSingleton(api);
+      bridge = adopted.bridge;
+      runtime = adopted.runtime;
+      created = adopted.created;
+      rebuilt = adopted.rebuilt;
+      owner = adopted.owner;
+      previousOwner = adopted.previousOwner;
+      gatewayRuntime.currentBridge = bridge;
+    } else {
+      runtime = loadRuntimeSync();
+      bridge = gatewayRuntime.currentBridge || getExistingBridgeSingleton();
+      previousOwner = getExistingBridgeSingleton()?.[BNCR_BRIDGE_OWNER];
+      owner = previousOwner;
+      if (bridge && !gatewayRuntime.currentBridge) {
+        gatewayRuntime.currentBridge = bridge;
+      }
+    }
 
     globalTrace.seenApiInstanceIds.add(apiInstanceId);
     globalTrace.seenRegistryFingerprints.add(registryFingerprint);
     globalTrace.lastApiInstanceId = apiInstanceId;
     globalTrace.lastRegistryFingerprint = registryFingerprint;
-    bridge.noteRegister?.({
+    bridge?.noteRegister?.({
       source: '~/.openclaw/workspace/plugins/bncr/index.ts',
       pluginVersion,
-      apiRebound: !created && !rebuilt,
+      apiRebound: ownerDecision.adoptOwner ? !created && !rebuilt : false,
       apiInstanceId: meta.apiInstanceId,
       registryFingerprint: meta.registryFingerprint,
     });
@@ -624,13 +749,13 @@ const plugin = {
         .trim();
       if (!rendered) return;
       emitBncrLogLine('info', `[bncr] debug ${rendered}`, { debugOnly: true }, () =>
-        Boolean(bridge.isDebugEnabled?.()),
+        Boolean(bridge?.isDebugEnabled?.()),
       );
     };
 
     debugLog(
-      `register begin bridge=${bridge.getBridgeId?.() || 'unknown'} created=${created} rebuilt=${rebuilt} ` +
-        `ownerApi=${owner.apiInstanceId} ownerRegistry=${owner.registryFingerprint} ` +
+      `register begin bridge=${bridge?.getBridgeId?.() || 'unknown'} created=${created} rebuilt=${rebuilt} ` +
+        `ownerApi=${owner?.apiInstanceId || 'none'} ownerRegistry=${owner?.registryFingerprint || 'none'} ` +
         `previousOwnerApi=${previousOwner?.apiInstanceId || 'none'} previousOwnerRegistry=${previousOwner?.registryFingerprint || 'none'}`,
     );
     debugLog(
@@ -638,8 +763,18 @@ const plugin = {
         `sameApiAsPrevious=${sameApiAsPrevious} sameRegistryAsPrevious=${sameRegistryAsPrevious} ` +
         `firstSeenApi=${firstSeenApi} firstSeenRegistry=${firstSeenRegistry}`,
     );
-    if (!created && !rebuilt) debugLog('bridge api rebound');
-    if (rebuilt) debugLog('bridge rebuilt due to owner/runtime change');
+    debugLog(
+      `register owner adopt=${ownerDecision.adoptOwner} reason=${ownerDecision.reason} ` +
+        `existingOwnerApi=${ownerDecision.existingOwnerApiInstanceId || 'none'}`,
+    );
+    if (!ownerDecision.adoptOwner) {
+      debugLog(
+        `bridge rebuild suppressed due to existing singleton owner api ${ownerDecision.existingOwnerApiInstanceId || 'unknown'}`,
+      );
+    } else {
+      if (!created && !rebuilt) debugLog('bridge api rebound');
+      if (rebuilt) debugLog('bridge rebuilt due to owner/runtime change');
+    }
 
     const resolveDebug = async () => {
       try {
@@ -650,27 +785,41 @@ const plugin = {
       }
     };
 
-    if (!meta.service) {
+    if (!gatewayRuntime.serviceRegistered) {
+      const serviceStopHandler = async () => {
+        await getCurrentBridge().stopService?.();
+      };
       api.registerService({
         id: 'bncr-bridge-service',
         start: async (ctx) => {
           const debug = await resolveDebug();
-          await bridge.startService(ctx, debug);
+          await getCurrentBridge().startService(ctx, debug);
         },
-        stop: bridge.stopService,
+        stop: serviceStopHandler,
       });
+      activeServiceStop = serviceStopHandler;
+      gatewayRuntime.serviceRegistered = true;
+      gatewayRuntime.serviceOwnerApiInstanceId = apiInstanceId;
       meta.service = true;
-      debugLog('register service ok');
+      debugLog(`register service ok ownerApi=${apiInstanceId}`);
     } else {
-      debugLog('register service skip (already registered on this api)');
+      meta.service = true;
+      debugLog(
+        `register service skip (process singleton already registered by api ${gatewayRuntime.serviceOwnerApiInstanceId || 'unknown'})`,
+      );
     }
 
-    if (!meta.channel) {
-      api.registerChannel({ plugin: runtime.createBncrChannelPlugin(bridge) });
+    if (!gatewayRuntime.channelRegistered) {
+      api.registerChannel({ plugin: createDynamicChannelPlugin(runtime) });
+      gatewayRuntime.channelRegistered = true;
+      gatewayRuntime.channelOwnerApiInstanceId = apiInstanceId;
       meta.channel = true;
-      debugLog('register channel ok');
+      debugLog(`register channel ok ownerApi=${apiInstanceId}`);
     } else {
-      debugLog('register channel skip (already registered on this api)');
+      meta.channel = true;
+      debugLog(
+        `register channel skip (process singleton already registered by api ${gatewayRuntime.channelOwnerApiInstanceId || 'unknown'})`,
+      );
     }
 
     ensureGatewayMethodRegistered(api, 'bncr.connect', debugLog);
