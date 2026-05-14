@@ -75,20 +75,12 @@ export function buildIntegratedDiagnostics(input: RuntimeStatusInput): BncrDiagn
 export function buildStatusHeadlineFromRuntime(input: RuntimeStatusInput): string {
   const diag = buildIntegratedDiagnostics(input);
   const h = diag.health;
-  const r = diag.regression;
-
   const parts = [
-    r.ok ? 'diag:ok' : 'diag:warn',
+    input.connected ? 'linked' : 'status',
     `p:${h.pending}`,
     `d:${h.deadLetter}`,
     `c:${h.activeConnections}`,
   ];
-
-  if (!r.ok) {
-    if (r.invalidOutboxSessionKeys > 0) parts.push(`invalid:${r.invalidOutboxSessionKeys}`);
-    if (r.legacyAccountResidue > 0) parts.push(`legacy:${r.legacyAccountResidue}`);
-  }
-
   return parts.join(' ');
 }
 
@@ -128,6 +120,7 @@ export function buildStatusMetaFromRuntime(input: RuntimeStatusInput) {
 }
 
 export function buildAccountRuntimeSnapshot(input: RuntimeStatusInput) {
+  const meta = buildStatusMetaFromRuntime(input);
   return {
     accountId: input.accountId,
     running: input.running ?? true,
@@ -138,7 +131,14 @@ export function buildAccountRuntimeSnapshot(input: RuntimeStatusInput) {
     lastOutboundAt: input.lastOutboundAt || null,
     mode: input.connected ? 'linked' : 'configured',
     lastError: input.lastError ?? null,
-    meta: buildStatusMetaFromRuntime(input),
+    pending: input.pending,
+    deadLetter: input.deadLetter,
+    lastSessionKey: input.lastSession?.sessionKey || null,
+    lastSessionScope: input.lastSession?.scope || null,
+    lastSessionAt: input.lastSession?.updatedAt || null,
+    lastActivityAt: input.lastActivityAt || null,
+    diagnostics: meta.diagnostics,
+    meta,
   };
 }
 

@@ -610,3 +610,65 @@ test('stale file chunk from non-owner should stay ignored', async () => {
   assert.equal(chunk.calls[0][1].ignored, true);
   assert.equal(bridge.fileRecvTransfers.get('tf-2').receivedChunks.size, 0);
 });
+
+
+test('status worker does not mark linked from recent inbound alone', async () => {
+  resetBncrGlobals();
+  const mod = await import('../index.ts');
+  const api = createApi();
+  mod.default.register(api);
+
+  const connect = getMethod(api, 'bncr.connect');
+  const inbound = getMethod(api, 'bncr.inbound');
+
+  const c1 = createRespondCapture();
+  await connect({
+    params: { accountId: 'Primary', clientId: 'client-a' },
+    respond: c1.respond,
+    client: { connId: 'conn-a' },
+    context: { broadcastToConnIds() {} },
+  });
+
+  await inbound({
+    params: {
+      accountId: 'Primary',
+      clientId: 'client-a',
+      platform: 'tgBot',
+      groupId: '-1001',
+      userId: '6278285192',
+      type: 'text',
+      msg: 'hello inbound',
+      msgId: 'status-inbound-1',
+    },
+    respond() {},
+    client: { connId: 'conn-a' },
+    context: { broadcastToConnIds() {} },
+  });
+
+  const bridge = globalThis.__bncrBridge;
+  assert.ok(bridge, 'expected global bridge');
+
+  bridge.connections.clear();
+  bridge.activeConnectionByAccount.delete('Primary');
+
+  let status = null;
+  const abortController = new AbortController();
+  const workerPromise = bridge.channelStartAccount({
+    accountId: 'Primary',
+    getStatus() {
+      return {};
+    },
+    setStatus(next) {
+      status = next;
+      abortController.abort();
+    },
+    abortSignal: abortController.signal,
+  });
+
+  await workerPromise;
+
+  assert.ok(status, 'expected status update');
+  assert.equal(status.connected, false);
+  assert.equal(status.mode, 'configured');
+  assert.ok(status.meta, 'expected status meta');
+});
