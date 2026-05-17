@@ -51,6 +51,7 @@ export async function sendBncrMedia(params: {
   to: string;
   text?: string;
   mediaUrl?: string;
+  mediaUrls?: string[];
   asVoice?: boolean;
   audioAsVoice?: boolean;
   replyToId?: string;
@@ -86,6 +87,7 @@ export async function sendBncrMedia(params: {
     payload: {
       text: params.text || '',
       mediaUrl: params.mediaUrl || '',
+      mediaUrls: params.mediaUrls?.length ? params.mediaUrls : undefined,
       asVoice: params.asVoice === true ? true : undefined,
       audioAsVoice: params.audioAsVoice === true ? true : undefined,
       replyToId: params.replyToId,

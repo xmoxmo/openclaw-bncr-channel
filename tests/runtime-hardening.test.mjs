@@ -612,7 +612,7 @@ test('stale file chunk from non-owner should stay ignored', async () => {
 });
 
 
-test('status worker does not mark linked from recent inbound alone', async () => {
+test('status worker marks linked from recent inbound reachability when no live connection remains', async () => {
   resetBncrGlobals();
   const mod = await import('../index.ts');
   const api = createApi();
@@ -668,7 +668,7 @@ test('status worker does not mark linked from recent inbound alone', async () =>
   await workerPromise;
 
   assert.ok(status, 'expected status update');
-  assert.equal(status.connected, false);
-  assert.equal(status.mode, 'configured');
+  assert.equal(status.connected, true);
+  assert.equal(status.mode, 'linked');
   assert.ok(status.meta, 'expected status meta');
 });

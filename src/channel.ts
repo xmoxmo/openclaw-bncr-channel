@@ -248,6 +248,49 @@ function normalizeBncrSendParams(input: {
   };
 }
 
+type MediaDedupeCacheEntry = {
+  mediaUrl: string;
+  text: string;
+  replyToId: string;
+  createdAt: number;
+};
+
+function normalizeReplyToId(value: unknown): string {
+  return asString(value || '').trim();
+}
+
+function normalizeMessageText(value: unknown): string {
+  return asString(value || '').trim();
+}
+
+function shouldTreatReplyToAsSame(currentReplyToId: string, previousReplyToId: string): boolean {
+  if (!currentReplyToId || !previousReplyToId) return true;
+  return currentReplyToId === previousReplyToId;
+}
+
+function buildMediaTextFallback(params: {
+  currentText: string;
+  previousText: string;
+  currentReplyToId: string;
+  previousReplyToId: string;
+}): { text: string; reason: 'same-text-sent-checkmark' | 'text-changed-downgrade' } | null {
+  if (!shouldTreatReplyToAsSame(params.currentReplyToId, params.previousReplyToId)) {
+    return null;
+  }
+
+  if (params.currentText && params.currentText !== params.previousText) {
+    return {
+      text: params.currentText,
+      reason: 'text-changed-downgrade',
+    };
+  }
+
+  return {
+    text: '✅已发送',
+    reason: 'same-text-sent-checkmark',
+  };
+}
+
 function now() {
   return Date.now();
 }
@@ -335,6 +378,7 @@ class BncrBridgeRuntime {
   private api: OpenClawPluginApi;
   private statePath: string | null = null;
   private bridgeId = `${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
+  private recentMediaDedupeBySession = new Map<string, Map<string, MediaDedupeCacheEntry>>();
   private gatewayPid = process.pid;
   private registerCount = 0;
   private apiGeneration = 0;
@@ -412,6 +456,7 @@ class BncrBridgeRuntime {
   private lastInboundByAccount = new Map<string, number>();
   private lastOutboundByAccount = new Map<string, number>();
   private channelAccountTimers = new Map<string, NodeJS.Timeout>();
+  private logDedupeState = new Map<string, { at: number; sig: string }>();
   private canonicalAgentId: string | null = null;
   private canonicalAgentSource: 'startup' | 'runtime' | 'fallback-main' | null = null;
   private canonicalAgentResolvedAt: number | null = null;
@@ -888,7 +933,8 @@ class BncrBridgeRuntime {
   }
 
   private buildExtendedDiagnostics(accountId: string) {
-    const diagnostics = this.buildIntegratedDiagnostics(accountId) as Record<string, any>;
+    const acc = normalizeAccountId(accountId);
+    const diagnostics = this.buildIntegratedDiagnostics(acc) as Record<string, any>;
     return {
       ...diagnostics,
       register: {
@@ -908,7 +954,7 @@ class BncrBridgeRuntime {
         lastDriftSnapshot: this.lastDriftSnapshot,
       },
       connection: {
-        active: this.activeConnectionCount(accountId),
+        active: this.activeConnectionCount(acc),
         primaryLeaseId: this.primaryLeaseId,
         primaryEpoch: this.connectionEpoch || null,
         acceptedConnections: this.acceptedConnections,
@@ -1449,12 +1495,22 @@ class BncrBridgeRuntime {
       return true;
     };
 
+    const recentInboundConnIds = this.resolveRecentInboundConnIds(acc);
     const candidateScore = (conn: BncrConnection) => {
       const preferredForOutboundUntil = Number((conn as any).preferredForOutboundUntil || 0);
       const outboundReadyUntil = Number((conn as any).outboundReadyUntil || 0);
+      const lastPushTimeoutAt = Number((conn as any).lastPushTimeoutAt || 0);
+      const lastAckOkAt = Number((conn as any).lastAckOkAt || 0);
+      const pushFailureScore = Number((conn as any).pushFailureScore || 0);
+      const recentTimeoutPenalty = lastPushTimeoutAt > 0 && t - lastPushTimeoutAt <= 30_000 ? 1 : 0;
       return {
         preferred: preferredForOutboundUntil > t ? 1 : 0,
         ready: outboundReadyUntil > t ? 1 : 0,
+        recentInbound: recentInboundConnIds.has(conn.connId) ? 1 : 0,
+        recentTimeoutPenalty,
+        pushFailureScore,
+        lastAckOkAt,
+        lastPushTimeoutAt,
         lastSeenAt: conn.lastSeenAt,
         connectedAt: conn.connectedAt,
       };
@@ -1473,6 +1529,11 @@ class BncrBridgeRuntime {
         const sb = candidateScore(b);
         if (sb.preferred !== sa.preferred) return sb.preferred - sa.preferred;
         if (sb.ready !== sa.ready) return sb.ready - sa.ready;
+        if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty) return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
+        if (sa.pushFailureScore !== sb.pushFailureScore) return sa.pushFailureScore - sb.pushFailureScore;
+        if (sb.lastAckOkAt !== sa.lastAckOkAt) return sb.lastAckOkAt - sa.lastAckOkAt;
+        if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt) return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
+        if (sb.recentInbound !== sa.recentInbound) return sb.recentInbound - sa.recentInbound;
         if (sb.lastSeenAt !== sa.lastSeenAt) return sb.lastSeenAt - sa.lastSeenAt;
         return sb.connectedAt - sa.connectedAt;
       });
@@ -1525,12 +1586,22 @@ class BncrBridgeRuntime {
       return true;
     };
 
+    const recentInboundConnIds = this.resolveRecentInboundConnIds(acc);
     const candidateScore = (conn: BncrConnection) => {
       const preferredForOutboundUntil = Number((conn as any).preferredForOutboundUntil || 0);
       const outboundReadyUntil = Number((conn as any).outboundReadyUntil || 0);
+      const lastPushTimeoutAt = Number((conn as any).lastPushTimeoutAt || 0);
+      const lastAckOkAt = Number((conn as any).lastAckOkAt || 0);
+      const pushFailureScore = Number((conn as any).pushFailureScore || 0);
+      const recentTimeoutPenalty = lastPushTimeoutAt > 0 && t - lastPushTimeoutAt <= 30_000 ? 1 : 0;
       return {
         preferred: preferredForOutboundUntil > t ? 1 : 0,
         ready: outboundReadyUntil > t ? 1 : 0,
+        recentInbound: recentInboundConnIds.has(conn.connId) ? 1 : 0,
+        recentTimeoutPenalty,
+        pushFailureScore,
+        lastAckOkAt,
+        lastPushTimeoutAt,
         lastSeenAt: conn.lastSeenAt,
         connectedAt: conn.connectedAt,
       };
@@ -1552,6 +1623,11 @@ class BncrBridgeRuntime {
         const sb = candidateScore(b);
         if (sb.preferred !== sa.preferred) return sb.preferred - sa.preferred;
         if (sb.ready !== sa.ready) return sb.ready - sa.ready;
+        if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty) return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
+        if (sa.pushFailureScore !== sb.pushFailureScore) return sa.pushFailureScore - sb.pushFailureScore;
+        if (sb.lastAckOkAt !== sa.lastAckOkAt) return sb.lastAckOkAt - sa.lastAckOkAt;
+        if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt) return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
+        if (sb.recentInbound !== sa.recentInbound) return sb.recentInbound - sa.recentInbound;
         if (sb.lastSeenAt !== sa.lastSeenAt) return sb.lastSeenAt - sa.lastSeenAt;
         return sb.connectedAt - sa.connectedAt;
       });
@@ -1613,6 +1689,73 @@ class BncrBridgeRuntime {
     if (active.connId !== cid) return false;
     if (client && active.clientId && active.clientId !== client) return false;
     return true;
+  }
+
+  private isRevalidatedAttemptedConn(entry: OutboxEntry, connId: string): boolean {
+    const targetConnId = asString(connId || '').trim();
+    if (!targetConnId) return false;
+
+    const acc = normalizeAccountId(entry.accountId);
+    const t = now();
+    const lastAttemptAt = Number(entry.lastAttemptAt || 0);
+    const recentInboundReachable = this.hasRecentInboundReachability(acc);
+
+    for (const conn of this.connections.values()) {
+      if (conn.accountId !== acc) continue;
+      if (conn.connId !== targetConnId) continue;
+      if (t - conn.lastSeenAt > CONNECT_TTL_MS) continue;
+      if ((conn as any).inboundOnly === true) continue;
+
+      const preferredForOutboundUntil = Number((conn as any).preferredForOutboundUntil || 0);
+      const outboundReadyUntil = Number((conn as any).outboundReadyUntil || 0);
+      const lastAckOkAt = Number((conn as any).lastAckOkAt || 0);
+      const lastPushTimeoutAt = Number((conn as any).lastPushTimeoutAt || 0);
+
+      const revalidatedByPreferred = preferredForOutboundUntil > t;
+      const revalidatedByReady = outboundReadyUntil > t;
+      const revalidatedByAck = lastAckOkAt > 0 && lastAckOkAt > lastAttemptAt;
+      const revalidatedByFreshReachability =
+        recentInboundReachable &&
+        lastPushTimeoutAt > 0 &&
+        lastPushTimeoutAt <= lastAttemptAt &&
+        conn.lastSeenAt > lastPushTimeoutAt;
+
+      const revalidated =
+        revalidatedByPreferred ||
+        revalidatedByReady ||
+        revalidatedByAck ||
+        revalidatedByFreshReachability;
+
+      if (revalidated) {
+        this.logInfo(
+          'outbox',
+          `revalidated-retry ${JSON.stringify({
+            messageId: entry.messageId,
+            accountId: acc,
+            connId: targetConnId,
+            reason: revalidatedByAck
+              ? 'ack-after-last-attempt'
+              : revalidatedByPreferred
+                ? 'preferred-ttl'
+                : revalidatedByReady
+                  ? 'ready-ttl'
+                  : 'fresh-reachability',
+            lastAttemptAt,
+            lastAckOkAt: lastAckOkAt || null,
+            lastPushTimeoutAt: lastPushTimeoutAt || null,
+            outboundReadyUntil: outboundReadyUntil || null,
+            preferredForOutboundUntil: preferredForOutboundUntil || null,
+            lastSeenAt: conn.lastSeenAt,
+            recentInboundReachable,
+          })}`,
+          { debugOnly: true },
+        );
+      }
+
+      return revalidated;
+    }
+
+    return false;
   }
 
   private tryAdoptTransferOwner(args: {
@@ -1696,6 +1839,114 @@ class BncrBridgeRuntime {
     };
   }
 
+  private pruneMediaDedupeCache(sessionKey: string, currentTime = now()) {
+    const sessionCache = this.recentMediaDedupeBySession.get(sessionKey);
+    if (!sessionCache) return;
+
+    for (const [mediaUrl, entry] of sessionCache.entries()) {
+      if (currentTime - entry.createdAt > 10_000) {
+        sessionCache.delete(mediaUrl);
+      }
+    }
+
+    if (sessionCache.size === 0) {
+      this.recentMediaDedupeBySession.delete(sessionKey);
+    }
+  }
+
+  private rememberRecentMediaSend(params: {
+    sessionKey: string;
+    mediaUrl: string;
+    text: string;
+    replyToId: string;
+    createdAt?: number;
+  }) {
+    const sessionKey = asString(params.sessionKey || '').trim();
+    const mediaUrl = asString(params.mediaUrl || '').trim();
+    if (!sessionKey || !mediaUrl) return;
+
+    const createdAt = typeof params.createdAt === 'number' ? params.createdAt : now();
+    this.pruneMediaDedupeCache(sessionKey, createdAt);
+    let sessionCache = this.recentMediaDedupeBySession.get(sessionKey);
+    if (!sessionCache) {
+      sessionCache = new Map<string, MediaDedupeCacheEntry>();
+      this.recentMediaDedupeBySession.set(sessionKey, sessionCache);
+    }
+    sessionCache.set(mediaUrl, {
+      mediaUrl,
+      text: normalizeMessageText(params.text),
+      replyToId: normalizeReplyToId(params.replyToId),
+      createdAt,
+    });
+  }
+
+  private tryBuildMediaDedupeFallback(params: {
+    sessionKey: string;
+    mediaUrl: string;
+    text: string;
+    replyToId: string;
+    currentTime?: number;
+  }): { text: string; reason: 'same-text-sent-checkmark' | 'text-changed-downgrade' } | null {
+    const sessionKey = asString(params.sessionKey || '').trim();
+    const mediaUrl = asString(params.mediaUrl || '').trim();
+    if (!sessionKey || !mediaUrl) return null;
+
+    const currentTime = typeof params.currentTime === 'number' ? params.currentTime : now();
+    this.pruneMediaDedupeCache(sessionKey, currentTime);
+    const sessionCache = this.recentMediaDedupeBySession.get(sessionKey);
+    const previous = sessionCache?.get(mediaUrl);
+    if (!previous) return null;
+    if (currentTime - previous.createdAt > 10_000) return null;
+
+    return buildMediaTextFallback({
+      currentText: normalizeMessageText(params.text),
+      previousText: previous.text,
+      currentReplyToId: normalizeReplyToId(params.replyToId),
+      previousReplyToId: previous.replyToId,
+    });
+  }
+
+  private buildTextOutboxEntry(params: {
+    accountId: string;
+    sessionKey: string;
+    route: BncrRoute;
+    text: string;
+    kind?: 'tool' | 'block' | 'final';
+    replyToId?: string;
+  }): OutboxEntry {
+    const messageId = randomUUID();
+    const frame = {
+      type: 'message.outbound',
+      messageId,
+      idempotencyKey: messageId,
+      sessionKey: params.sessionKey,
+      replyToId: normalizeReplyToId(params.replyToId) || undefined,
+      message: {
+        platform: params.route.platform,
+        groupId: params.route.groupId,
+        userId: params.route.userId,
+        type: 'text',
+        kind: params.kind,
+        msg: params.text,
+        path: '',
+        base64: '',
+        fileName: '',
+      },
+      ts: now(),
+    };
+
+    return {
+      messageId,
+      accountId: normalizeAccountId(params.accountId),
+      sessionKey: params.sessionKey,
+      route: params.route,
+      payload: frame,
+      createdAt: now(),
+      retryCount: 0,
+      nextAttemptAt: now(),
+    };
+  }
+
   private async tryPushEntry(entry: OutboxEntry): Promise<boolean> {
     const meta = isPlainObject(entry.payload?._meta) ? entry.payload._meta : null;
     if (meta?.kind === 'file-transfer') {
@@ -1716,20 +1967,39 @@ class BncrBridgeRuntime {
         return false;
       }
 
+      const attemptedConnIds = new Set(
+        Array.isArray(entry.routeAttemptConnIds)
+          ? entry.routeAttemptConnIds.filter((v): v is string => typeof v === 'string' && !!v)
+          : [],
+      );
+      const routeCandidates = Array.from(this.resolvePushConnIds(entry.accountId));
+      const filteredCandidates = routeCandidates.filter(
+        (connId) =>
+          !attemptedConnIds.has(connId) || this.isRevalidatedAttemptedConn(entry, connId),
+      );
       const owner = this.resolveOutboxPushOwner(entry.accountId);
-      let connIds = owner?.connId
-        ? new Set([owner.connId])
-        : this.resolvePushConnIds(entry.accountId);
+      const ownerConnId = owner?.connId && !attemptedConnIds.has(owner.connId) ? owner.connId : undefined;
+      let connIds = ownerConnId
+        ? new Set([ownerConnId])
+        : new Set(filteredCandidates.length ? filteredCandidates : routeCandidates);
       const recentInboundReachable = this.hasRecentInboundReachability(entry.accountId);
-      const routeReason = owner?.connId
+      const routeReason = ownerConnId
         ? 'owner'
         : connIds.size > 0
-          ? 'active-connections'
+          ? filteredCandidates.length > 0
+            ? 'active-connections'
+            : 'active-connections-reused'
           : recentInboundReachable
             ? 'recent-inbound-fallback'
             : 'none';
       if (!connIds.size && recentInboundReachable) {
-        connIds = this.resolveRecentInboundConnIds(entry.accountId);
+        const recentInboundConnIds = Array.from(this.resolveRecentInboundConnIds(entry.accountId));
+        const filteredRecentInboundConnIds = recentInboundConnIds.filter(
+          (connId) => !attemptedConnIds.has(connId),
+        );
+        connIds = new Set(
+          filteredRecentInboundConnIds.length > 0 ? filteredRecentInboundConnIds : recentInboundConnIds,
+        );
       }
       if (!connIds.size) {
         entry.lastError = 'no active bncr client for file chunk transfer';
@@ -1826,6 +2096,10 @@ class BncrBridgeRuntime {
         entry.lastPushConnId =
           owner?.connId || (connIds.size === 1 ? Array.from(connIds)[0] : undefined);
         entry.lastPushClientId = owner?.clientId;
+        if (!Array.isArray(entry.routeAttemptConnIds)) entry.routeAttemptConnIds = [];
+        if (entry.lastPushConnId && !entry.routeAttemptConnIds.includes(entry.lastPushConnId)) {
+          entry.routeAttemptConnIds.push(entry.lastPushConnId);
+        }
         entry.lastError = undefined;
         this.outbox.set(entry.messageId, entry);
         this.lastOutboundByAccount.set(entry.accountId, entry.lastPushAt);
@@ -1887,20 +2161,42 @@ class BncrBridgeRuntime {
       return false;
     }
 
+    const attemptedConnIds = new Set(
+      Array.isArray(entry.routeAttemptConnIds)
+        ? entry.routeAttemptConnIds.filter((v): v is string => typeof v === 'string' && !!v)
+        : [],
+    );
+    const routeCandidates = Array.from(this.resolvePushConnIds(entry.accountId));
+    const unattemptedCandidates = routeCandidates.filter((connId) => !attemptedConnIds.has(connId));
+    const revalidatedCandidates = routeCandidates.filter(
+      (connId) => attemptedConnIds.has(connId) && this.isRevalidatedAttemptedConn(entry, connId),
+    );
+    const preferredCandidates = unattemptedCandidates.length > 0 ? unattemptedCandidates : routeCandidates;
     const owner = this.resolveOutboxPushOwner(entry.accountId);
-    let connIds = owner?.connId
-      ? new Set([owner.connId])
-      : this.resolvePushConnIds(entry.accountId);
+    const ownerConnId = owner?.connId && preferredCandidates.includes(owner.connId) ? owner.connId : undefined;
+    let connIds = ownerConnId ? new Set([ownerConnId]) : new Set(preferredCandidates);
     const recentInboundReachable = this.hasRecentInboundReachability(entry.accountId);
-    const routeReason = owner?.connId
+    const routeReason = ownerConnId
       ? 'owner'
       : connIds.size > 0
-        ? 'active-connections'
+        ? unattemptedCandidates.length > 0
+          ? 'active-connections-unattempted-first'
+          : revalidatedCandidates.length > 0
+            ? 'active-connections-revalidated'
+            : 'active-connections-all-visible'
         : recentInboundReachable
           ? 'recent-inbound-fallback'
           : 'none';
     if (!connIds.size && recentInboundReachable) {
-      connIds = this.resolveRecentInboundConnIds(entry.accountId);
+      const recentInboundConnIds = Array.from(this.resolveRecentInboundConnIds(entry.accountId));
+      const unattemptedRecentInboundConnIds = recentInboundConnIds.filter(
+        (connId) => !attemptedConnIds.has(connId),
+      );
+      connIds = new Set(
+        unattemptedRecentInboundConnIds.length > 0
+          ? unattemptedRecentInboundConnIds
+          : recentInboundConnIds,
+      );
     }
     if (!connIds.size) {
       this.logInfo(
@@ -1939,8 +2235,12 @@ class BncrBridgeRuntime {
       );
       entry.lastPushAt = now();
       entry.lastPushConnId =
-        owner?.connId || (connIds.size === 1 ? Array.from(connIds)[0] : undefined);
-      entry.lastPushClientId = owner?.clientId;
+        ownerConnId || (connIds.size === 1 ? Array.from(connIds)[0] : undefined);
+      entry.lastPushClientId = ownerConnId ? owner?.clientId : undefined;
+      if (!Array.isArray(entry.routeAttemptConnIds)) entry.routeAttemptConnIds = [];
+      if (entry.lastPushConnId && !entry.routeAttemptConnIds.includes(entry.lastPushConnId)) {
+        entry.routeAttemptConnIds.push(entry.lastPushConnId);
+      }
       this.outbox.set(entry.messageId, entry);
       this.logInfo('outbox push ok', `mid=${entry.messageId}|q=${this.outbox.size}`);
       this.logInfo(
@@ -2091,7 +2391,8 @@ class BncrBridgeRuntime {
             break;
           }
 
-          const onlineNow = this.isOnline(acc) || this.hasRecentInboundReachability(acc);
+          const onlineNow = this.isOnline(acc);
+          const recentInboundReachable = this.hasRecentInboundReachability(acc);
           const pushed = await this.tryPushEntry(entry);
           if (pushed) {
             const requireAck = this.isOutboundAckRequired(acc);
@@ -2108,6 +2409,7 @@ class BncrBridgeRuntime {
                 requireAck,
                 ackResult,
                 onlineNow,
+                recentInboundReachable,
               })}`,
               { debugOnly: true },
             );
@@ -2131,6 +2433,21 @@ class BncrBridgeRuntime {
               });
             }
 
+            const attemptedConnIds = Array.isArray(entry.routeAttemptConnIds)
+              ? entry.routeAttemptConnIds.filter((v): v is string => typeof v === 'string' && !!v)
+              : [];
+            const currentConnId = asString(entry.lastPushConnId || '').trim();
+            if (currentConnId && !attemptedConnIds.includes(currentConnId)) attemptedConnIds.push(currentConnId);
+            const availableConnIds = Array.from(this.resolvePushConnIds(acc));
+            const revalidatedConnIds = attemptedConnIds.filter((connId) =>
+              this.isRevalidatedAttemptedConn(entry, connId),
+            );
+            const hasUntriedAlternative = availableConnIds.some((connId) => !attemptedConnIds.includes(connId));
+            const shouldFastReroute = requireAck && entry.fastReroutePending !== true && hasUntriedAlternative;
+
+            entry.routeAttemptConnIds = attemptedConnIds;
+            if (shouldFastReroute) entry.fastReroutePending = true;
+
             entry.retryCount += 1;
             entry.lastAttemptAt = now();
             if (entry.retryCount > MAX_RETRY) {
@@ -2144,13 +2461,34 @@ class BncrBridgeRuntime {
               );
               continue;
             }
-            entry.nextAttemptAt = now() + backoffMs(entry.retryCount);
+            entry.nextAttemptAt = shouldFastReroute ? now() + 1_000 : now() + backoffMs(entry.retryCount);
             entry.lastError = requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed';
+            if (!hasUntriedAlternative) {
+              entry.routeAttemptConnIds = [];
+              entry.routeAttemptRound = Number(entry.routeAttemptRound || 0) + 1;
+              entry.fastReroutePending = false;
+            }
             this.outbox.set(entry.messageId, entry);
             this.scheduleSave();
             this.logInfo(
               requireAck ? 'outbox ack timeout' : 'outbox ack retry',
               `mid=${entry.messageId}|q=${this.outbox.size}${requireAck ? '' : `|err=${entry.lastError}`}`,
+            );
+            this.logInfo(
+              'outbox',
+              `retry-reroute ${JSON.stringify({
+                messageId: entry.messageId,
+                accountId: acc,
+                currentConnId,
+                attemptedConnIds,
+                availableConnIds,
+                revalidatedConnIds,
+                hasUntriedAlternative,
+                shouldFastReroute,
+                routeAttemptRound: entry.routeAttemptRound || 0,
+                nextAttemptAt: entry.nextAttemptAt,
+              })}`,
+              { debugOnly: true },
             );
 
             const wait = Math.max(0, entry.nextAttemptAt - now());
@@ -2287,21 +2625,31 @@ class BncrBridgeRuntime {
     };
 
     this.connections.set(key, nextConn as BncrConnection);
-    this.logInfo(
-      'connection',
-      `seen ${JSON.stringify({
-        bridge: this.bridgeId,
-        accountId: acc,
-        connId,
-        clientId: nextConn.clientId,
-        connectedAt: nextConn.connectedAt,
-        lastSeenAt: nextConn.lastSeenAt,
-        outboundReadyUntil: nextConn.outboundReadyUntil || null,
-        preferredForOutboundUntil: nextConn.preferredForOutboundUntil || null,
-        inboundOnly: nextConn.inboundOnly === true,
-      })}`,
-      { debugOnly: true },
-    );
+    const connectionSeenPayload = {
+      bridge: this.bridgeId,
+      accountId: acc,
+      connId,
+      clientId: nextConn.clientId,
+      connectedAt: nextConn.connectedAt,
+      lastSeenAt: nextConn.lastSeenAt,
+      outboundReadyUntil: nextConn.outboundReadyUntil || null,
+      preferredForOutboundUntil: nextConn.preferredForOutboundUntil || null,
+      inboundOnly: nextConn.inboundOnly === true,
+    };
+    const connectionSeenSig = JSON.stringify({
+      bridge: this.bridgeId,
+      accountId: acc,
+      connId,
+      clientId: nextConn.clientId || null,
+      inboundOnly: nextConn.inboundOnly === true,
+      outboundReadyActive: Number(nextConn.outboundReadyUntil || 0) > t,
+      preferredForOutboundActive: Number(nextConn.preferredForOutboundUntil || 0) > t,
+    });
+    this.logInfoDedupJson('connection', 'seen', connectionSeenPayload, {
+      key: `connection-seen:${acc}:${nextConn.clientId || connId}`,
+      sig: connectionSeenSig,
+      debugOnly: true,
+    });
 
     const current = this.activeConnectionByAccount.get(acc);
     if (!current) {
@@ -2397,21 +2745,33 @@ class BncrBridgeRuntime {
     }
 
     this.connections.set(key, current as BncrConnection);
-    this.logInfo(
-      'connection',
-      `capability ${JSON.stringify({
-        bridge: this.bridgeId,
-        accountId: acc,
-        connId: current.connId,
-        clientId: current.clientId,
-        outboundReady: args.outboundReady === true,
-        preferredForOutbound: args.preferredForOutbound === true,
-        inboundOnly: current.inboundOnly === true,
-        outboundReadyUntil: current.outboundReadyUntil || null,
-        preferredForOutboundUntil: current.preferredForOutboundUntil || null,
-      })}`,
-      { debugOnly: true },
-    );
+    const connectionCapabilityPayload = {
+      bridge: this.bridgeId,
+      accountId: acc,
+      connId: current.connId,
+      clientId: current.clientId,
+      outboundReady: args.outboundReady === true,
+      preferredForOutbound: args.preferredForOutbound === true,
+      inboundOnly: current.inboundOnly === true,
+      outboundReadyUntil: current.outboundReadyUntil || null,
+      preferredForOutboundUntil: current.preferredForOutboundUntil || null,
+    };
+    const connectionCapabilitySig = JSON.stringify({
+      bridge: this.bridgeId,
+      accountId: acc,
+      connId: current.connId,
+      clientId: current.clientId || null,
+      outboundReady: args.outboundReady === true,
+      preferredForOutbound: args.preferredForOutbound === true,
+      inboundOnly: current.inboundOnly === true,
+      outboundReadyActive: Number(current.outboundReadyUntil || 0) > t,
+      preferredForOutboundActive: Number(current.preferredForOutboundUntil || 0) > t,
+    });
+    this.logInfoDedupJson('connection', 'capability', connectionCapabilityPayload, {
+      key: `connection-capability:${acc}:${current.clientId || current.connId}`,
+      sig: connectionCapabilitySig,
+      debugOnly: true,
+    });
   }
 
   private hasAlternativeLiveConnection(
@@ -3427,6 +3787,29 @@ class BncrBridgeRuntime {
   }) {
     const { accountId, sessionKey, route, payload, mediaLocalRoots } = params;
 
+    this.logInfo(
+      'outbound',
+      `enqueue-from-reply ${JSON.stringify({
+        accountId,
+        sessionKey,
+        route: {
+          platform: route?.platform,
+          groupId: route?.groupId,
+          userId: route?.userId,
+        },
+        payload: {
+          text: asString(payload?.text || ''),
+          mediaUrl: asString(payload?.mediaUrl || ''),
+          mediaUrls: Array.isArray(payload?.mediaUrls) ? payload.mediaUrls : undefined,
+          asVoice: payload?.asVoice === true,
+          audioAsVoice: payload?.audioAsVoice === true,
+          kind: payload?.kind,
+          replyToId: asString(payload?.replyToId || ''),
+        },
+      })}`,
+      { debugOnly: true },
+    );
+
     const mediaList = payload.mediaUrls?.length
       ? payload.mediaUrls
       : payload.mediaUrl
@@ -3435,21 +3818,68 @@ class BncrBridgeRuntime {
 
     if (mediaList.length > 0) {
       let first = true;
+      const currentTime = now();
       for (const mediaUrl of mediaList) {
+        const normalizedMediaUrl = asString(mediaUrl || '').trim();
+        if (!normalizedMediaUrl) continue;
+
+        const normalizedText = normalizeMessageText(first ? payload.text : '');
+        const normalizedReplyToId = normalizeReplyToId(payload.replyToId);
+        const fallback = this.tryBuildMediaDedupeFallback({
+          sessionKey,
+          mediaUrl: normalizedMediaUrl,
+          text: normalizedText,
+          replyToId: normalizedReplyToId,
+          currentTime,
+        });
+
+        if (fallback !== null) {
+          this.logInfo(
+            'outbound',
+            `media-dedupe-hit ${JSON.stringify({
+              sessionKey,
+              mediaUrl: normalizedMediaUrl,
+              replyToId: normalizedReplyToId || undefined,
+              fallbackText: fallback.text,
+              reason: fallback.reason,
+            })}`,
+            { debugOnly: true },
+          );
+          this.enqueueOutbound(
+            this.buildTextOutboxEntry({
+              accountId,
+              sessionKey,
+              route,
+              text: fallback.text,
+              kind: payload.kind,
+              replyToId: normalizedReplyToId || undefined,
+            }),
+          );
+          first = false;
+          continue;
+        }
+
         this.enqueueOutbound(
           this.buildFileTransferOutboxEntry({
             accountId,
             sessionKey,
             route,
-            mediaUrl,
+            mediaUrl: normalizedMediaUrl,
             mediaLocalRoots,
             text: first ? asString(payload.text || '') : '',
             asVoice: payload.asVoice,
             audioAsVoice: payload.audioAsVoice,
             kind: payload.kind,
-            replyToId: asString(payload.replyToId || '').trim() || undefined,
+            replyToId: normalizedReplyToId || undefined,
           }),
         );
+        this.rememberRecentMediaSend({
+          sessionKey,
+          mediaUrl: normalizedMediaUrl,
+          text: normalizedText,
+          replyToId: normalizedReplyToId,
+          createdAt: currentTime,
+        });
         first = false;
       }
       return;
@@ -3458,37 +3888,16 @@ class BncrBridgeRuntime {
     const text = asString(payload.text || '').trim();
     if (!text) return;
 
-    const messageId = randomUUID();
-    const frame = {
-      type: 'message.outbound',
-      messageId,
-      idempotencyKey: messageId,
-      sessionKey,
-      replyToId: asString(payload.replyToId || '').trim() || undefined,
-      message: {
-        platform: route.platform,
-        groupId: route.groupId,
-        userId: route.userId,
-        type: 'text',
+    this.enqueueOutbound(
+      this.buildTextOutboxEntry({
+        accountId,
+        sessionKey,
+        route,
+        text,
         kind: payload.kind,
-        msg: text,
-        path: '',
-        base64: '',
-        fileName: '',
-      },
-      ts: now(),
-    };
-
-    this.enqueueOutbound({
-      messageId,
-      accountId: normalizeAccountId(accountId),
-      sessionKey,
-      route,
-      payload: frame,
-      createdAt: now(),
-      retryCount: 0,
-      nextAttemptAt: now(),
-    });
+        replyToId: asString(payload.replyToId || '').trim() || undefined,
+      }),
+    );
   }
 
   handleConnect = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
@@ -4443,33 +4852,31 @@ class BncrBridgeRuntime {
         connected,
         onlineByConn,
         recentInboundReachable,
-        lastActivityAt: this.lastActivityByAccount.get(accountId) || null,
-        lastInboundAt: this.lastInboundByAccount.get(accountId) || null,
-        lastOutboundAt: this.lastOutboundByAccount.get(accountId) || null,
-        chosenLastEventAt: lastActAt,
         activeConnectionKey: this.activeConnectionByAccount.get(accountId) || null,
         activeConnections: Array.from(this.connections.values())
           .filter((c) => c.accountId === accountId)
           .map((c) => ({
             connId: c.connId,
             clientId: c.clientId,
-            connectedAt: c.connectedAt,
-            lastSeenAt: c.lastSeenAt,
+            inboundOnly: c.inboundOnly === true,
+            outboundReady: c.outboundReady === true,
+            preferredForOutbound: c.preferredForOutbound === true,
           })),
       });
-      const prevHealthTick = this.lastHealthTickByAccount.get(accountId) || null;
-      const nowMs = now();
-      const shouldLogHealthTick =
-        !prevHealthTick || prevHealthTick.sig !== healthSig || nowMs - prevHealthTick.at >= 5 * 60 * 1000;
-      if (shouldLogHealthTick) {
-        this.lastHealthTickByAccount.set(accountId, { at: nowMs, sig: healthSig });
-        const conns = Array.from(this.connections.values()).filter((c) => c.accountId === accountId).length;
-        this.logInfo(
-          'health',
-          `status-tick ${accountId}|${connected ? 'linked' : 'configured'}|onlineByConn=${onlineByConn}|recentInboundReachable=${recentInboundReachable}|conns=${conns}`,
-        );
-        this.logInfo('health', `status-tick ${healthSig}`, { debugOnly: true });
-      }
+      const conns = Array.from(this.connections.values()).filter((c) => c.accountId === accountId).length;
+      this.logInfoDedup(
+        'health',
+        `status-tick ${accountId}|changed|${connected ? 'linked' : 'configured'}|onlineByConn=${onlineByConn}|recentInboundReachable=${recentInboundReachable}|conns=${conns}`,
+        {
+          key: `health-status-tick:${accountId}`,
+          sig: healthSig,
+        },
+      );
+      this.logInfoDedup('health', `status-tick ${healthSig}`, {
+        key: `health-status-tick-debug:${accountId}`,
+        sig: healthSig,
+        debugOnly: true,
+      });
 
       ctx.setStatus?.({
         ...previous,
@@ -4614,6 +5021,7 @@ class BncrBridgeRuntime {
       to,
       text: asString(ctx.text || ''),
       mediaUrl: asString(ctx.mediaUrl || ''),
+      mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
       asVoice,
       audioAsVoice,
       replyToId: asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,

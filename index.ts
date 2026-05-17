@@ -408,7 +408,30 @@ const dispatchGatewayMethod = (name: GatewayMethodName, opts: any) => {
   if (!bridge) {
     throw new Error(`bncr gateway runtime unavailable for ${name}`);
   }
-  return gatewayMethodDispatchers[name](bridge, opts);
+  try {
+    return gatewayMethodDispatchers[name](bridge, opts);
+  } catch (error) {
+    const detail =
+      error instanceof Error
+        ? {
+            name: error.name,
+            message: error.message,
+            stack: error.stack || null,
+          }
+        : { name: 'NonError', message: String(error), stack: null };
+    emitBncrLogLine(
+      'error',
+      `[bncr] gateway method error ${JSON.stringify({
+        method: name,
+        bridgeId: bridge.getBridgeId?.() || null,
+        gatewayPid: bridge.gatewayPid || null,
+        detail,
+      })}`,
+      { debugOnly: true },
+      () => true,
+    );
+    throw error;
+  }
 };
 
 const mirrorGatewayMethodForMockApi = (api: OpenClawPluginApi, name: GatewayMethodName) => {

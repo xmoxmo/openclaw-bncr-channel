@@ -49,6 +49,9 @@ export type OutboxEntry = {
   lastPushAt?: number;
   lastPushConnId?: string;
   lastPushClientId?: string;
+  routeAttemptConnIds?: string[];
+  routeAttemptRound?: number;
+  fastReroutePending?: boolean;
 };
 
 export type BncrDiagnosticsSummary = {
