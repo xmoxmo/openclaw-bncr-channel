@@ -25,12 +25,66 @@ import {
   resolveDefaultDisplayName,
 } from './core/accounts.ts';
 import { BncrConfigSchema } from './core/config-schema.ts';
+import {
+  applyOutboundCapability,
+  buildCapabilitySnapshot,
+  clearOutboundCapability,
+  findCapabilityConnection,
+} from './core/connection-capability.ts';
+import {
+  buildFileTransferOutboxEntry as buildFileTransferOutboxEntryFromRuntime,
+  buildTextOutboxEntry as buildTextOutboxEntryFromRuntime,
+} from './core/outbox-entry-builders.ts';
+import { buildOutboxEnqueueDebugInfo } from './core/outbox-enqueue.ts';
+import {
+  appendDeadLetter,
+  buildDeadLetterEntry,
+  collectDueOutboxEntries,
+} from './core/outbox-queue.ts';
+import { resolveFileTransferGuard } from './core/outbox-file-transfer-guards.ts';
+import { prepareFileTransferRouteSelection } from './core/outbox-file-transfer-prep.ts';
+import {
+  buildFileTransferPushOkArgs,
+  buildFileTransferPushSuccessArgs,
+} from './core/outbox-file-transfer-bookkeeping.ts';
+import {
+  buildFileTransferPushFailureArgs,
+  resolveFileTransferFailureState,
+} from './core/outbox-file-transfer-failure.ts';
+import {
+  buildFileTransferBroadcastPayload,
+  buildFileTransferRouteSelectArgs,
+} from './core/outbox-file-transfer-success.ts';
+import { summarizeOutboxEntry } from './core/outbox-summary.ts';
+import { resolveTextPushGuard } from './core/outbox-text-push-guards.ts';
+import { prepareTextPushRouteSelection } from './core/outbox-text-push-prep.ts';
+import { buildTextPushFailureArgs } from './core/outbox-text-push-failure.ts';
+import {
+  buildTextPushBroadcastPayload,
+  buildTextPushOkArgs,
+  buildTextPushRouteSelectArgs,
+  buildTextPushSuccessArgs,
+} from './core/outbox-text-push-success.ts';
+import {
+  getRevalidatedAttemptReason,
+  hasAlternativeLiveConnection as hasAlternativeLiveConnectionFromRuntime,
+  hasRecentInboundReachability as hasRecentInboundReachabilityFromRuntime,
+  isRecentlyReachableConn as isRecentlyReachableConnFromRuntime,
+  resolveRecentInboundConnIds as resolveRecentInboundConnIdsFromRuntime,
+} from './core/connection-reachability.ts';
+import { buildDiagnosticsPayload } from './core/diagnostics.ts';
+import { buildDownlinkHealth as buildDownlinkHealthFromRuntime } from './core/downlink-health.ts';
+import { buildExtendedDiagnostics as buildExtendedDiagnosticsFromRuntime } from './core/extended-diagnostics.ts';
+import { observeLeaseState, matchesTransferOwner as matchesTransferOwnerFromRuntime } from './core/lease-state.ts';
 import { emitBncrLog, emitBncrLogLine } from './core/logging.ts';
-import { buildBncrPermissionSummary } from './core/permissions.ts';
 import { resolveBncrChannelPolicy } from './core/policy.ts';
-import { probeBncrAccount } from './core/probe.ts';
+import {
+  buildRegisterTraceSummary as buildRegisterTraceSummaryFromEntries,
+  classifyRegisterTrace as classifyRegisterTraceFromStack,
+} from './core/register-trace.ts';
 import {
   buildAccountRuntimeSnapshot,
+  buildAccountStatusSnapshot,
   buildIntegratedDiagnostics as buildIntegratedDiagnosticsFromRuntime,
   buildStatusHeadlineFromRuntime,
   buildStatusMetaFromRuntime,
@@ -66,6 +120,194 @@ import {
   buildBncrMediaOutboundFrame,
   resolveBncrOutboundMessageType,
 } from './messaging/outbound/media.ts';
+import {
+  buildEnqueueFromReplyDebugInfo,
+  buildFlushDebugInfo,
+  buildOutboxAckDebugInfo,
+  buildOutboxPushOkDebugInfo,
+  buildOutboxPushSkipDebugInfo,
+  buildOutboxRouteSelectDebugInfo,
+  buildOutboxScheduleDebugInfo,
+  buildPushFailureDebugInfo,
+  buildReplyMediaFallbackDebugInfo,
+  buildRetryRerouteDebugInfo,
+} from './messaging/outbound/diagnostics.ts';
+
+function buildInboundAcceptedLifecycleDebugInfo(args: {
+  stage: 'accepted';
+  bridge: string;
+  accountId: string;
+  connId: string;
+  clientId?: string;
+  outboundReady: boolean;
+  preferredForOutbound: boolean;
+  inboundOnly: boolean;
+  onlineAfterSeen: boolean;
+  recentInboundReachable: boolean;
+  activeConnectionKey: string | null;
+  activeConnections: Array<{
+    connId: string;
+    clientId?: string;
+    connectedAt: number;
+    lastSeenAt: number;
+  }>;
+}) {
+  return {
+    stage: args.stage,
+    bridge: args.bridge,
+    accountId: args.accountId,
+    connId: args.connId,
+    clientId: args.clientId,
+    outboundReady: args.outboundReady,
+    preferredForOutbound: args.preferredForOutbound,
+    inboundOnly: args.inboundOnly,
+    onlineAfterSeen: args.onlineAfterSeen,
+    recentInboundReachable: args.recentInboundReachable,
+    activeConnectionKey: args.activeConnectionKey,
+    activeConnections: args.activeConnections,
+  };
+}
+
+function resolveInboundSessionContext(args: {
+  cfg: any;
+  accountId: string;
+  peer: { kind: string } & Record<string, unknown>;
+  route: BncrRoute;
+  sessionKeyFromRoute?: string;
+  canonicalAgentId: string;
+  taskKey?: string;
+  text: string;
+  extractedText?: string;
+  resolveAgentRoute: (params: { cfg: any; channel: string; accountId: string; peer: unknown }) => {
+    sessionKey: string;
+  };
+}) {
+  const resolvedRoute = args.resolveAgentRoute({
+    cfg: args.cfg,
+    channel: CHANNEL_ID,
+    accountId: args.accountId,
+    peer: args.peer,
+  });
+  const baseSessionKey =
+    normalizeInboundSessionKey(args.sessionKeyFromRoute, args.route, args.canonicalAgentId) ||
+    resolvedRoute.sessionKey;
+  const taskSessionKey = withTaskSessionKey(baseSessionKey, args.taskKey);
+  return {
+    resolvedRoute,
+    baseSessionKey,
+    taskSessionKey,
+    sessionKey: taskSessionKey || baseSessionKey,
+    inboundText: asString(args.extractedText || args.text || ''),
+  };
+}
+
+function buildInboundResponsePayload(
+  args:
+    | {
+        kind: 'stale-ignored';
+        accountId: string;
+        msgId?: string | null;
+      }
+    | {
+        kind: 'invalid-peer';
+      }
+    | {
+        kind: 'duplicated';
+        accountId: string;
+        msgId?: string | null;
+      }
+    | {
+        kind: 'gate-denied';
+        accountId: string;
+        msgId?: string | null;
+        reason: string;
+      }
+    | {
+        kind: 'accepted';
+        accountId: string;
+        sessionKey: string;
+        msgId?: string | null;
+        taskKey?: string | null;
+      },
+) {
+  switch (args.kind) {
+    case 'stale-ignored':
+      return {
+        accepted: false,
+        stale: true,
+        ignored: true,
+        accountId: args.accountId,
+        msgId: args.msgId ?? null,
+      };
+    case 'invalid-peer':
+      return { error: 'platform/groupId/userId required' };
+    case 'duplicated':
+      return {
+        accepted: true,
+        duplicated: true,
+        accountId: args.accountId,
+        msgId: args.msgId ?? null,
+      };
+    case 'gate-denied':
+      return {
+        accepted: false,
+        accountId: args.accountId,
+        msgId: args.msgId ?? null,
+        reason: args.reason,
+      };
+    case 'accepted':
+      return {
+        accepted: true,
+        accountId: args.accountId,
+        sessionKey: args.sessionKey,
+        msgId: args.msgId ?? null,
+        taskKey: args.taskKey ?? null,
+      };
+  }
+}
+import {
+  buildMediaTextFallback,
+  type MediaDedupeCacheEntry,
+  normalizeMessageText,
+  normalizeReplyToId,
+} from './messaging/outbound/media-dedupe.ts';
+import {
+  buildReplyTextOutboxEntry,
+  enqueueNormalizedReplyPayload,
+  enqueueReplyMediaFallbackTextEntry,
+  enqueueReplyMediaFileTransferEntry,
+  enqueueSingleReplyMediaEntry,
+  enqueueReplyTextEntry,
+  hasReplyMediaEntries,
+  normalizeReplyPayload,
+  type NormalizedReplyPayload,
+  type ReplyMediaEntriesParams,
+  type ReplyMediaFileTransferParams,
+  type ReplyPayloadInput,
+} from './messaging/outbound/reply-enqueue.ts';
+import {
+  OUTBOUND_DEGRADE_REASON,
+  OUTBOUND_FLUSH_REASON,
+  OUTBOUND_FLUSH_TRIGGER,
+  OUTBOUND_SCHEDULE_SOURCE,
+  OUTBOUND_TERMINAL_REASON,
+} from './messaging/outbound/reasons.ts';
+import {
+  buildOutboxOnlineDebugInfo,
+  clampOutboxDrainDelay,
+  computeNextOutboxDelay,
+  computeOutboxRetryWait,
+  findDueOutboxEntry,
+  listAccountOutboxEntries,
+  selectOutboxFileTransferRouteCandidates,
+  selectOutboxRouteCandidates,
+  selectOutboxTargetAccounts,
+  updateMinOutboxDelay,
+} from './messaging/outbound/queue-selectors.ts';
+import {
+  computePushFailureDecision,
+  computeRetryRerouteDecision,
+} from './messaging/outbound/retry-policy.ts';
 import { sendBncrMedia, sendBncrText } from './messaging/outbound/send.ts';
 import { resolveBncrOutboundSessionRoute } from './messaging/outbound/session-route.ts';
 import {
@@ -248,48 +490,6 @@ function normalizeBncrSendParams(input: {
   };
 }
 
-type MediaDedupeCacheEntry = {
-  mediaUrl: string;
-  text: string;
-  replyToId: string;
-  createdAt: number;
-};
-
-function normalizeReplyToId(value: unknown): string {
-  return asString(value || '').trim();
-}
-
-function normalizeMessageText(value: unknown): string {
-  return asString(value || '').trim();
-}
-
-function shouldTreatReplyToAsSame(currentReplyToId: string, previousReplyToId: string): boolean {
-  if (!currentReplyToId || !previousReplyToId) return true;
-  return currentReplyToId === previousReplyToId;
-}
-
-function buildMediaTextFallback(params: {
-  currentText: string;
-  previousText: string;
-  currentReplyToId: string;
-  previousReplyToId: string;
-}): { text: string; reason: 'same-text-sent-checkmark' | 'text-changed-downgrade' } | null {
-  if (!shouldTreatReplyToAsSame(params.currentReplyToId, params.previousReplyToId)) {
-    return null;
-  }
-
-  if (params.currentText && params.currentText !== params.previousText) {
-    return {
-      text: params.currentText,
-      reason: 'text-changed-downgrade',
-    };
-  }
-
-  return {
-    text: '✅已发送',
-    reason: 'same-text-sent-checkmark',
-  };
-}
 
 function now() {
   return Date.now();
@@ -455,6 +655,9 @@ class BncrBridgeRuntime {
   private lastActivityByAccount = new Map<string, number>();
   private lastInboundByAccount = new Map<string, number>();
   private lastOutboundByAccount = new Map<string, number>();
+  private lastAckOkByAccount = new Map<string, number>();
+  private lastAckTimeoutByAccount = new Map<string, number>();
+  private ackTimeoutCountByAccount = new Map<string, number>();
   private channelAccountTimers = new Map<string, NodeJS.Timeout>();
   private logDedupeState = new Map<string, { at: number; sig: string }>();
   private canonicalAgentId: string | null = null;
@@ -472,6 +675,11 @@ class BncrBridgeRuntime {
   private pushTimer: NodeJS.Timeout | null = null;
   private pushDrainRunningAccounts = new Set<string>();
   private messageAckWaiters = new Map<
+    // Refactor boundary note (message ACK runtime):
+    // These waiters are part of the outbound message-ack lifecycle, not just a utility map.
+    // They are coupled to shutdown cleanup, resolveMessageAck, waitForMessageAck, outbox retry
+    // decisions, and diagnostics counts. Any future extraction should move lifecycle tests first,
+    // then move storage + resolver/wait APIs together rather than partially splitting the map only.
     string,
     {
       resolve: (result: 'acked' | 'timeout') => void;
@@ -639,11 +847,15 @@ class BncrBridgeRuntime {
   }
 
   private logOutboundSummary(entry: OutboxEntry) {
-    const msg = (entry.payload as any)?.message || {};
-    const type = asString(msg.type || (entry.payload as any)?.type || 'unknown');
-    const text = asString(msg.msg || '');
-    const preview = this.summarizeTextPreview(text);
-    this.logInfo('outbound', [type, this.summarizeScope(entry.route), preview].join('|'));
+    this.logInfo(
+      'outbound',
+      summarizeOutboxEntry({
+        entry,
+        asString,
+        formatDisplayScope,
+        summarizeTextPreview: (raw, limit) => this.summarizeTextPreview(raw, limit),
+      }),
+    );
   }
 
   private clearChannelAccountWorker(accountId: string, reason: string) {
@@ -657,41 +869,6 @@ class BncrBridgeRuntime {
       { debugOnly: true },
     );
     return true;
-  }
-
-  private classifyRegisterTrace(stack: string) {
-    if (
-      stack.includes('prepareSecretsRuntimeSnapshot') ||
-      stack.includes('resolveRuntimeWebTools') ||
-      stack.includes('resolvePluginWebSearchProviders')
-    ) {
-      return 'runtime/webtools';
-    }
-    if (stack.includes('startGatewayServer') || stack.includes('loadGatewayPlugins')) {
-      return 'gateway/startup';
-    }
-    if (stack.includes('resolvePluginImplicitProviders')) {
-      return 'provider/discovery/implicit';
-    }
-    if (stack.includes('resolvePluginDiscoveryProviders')) {
-      return 'provider/discovery/discovery';
-    }
-    if (stack.includes('resolvePluginProviders')) {
-      return 'provider/discovery/providers';
-    }
-    return 'other';
-  }
-
-  private dominantRegisterBucket(sourceBuckets: Record<string, number>) {
-    let winner: string | null = null;
-    let winnerCount = -1;
-    for (const [bucket, count] of Object.entries(sourceBuckets)) {
-      if (count > winnerCount) {
-        winner = bucket;
-        winnerCount = count;
-      }
-    }
-    return winner;
   }
 
   private captureDriftSnapshot(
@@ -713,41 +890,11 @@ class BncrBridgeRuntime {
   }
 
   private buildRegisterTraceSummary() {
-    const buckets: Record<string, number> = {};
-    let warmupCount = 0;
-    let postWarmupCount = 0;
-    let unexpectedRegisterAfterWarmup = false;
-    let lastUnexpectedRegisterAt: number | null = null;
-    const baseline = this.firstRegisterAt;
-
-    for (const trace of this.registerTraceRecent) {
-      buckets[trace.stackBucket] = (buckets[trace.stackBucket] || 0) + 1;
-      const isWarmup = baseline != null && trace.ts - baseline <= REGISTER_WARMUP_WINDOW_MS;
-      if (isWarmup) {
-        warmupCount += 1;
-      } else {
-        postWarmupCount += 1;
-        unexpectedRegisterAfterWarmup = true;
-        lastUnexpectedRegisterAt = trace.ts;
-      }
-    }
-
-    const dominantBucket = this.dominantRegisterBucket(buckets);
-    const likelyRuntimeRegistryDrift = postWarmupCount > 0;
-    const likelyStartupFanoutOnly = warmupCount > 0 && postWarmupCount === 0;
-
-    return {
-      startupWindowMs: REGISTER_WARMUP_WINDOW_MS,
-      traceWindowSize: this.registerTraceRecent.length,
-      sourceBuckets: buckets,
-      dominantBucket,
-      warmupRegisterCount: warmupCount,
-      postWarmupRegisterCount: postWarmupCount,
-      unexpectedRegisterAfterWarmup,
-      lastUnexpectedRegisterAt,
-      likelyRuntimeRegistryDrift,
-      likelyStartupFanoutOnly,
-    };
+    return buildRegisterTraceSummaryFromEntries({
+      traceRecent: this.registerTraceRecent,
+      firstRegisterAt: this.firstRegisterAt,
+      warmupWindowMs: REGISTER_WARMUP_WINDOW_MS,
+    });
   }
 
   noteRegister(meta: {
@@ -778,7 +925,7 @@ class BncrBridgeRuntime {
       .map((line) => line.trim())
       .filter(Boolean)
       .join(' <- ');
-    const stackBucket = this.classifyRegisterTrace(stack);
+    const stackBucket = classifyRegisterTraceFromStack(stack);
 
     const trace = {
       ts,
@@ -849,48 +996,21 @@ class BncrBridgeRuntime {
     const leaseId = typeof params.leaseId === 'string' ? params.leaseId.trim() : '';
     const connectionEpoch =
       typeof params.connectionEpoch === 'number' ? params.connectionEpoch : undefined;
-    if (!leaseId && connectionEpoch == null) return { stale: false, reason: 'missing' as const };
-    const staleByLease =
-      !!leaseId && this.primaryLeaseId != null && leaseId !== this.primaryLeaseId;
-    const staleByEpoch =
-      connectionEpoch != null &&
-      this.connectionEpoch > 0 &&
-      connectionEpoch !== this.connectionEpoch;
-    const stale = staleByLease || staleByEpoch;
-    if (!stale) return { stale: false, reason: 'ok' as const };
-    this.staleCounters.lastStaleAt = now();
-    switch (kind) {
-      case 'connect':
-        this.staleCounters.staleConnect += 1;
-        break;
-      case 'inbound':
-        this.staleCounters.staleInbound += 1;
-        break;
-      case 'activity':
-        this.staleCounters.staleActivity += 1;
-        break;
-      case 'ack':
-        this.staleCounters.staleAck += 1;
-        break;
-      case 'file.init':
-        this.staleCounters.staleFileInit += 1;
-        break;
-      case 'file.chunk':
-        this.staleCounters.staleFileChunk += 1;
-        break;
-      case 'file.complete':
-        this.staleCounters.staleFileComplete += 1;
-        break;
-      case 'file.abort':
-        this.staleCounters.staleFileAbort += 1;
-        break;
-    }
+    const observed = observeLeaseState({
+      kind,
+      params,
+      currentLeaseId: this.primaryLeaseId,
+      currentConnectionEpoch: this.connectionEpoch,
+      now: now(),
+      staleCounters: this.staleCounters,
+    });
+    if (!observed.stale) return observed;
     this.logWarn(
       'stale',
       `observed kind=${kind} lease=${leaseId || '-'} epoch=${connectionEpoch ?? '-'} currentLease=${this.primaryLeaseId || '-'} currentEpoch=${this.connectionEpoch}`,
       { debugOnly: true },
     );
-    return { stale: true, reason: 'mismatch' as const };
+    return observed;
   }
 
   private shouldIgnoreStaleEvent(params: {
@@ -923,20 +1043,14 @@ class BncrBridgeRuntime {
     connId: string;
     clientId?: string;
   }) {
-    const sameConn = !!params.ownerConnId && params.ownerConnId === params.connId;
-    const sameClient =
-      !params.ownerConnId &&
-      !!params.ownerClientId &&
-      !!params.clientId &&
-      params.ownerClientId === params.clientId;
-    return sameConn || sameClient;
+    return matchesTransferOwnerFromRuntime(params);
   }
 
   private buildExtendedDiagnostics(accountId: string) {
     const acc = normalizeAccountId(accountId);
     const diagnostics = this.buildIntegratedDiagnostics(acc) as Record<string, any>;
-    return {
-      ...diagnostics,
+    return buildExtendedDiagnosticsFromRuntime({
+      diagnostics,
       register: {
         bridgeId: this.bridgeId,
         gatewayPid: this.gatewayPid,
@@ -949,7 +1063,7 @@ class BncrBridgeRuntime {
         lastRegisterAt: this.lastRegisterAt,
         lastApiRebindAt: this.lastApiRebindAt,
         apiGeneration: this.apiGeneration,
-        traceRecent: this.registerTraceRecent.slice(),
+        traceRecent: this.registerTraceRecent,
         traceSummary: this.buildRegisterTraceSummary(),
         lastDriftSnapshot: this.lastDriftSnapshot,
       },
@@ -983,8 +1097,8 @@ class BncrBridgeRuntime {
           staleRejectFile: false,
         },
       },
-      stale: { ...this.staleCounters },
-    };
+      stale: this.staleCounters,
+    });
   }
 
   isDebugEnabled(): boolean {
@@ -1183,27 +1297,22 @@ class BncrBridgeRuntime {
   }
 
   private buildIntegratedDiagnostics(accountId: string) {
+    return buildIntegratedDiagnosticsFromRuntime(this.buildRuntimeStatusInput(accountId));
+  }
+
+  private buildDownlinkHealth(accountId: string) {
     const acc = normalizeAccountId(accountId);
-    return buildIntegratedDiagnosticsFromRuntime({
+    return buildDownlinkHealthFromRuntime({
       accountId: acc,
-      connected: this.isOnline(acc),
-      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
-      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
-      activeConnections: this.activeConnectionCount(acc),
-      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
-      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
-      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
-      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
-      startedAt: this.startedAt,
-      lastSession: this.lastSessionByAccount.get(acc) || null,
-      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
+      now: now(),
+      outboxEntries: this.outbox.values(),
+      lastAckOkAt: this.lastAckOkByAccount.get(acc) || null,
+      lastAckTimeoutAt: this.lastAckTimeoutByAccount.get(acc) || null,
+      recentAckTimeoutCount: this.getCounter(this.ackTimeoutCountByAccount, acc),
+      activeConnectionCount: this.activeConnectionCount(acc),
       lastInboundAt: this.lastInboundByAccount.get(acc) || null,
-      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
-      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc)
-        .length,
-      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
-      legacyAccountResidue: this.countLegacyAccountResidue(acc),
-      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
+      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
+      onlineByConn: this.isOnline(acc),
     });
   }
 
@@ -1571,6 +1680,11 @@ class BncrBridgeRuntime {
   }
 
   private resolvePushConnIds(accountId: string): Set<string> {
+    // Refactor boundary note (route selection):
+    // This selector is not a pure lookup. It combines active-owner preference, outbound readiness,
+    // preferred-for-outbound windows, recent inbound reachability, timeout penalties, and a final
+    // fallback pass over live connections. If this logic is extracted later, first isolate the
+    // candidate scoring / ordering into a pure function and keep the current fallback semantics intact.
     const acc = normalizeAccountId(accountId);
     const t = now();
     const connIds = new Set<string>();
@@ -1650,112 +1764,62 @@ class BncrBridgeRuntime {
 
   private hasRecentInboundReachability(accountId: string): boolean {
     const acc = normalizeAccountId(accountId);
-    const t = now();
-    const lastInboundAt = this.lastInboundByAccount.get(acc) || 0;
-    const lastActivityAt = this.lastActivityByAccount.get(acc) || 0;
-    const lastReachableAt = Math.max(lastInboundAt, lastActivityAt);
-    return lastReachableAt > 0 && t - lastReachableAt <= RECENT_INBOUND_SEND_WINDOW_MS;
+    return hasRecentInboundReachabilityFromRuntime({
+      now: now(),
+      windowMs: RECENT_INBOUND_SEND_WINDOW_MS,
+      lastInboundAt: this.lastInboundByAccount.get(acc) || 0,
+      lastActivityAt: this.lastActivityByAccount.get(acc) || 0,
+    });
   }
 
   private resolveRecentInboundConnIds(accountId: string): Set<string> {
     const acc = normalizeAccountId(accountId);
-    const t = now();
-    const connIds = new Set<string>();
-    if (!this.hasRecentInboundReachability(acc)) return connIds;
-
-    for (const c of this.connections.values()) {
-      if (c.accountId !== acc) continue;
-      if (!c.connId) continue;
-      if (t - c.lastSeenAt > CONNECT_TTL_MS * 2) continue;
-      connIds.add(c.connId);
-    }
-
-    return connIds;
+    return resolveRecentInboundConnIdsFromRuntime({
+      accountId: acc,
+      now: now(),
+      connectTtlMs: CONNECT_TTL_MS,
+      recentInboundReachable: this.hasRecentInboundReachability(acc),
+      connections: this.connections.values(),
+    });
   }
 
   private isRecentlyReachableConn(accountId: string, connId?: string, clientId?: string): boolean {
     const acc = normalizeAccountId(accountId);
-    const cid = asString(connId || '').trim();
-    const client = asString(clientId || '').trim() || undefined;
-    if (!cid) return false;
-
-    const recentConnIds = this.resolveRecentInboundConnIds(acc);
-    if (recentConnIds.has(cid)) return true;
-
     const activeKey = this.activeConnectionByAccount.get(acc);
-    if (!activeKey) return false;
-    const active = this.connections.get(activeKey);
-    if (!active?.connId) return false;
-    if (active.connId !== cid) return false;
-    if (client && active.clientId && active.clientId !== client) return false;
-    return true;
+    const active = activeKey ? this.connections.get(activeKey) || null : null;
+    return isRecentlyReachableConnFromRuntime({
+      accountId: acc,
+      connId,
+      clientId,
+      recentConnIds: this.resolveRecentInboundConnIds(acc),
+      activeConnection: active,
+    });
   }
 
   private isRevalidatedAttemptedConn(entry: OutboxEntry, connId: string): boolean {
-    const targetConnId = asString(connId || '').trim();
-    if (!targetConnId) return false;
-
     const acc = normalizeAccountId(entry.accountId);
-    const t = now();
-    const lastAttemptAt = Number(entry.lastAttemptAt || 0);
-    const recentInboundReachable = this.hasRecentInboundReachability(acc);
+    const revalidated = getRevalidatedAttemptReason({
+      entry,
+      connId,
+      accountId: acc,
+      now: now(),
+      connectTtlMs: CONNECT_TTL_MS,
+      recentInboundReachable: this.hasRecentInboundReachability(acc),
+      connections: this.connections.values(),
+    });
+    if (!revalidated) return false;
 
-    for (const conn of this.connections.values()) {
-      if (conn.accountId !== acc) continue;
-      if (conn.connId !== targetConnId) continue;
-      if (t - conn.lastSeenAt > CONNECT_TTL_MS) continue;
-      if ((conn as any).inboundOnly === true) continue;
-
-      const preferredForOutboundUntil = Number((conn as any).preferredForOutboundUntil || 0);
-      const outboundReadyUntil = Number((conn as any).outboundReadyUntil || 0);
-      const lastAckOkAt = Number((conn as any).lastAckOkAt || 0);
-      const lastPushTimeoutAt = Number((conn as any).lastPushTimeoutAt || 0);
-
-      const revalidatedByPreferred = preferredForOutboundUntil > t;
-      const revalidatedByReady = outboundReadyUntil > t;
-      const revalidatedByAck = lastAckOkAt > 0 && lastAckOkAt > lastAttemptAt;
-      const revalidatedByFreshReachability =
-        recentInboundReachable &&
-        lastPushTimeoutAt > 0 &&
-        lastPushTimeoutAt <= lastAttemptAt &&
-        conn.lastSeenAt > lastPushTimeoutAt;
-
-      const revalidated =
-        revalidatedByPreferred ||
-        revalidatedByReady ||
-        revalidatedByAck ||
-        revalidatedByFreshReachability;
-
-      if (revalidated) {
-        this.logInfo(
-          'outbox',
-          `revalidated-retry ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: acc,
-            connId: targetConnId,
-            reason: revalidatedByAck
-              ? 'ack-after-last-attempt'
-              : revalidatedByPreferred
-                ? 'preferred-ttl'
-                : revalidatedByReady
-                  ? 'ready-ttl'
-                  : 'fresh-reachability',
-            lastAttemptAt,
-            lastAckOkAt: lastAckOkAt || null,
-            lastPushTimeoutAt: lastPushTimeoutAt || null,
-            outboundReadyUntil: outboundReadyUntil || null,
-            preferredForOutboundUntil: preferredForOutboundUntil || null,
-            lastSeenAt: conn.lastSeenAt,
-            recentInboundReachable,
-          })}`,
-          { debugOnly: true },
-        );
-      }
-
-      return revalidated;
-    }
-
-    return false;
+    this.logInfo(
+      'outbox',
+      `revalidated-retry ${JSON.stringify({
+        messageId: entry.messageId,
+        accountId: acc,
+        connId: String(connId || '').trim(),
+        ...revalidated,
+      })}`,
+      { debugOnly: true },
+    );
+    return true;
   }
 
   private tryAdoptTransferOwner(args: {
@@ -1800,6 +1864,174 @@ class BncrBridgeRuntime {
     return retryableMarkers.some((marker) => msg.includes(marker));
   }
 
+  private async pushFileTransferSuccessPath(args: {
+    entry: OutboxEntry;
+    meta: Record<string, unknown>;
+    owner: ReturnType<BncrBridgeRuntime['resolveOutboxPushOwner']>;
+    connIds: Iterable<string>;
+    recentInboundReachable: boolean;
+    routeReason: string;
+    mediaUrl: string;
+  }): Promise<void> {
+    const media = await this.transferMediaToBncrClient({
+      accountId: args.entry.accountId,
+      sessionKey: args.entry.sessionKey,
+      route: args.entry.route,
+      mediaUrl: args.mediaUrl,
+      mediaLocalRoots: Array.isArray(args.meta.mediaLocalRoots)
+        ? args.meta.mediaLocalRoots.filter((v): v is string => typeof v === 'string')
+        : undefined,
+    });
+    const frame = this.buildFileTransferOutboundFrame({
+      entry: args.entry,
+      meta: args.meta,
+      media,
+      mediaUrl: args.mediaUrl,
+    });
+
+    this.gatewayContext!.broadcastToConnIds(
+      BNCR_PUSH_EVENT,
+      buildFileTransferBroadcastPayload({
+        frame,
+        messageId: args.entry.messageId,
+      }),
+      args.connIds,
+    );
+    this.logOutboxRouteSelect(
+      buildFileTransferRouteSelectArgs({
+        entry: args.entry,
+        connIds: args.connIds,
+        routeReason: args.routeReason,
+        recentInboundReachable: args.recentInboundReachable,
+        owner: args.owner,
+        event: BNCR_PUSH_EVENT,
+      }),
+    );
+    this.recordOutboxPushSuccess(
+      buildFileTransferPushSuccessArgs({
+        entry: args.entry,
+        connIds: args.connIds,
+        owner: args.owner,
+      }),
+    );
+    this.logOutboxPushOkSummary(args.entry.messageId);
+    this.logOutboxPushOk(
+      buildFileTransferPushOkArgs({
+        entry: args.entry,
+        connIds: args.connIds,
+        recentInboundReachable: args.recentInboundReachable,
+        event: BNCR_PUSH_EVENT,
+      }),
+    );
+  }
+
+  private handleFileTransferPushFailure(args: {
+    entry: OutboxEntry;
+    error: unknown;
+  }) {
+    this.recordOutboxPushFailure({
+      entry: args.entry,
+      error: args.error,
+      fallbackError: 'file-transfer-error',
+      persist: true,
+    });
+    const failure = resolveFileTransferFailureState({
+      entry: args.entry,
+      error: args.error,
+      isRetryableFileTransferError: (value) => this.isRetryableFileTransferError(value),
+    });
+    this.logOutboxPushFailureSummary(args.entry.messageId, args.entry.lastError);
+    this.logOutboxPushFailure(
+      buildFileTransferPushFailureArgs({
+        entry: args.entry,
+        retryable: failure.retryable,
+      }),
+    );
+    if (!failure.retryable) {
+      this.moveToDeadLetter(args.entry, failure.deadLetterReason);
+    }
+  }
+
+  private handleFileTransferPushGuardFailure(args: {
+    entry: OutboxEntry;
+    guard: Exclude<ReturnType<typeof resolveFileTransferGuard>, { ok: true }>;
+  }) {
+    this.recordOutboxPrePushFailure({
+      entry: args.entry,
+      lastError: args.guard.lastError,
+    });
+    if (args.guard.reason === 'media-url-missing') {
+      this.logOutboxPushFailure({
+        messageId: args.entry.messageId,
+        accountId: args.entry.accountId,
+        retryCount: args.entry.retryCount,
+        kind: 'file-transfer',
+        lastError: args.entry.lastError,
+      });
+      return;
+    }
+    this.logOutboxPushSkip({
+      messageId: args.entry.messageId,
+      accountId: args.entry.accountId,
+      kind: 'file-transfer',
+      reason: args.guard.reason === 'no-gateway-context' ? 'no-gateway-context' : 'no-active-connection',
+      recentInboundReachable:
+        args.guard.reason === 'no-active-connection' ? args.guard.recentInboundReachable : undefined,
+    });
+  }
+
+  private async tryPushFileTransferEntry(
+    entry: OutboxEntry,
+    meta: Record<string, unknown>,
+  ): Promise<boolean> {
+    const ctx = this.gatewayContext;
+    const owner = this.resolveOutboxPushOwner(entry.accountId);
+    const selection = prepareFileTransferRouteSelection({
+      entry,
+      owner,
+      resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
+      resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
+      hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
+      isRevalidatedAttemptedConn: (connId) => this.isRevalidatedAttemptedConn(entry, connId),
+      selectOutboxFileTransferRouteCandidates,
+    });
+    const guard = resolveFileTransferGuard({
+      gatewayContext: ctx,
+      entry,
+      owner,
+      routeSelection: selection,
+      mediaUrl: asString(meta.mediaUrl || '').trim(),
+    });
+    if (!guard.ok) {
+      this.handleFileTransferPushGuardFailure({
+        entry,
+        guard,
+      });
+      return false;
+    }
+
+    const { connIds, recentInboundReachable, routeReason, mediaUrl } = guard;
+
+    try {
+      await this.pushFileTransferSuccessPath({
+        entry,
+        meta,
+        owner,
+        connIds,
+        recentInboundReachable,
+        routeReason,
+        mediaUrl,
+      });
+      return true;
+    } catch (error) {
+      this.handleFileTransferPushFailure({
+        entry,
+        error,
+      });
+      return false;
+    }
+  }
+
   private buildFileTransferOutboxEntry(params: {
     accountId: string;
     sessionKey: string;
@@ -1812,31 +2044,22 @@ class BncrBridgeRuntime {
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
   }): OutboxEntry {
-    const messageId = randomUUID();
-    return {
-      messageId,
-      accountId: normalizeAccountId(params.accountId),
+    return buildFileTransferOutboxEntryFromRuntime({
+      createMessageId: () => randomUUID(),
+      now,
+      normalizeAccountId,
+      pushEvent: BNCR_PUSH_EVENT,
+      accountId: params.accountId,
       sessionKey: params.sessionKey,
       route: params.route,
-      payload: {
-        type: 'message.outbound',
-        sessionKey: params.sessionKey,
-        _meta: {
-          kind: 'file-transfer',
-          mediaUrl: params.mediaUrl,
-          mediaLocalRoots: params.mediaLocalRoots ? Array.from(params.mediaLocalRoots) : undefined,
-          text: asString(params.text || ''),
-          asVoice: params.asVoice === true,
-          audioAsVoice: params.audioAsVoice === true,
-          finalEvent: BNCR_PUSH_EVENT,
-          replyToId: asString(params.replyToId || '').trim() || undefined,
-          messageKind: params.kind,
-        },
-      },
-      createdAt: now(),
-      retryCount: 0,
-      nextAttemptAt: now(),
-    };
+      mediaUrl: params.mediaUrl,
+      mediaLocalRoots: params.mediaLocalRoots,
+      text: asString(params.text || ''),
+      asVoice: params.asVoice,
+      audioAsVoice: params.audioAsVoice,
+      kind: params.kind,
+      replyToId: asString(params.replyToId || '').trim() || undefined,
+    });
   }
 
   private pruneMediaDedupeCache(sessionKey: string, currentTime = now()) {
@@ -1906,6 +2129,39 @@ class BncrBridgeRuntime {
     });
   }
 
+  private buildFileTransferOutboundFrame(params: {
+    entry: OutboxEntry;
+    meta: Record<string, unknown>;
+    media: { fileName?: string; mimeType?: string; path?: string; base64?: string; type?: string };
+    mediaUrl: string;
+  }) {
+    const wantsVoice = params.meta.asVoice === true || params.meta.audioAsVoice === true;
+    const messageKind =
+      params.meta.messageKind === 'tool' ||
+      params.meta.messageKind === 'block' ||
+      params.meta.messageKind === 'final'
+        ? params.meta.messageKind
+        : undefined;
+
+    return buildBncrMediaOutboundFrame({
+      messageId: params.entry.messageId,
+      sessionKey: params.entry.sessionKey,
+      route: params.entry.route,
+      media: params.media,
+      mediaUrl: params.mediaUrl,
+      mediaMsg: asString(params.meta.text || ''),
+      fileName: resolveOutboundFileName({
+        mediaUrl: params.mediaUrl,
+        fileName: params.media.fileName,
+        mimeType: params.media.mimeType,
+      }),
+      hintedType: wantsVoice ? 'voice' : undefined,
+      kind: messageKind,
+      replyToId: normalizeReplyToId(params.meta.replyToId) || undefined,
+      now: now(),
+    });
+  }
+
   private buildTextOutboxEntry(params: {
     accountId: string;
     sessionKey: string;
@@ -1914,375 +2170,717 @@ class BncrBridgeRuntime {
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
   }): OutboxEntry {
-    const messageId = randomUUID();
-    const frame = {
-      type: 'message.outbound',
-      messageId,
-      idempotencyKey: messageId,
-      sessionKey: params.sessionKey,
-      replyToId: normalizeReplyToId(params.replyToId) || undefined,
-      message: {
-        platform: params.route.platform,
-        groupId: params.route.groupId,
-        userId: params.route.userId,
-        type: 'text',
-        kind: params.kind,
-        msg: params.text,
-        path: '',
-        base64: '',
-        fileName: '',
-      },
-      ts: now(),
-    };
-
-    return {
-      messageId,
-      accountId: normalizeAccountId(params.accountId),
+    return buildTextOutboxEntryFromRuntime({
+      createMessageId: () => randomUUID(),
+      now,
+      normalizeAccountId,
+      normalizeReplyToId,
+      accountId: params.accountId,
       sessionKey: params.sessionKey,
       route: params.route,
-      payload: frame,
-      createdAt: now(),
-      retryCount: 0,
-      nextAttemptAt: now(),
-    };
+      text: params.text,
+      kind: params.kind,
+      replyToId: params.replyToId,
+    });
   }
 
   private async tryPushEntry(entry: OutboxEntry): Promise<boolean> {
     const meta = isPlainObject(entry.payload?._meta) ? entry.payload._meta : null;
     if (meta?.kind === 'file-transfer') {
-      const ctx = this.gatewayContext;
-      if (!ctx) {
-        entry.lastError = 'gateway context unavailable';
-        this.outbox.set(entry.messageId, entry);
-        this.logInfo(
-          'outbox',
-          `push-skip ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            kind: 'file-transfer',
-            reason: 'no-gateway-context',
-          })}`,
-          { debugOnly: true },
-        );
-        return false;
-      }
-
-      const attemptedConnIds = new Set(
-        Array.isArray(entry.routeAttemptConnIds)
-          ? entry.routeAttemptConnIds.filter((v): v is string => typeof v === 'string' && !!v)
-          : [],
-      );
-      const routeCandidates = Array.from(this.resolvePushConnIds(entry.accountId));
-      const filteredCandidates = routeCandidates.filter(
-        (connId) =>
-          !attemptedConnIds.has(connId) || this.isRevalidatedAttemptedConn(entry, connId),
-      );
-      const owner = this.resolveOutboxPushOwner(entry.accountId);
-      const ownerConnId = owner?.connId && !attemptedConnIds.has(owner.connId) ? owner.connId : undefined;
-      let connIds = ownerConnId
-        ? new Set([ownerConnId])
-        : new Set(filteredCandidates.length ? filteredCandidates : routeCandidates);
-      const recentInboundReachable = this.hasRecentInboundReachability(entry.accountId);
-      const routeReason = ownerConnId
-        ? 'owner'
-        : connIds.size > 0
-          ? filteredCandidates.length > 0
-            ? 'active-connections'
-            : 'active-connections-reused'
-          : recentInboundReachable
-            ? 'recent-inbound-fallback'
-            : 'none';
-      if (!connIds.size && recentInboundReachable) {
-        const recentInboundConnIds = Array.from(this.resolveRecentInboundConnIds(entry.accountId));
-        const filteredRecentInboundConnIds = recentInboundConnIds.filter(
-          (connId) => !attemptedConnIds.has(connId),
-        );
-        connIds = new Set(
-          filteredRecentInboundConnIds.length > 0 ? filteredRecentInboundConnIds : recentInboundConnIds,
-        );
-      }
-      if (!connIds.size) {
-        entry.lastError = 'no active bncr client for file chunk transfer';
-        this.outbox.set(entry.messageId, entry);
-        this.logInfo(
-          'outbox',
-          `push-skip ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            kind: 'file-transfer',
-            reason: 'no-active-connection',
-            recentInboundReachable,
-          })}`,
-          { debugOnly: true },
-        );
-        return false;
-      }
-
-      const mediaUrl = asString(meta.mediaUrl || '').trim();
-      if (!mediaUrl) {
-        entry.lastError = 'file transfer mediaUrl missing';
-        this.outbox.set(entry.messageId, entry);
-        this.logInfo(
-          'outbox',
-          `push-fail ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            kind: 'file-transfer',
-            error: entry.lastError,
-          })}`,
-          { debugOnly: true },
-        );
-        return false;
-      }
-
-      try {
-        const media = await this.transferMediaToBncrClient({
-          accountId: entry.accountId,
-          sessionKey: entry.sessionKey,
-          route: entry.route,
-          mediaUrl,
-          mediaLocalRoots: Array.isArray(meta.mediaLocalRoots)
-            ? meta.mediaLocalRoots.filter((v): v is string => typeof v === 'string')
-            : undefined,
-        });
-        const wantsVoice = meta.asVoice === true || meta.audioAsVoice === true;
-        const frame = buildBncrMediaOutboundFrame({
-          messageId: entry.messageId,
-          sessionKey: entry.sessionKey,
-          route: entry.route,
-          media,
-          mediaUrl,
-          mediaMsg: asString(meta.text || ''),
-          fileName: resolveOutboundFileName({
-            mediaUrl,
-            fileName: media.fileName,
-            mimeType: media.mimeType,
-          }),
-          hintedType: wantsVoice ? 'voice' : undefined,
-          kind:
-            meta.messageKind === 'tool' ||
-            meta.messageKind === 'block' ||
-            meta.messageKind === 'final'
-              ? meta.messageKind
-              : undefined,
-          replyToId: asString(meta.replyToId || '').trim() || undefined,
-          now: now(),
-        });
-
-        ctx.broadcastToConnIds(
-          BNCR_PUSH_EVENT,
-          {
-            ...frame,
-            idempotencyKey: entry.messageId,
-          },
-          connIds,
-        );
-        this.logInfo(
-          'outbox',
-          `route-select ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            kind: 'file-transfer',
-            routeReason,
-            connIds: Array.from(connIds),
-            ownerConnId: owner?.connId || '',
-            ownerClientId: owner?.clientId || '',
-            recentInboundReachable,
-            event: BNCR_PUSH_EVENT,
-          })}`,
-          { debugOnly: true },
-        );
-        entry.lastPushAt = now();
-        entry.lastPushConnId =
-          owner?.connId || (connIds.size === 1 ? Array.from(connIds)[0] : undefined);
-        entry.lastPushClientId = owner?.clientId;
-        if (!Array.isArray(entry.routeAttemptConnIds)) entry.routeAttemptConnIds = [];
-        if (entry.lastPushConnId && !entry.routeAttemptConnIds.includes(entry.lastPushConnId)) {
-          entry.routeAttemptConnIds.push(entry.lastPushConnId);
-        }
-        entry.lastError = undefined;
-        this.outbox.set(entry.messageId, entry);
-        this.lastOutboundByAccount.set(entry.accountId, entry.lastPushAt);
-        this.markActivity(entry.accountId, entry.lastPushAt);
-        this.scheduleSave();
-        this.logInfo('outbox push ok', `mid=${entry.messageId}|q=${this.outbox.size}`);
-        this.logInfo(
-          'outbox',
-          `push-ok ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            kind: 'file-transfer',
-            connIds: Array.from(connIds),
-            ownerConnId: entry.lastPushConnId || '',
-            ownerClientId: entry.lastPushClientId || '',
-            recentInboundReachable,
-            event: BNCR_PUSH_EVENT,
-          })}`,
-          { debugOnly: true },
-        );
-        return true;
-      } catch (error) {
-        entry.lastError = asString((error as any)?.message || error || 'file-transfer-error');
-        this.outbox.set(entry.messageId, entry);
-        this.scheduleSave();
-        this.logInfo(
-          'outbox push fail',
-          `mid=${entry.messageId}|q=${this.outbox.size}|err=${entry.lastError}`,
-        );
-        this.logInfo(
-          'outbox',
-          `push-fail ${JSON.stringify({
-            messageId: entry.messageId,
-            accountId: entry.accountId,
-            kind: 'file-transfer',
-            retryable: this.isRetryableFileTransferError(error),
-            error: entry.lastError,
-          })}`,
-          { debugOnly: true },
-        );
-        if (!this.isRetryableFileTransferError(error)) {
-          this.moveToDeadLetter(entry, entry.lastError || 'file-transfer-failed');
-        }
-        return false;
-      }
+      return this.tryPushFileTransferEntry(entry, meta);
     }
 
+    return this.tryPushTextEntry(entry);
+  }
+
+  private pushTextSuccessPath(args: {
+    entry: OutboxEntry;
+    owner: ReturnType<BncrBridgeRuntime['resolveOutboxPushOwner']>;
+    connIds: Iterable<string>;
+    recentInboundReachable: boolean;
+    routeReason: string;
+    ownerConnId?: string;
+  }) {
+    this.gatewayContext!.broadcastToConnIds(
+      BNCR_PUSH_EVENT,
+      buildTextPushBroadcastPayload({
+        payload: args.entry.payload,
+        messageId: args.entry.messageId,
+      }),
+      args.connIds,
+    );
+    this.logOutboxRouteSelect(
+      buildTextPushRouteSelectArgs({
+        entry: args.entry,
+        connIds: args.connIds,
+        routeReason: args.routeReason,
+        recentInboundReachable: args.recentInboundReachable,
+        owner: args.owner,
+        event: BNCR_PUSH_EVENT,
+      }),
+    );
+    this.recordOutboxPushSuccess(
+      buildTextPushSuccessArgs({
+        entry: args.entry,
+        connIds: args.connIds,
+        ownerConnId: args.ownerConnId,
+        ownerClientId: args.ownerConnId ? args.owner?.clientId : undefined,
+      }),
+    );
+    this.logOutboxPushOkSummary(args.entry.messageId);
+    this.logOutboxPushOk(
+      buildTextPushOkArgs({
+        entry: args.entry,
+        connIds: args.connIds,
+        recentInboundReachable: args.recentInboundReachable,
+        event: BNCR_PUSH_EVENT,
+      }),
+    );
+  }
+
+  private handleTextPushFailure(args: {
+    entry: OutboxEntry;
+    error: unknown;
+  }) {
+    this.recordOutboxPushFailure({
+      entry: args.entry,
+      error: args.error,
+      fallbackError: 'push-error',
+    });
+    this.logOutboxPushFailureSummary(args.entry.messageId, args.entry.lastError);
+    this.logOutboxPushFailure(buildTextPushFailureArgs({ entry: args.entry }));
+  }
+
+  private async tryPushTextEntry(entry: OutboxEntry): Promise<boolean> {
     const ctx = this.gatewayContext;
-    if (!ctx) {
-      this.logInfo(
-        'outbox',
-        `push-skip ${JSON.stringify({
-          messageId: entry.messageId,
-          accountId: entry.accountId,
-          reason: 'no-gateway-context',
-        })}`,
-        { debugOnly: true },
-      );
+    const owner = this.resolveOutboxPushOwner(entry.accountId);
+    const selection = prepareTextPushRouteSelection({
+      entry,
+      owner,
+      resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
+      resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
+      hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
+      isRevalidatedAttemptedConn: (connId) => this.isRevalidatedAttemptedConn(entry, connId),
+      selectOutboxRouteCandidates,
+    });
+    const guard = resolveTextPushGuard({
+      gatewayContext: ctx,
+      entry,
+      routeSelection: selection,
+    });
+    if (!guard.ok) {
+      this.logOutboxPushSkip({
+        messageId: entry.messageId,
+        accountId: entry.accountId,
+        reason: guard.reason,
+        recentInboundReachable:
+          guard.reason === 'no-active-connection' ? guard.recentInboundReachable : undefined,
+      });
       return false;
     }
 
-    const attemptedConnIds = new Set(
-      Array.isArray(entry.routeAttemptConnIds)
-        ? entry.routeAttemptConnIds.filter((v): v is string => typeof v === 'string' && !!v)
-        : [],
-    );
-    const routeCandidates = Array.from(this.resolvePushConnIds(entry.accountId));
-    const unattemptedCandidates = routeCandidates.filter((connId) => !attemptedConnIds.has(connId));
-    const revalidatedCandidates = routeCandidates.filter(
-      (connId) => attemptedConnIds.has(connId) && this.isRevalidatedAttemptedConn(entry, connId),
-    );
-    const preferredCandidates = unattemptedCandidates.length > 0 ? unattemptedCandidates : routeCandidates;
-    const owner = this.resolveOutboxPushOwner(entry.accountId);
-    const ownerConnId = owner?.connId && preferredCandidates.includes(owner.connId) ? owner.connId : undefined;
-    let connIds = ownerConnId ? new Set([ownerConnId]) : new Set(preferredCandidates);
-    const recentInboundReachable = this.hasRecentInboundReachability(entry.accountId);
-    const routeReason = ownerConnId
-      ? 'owner'
-      : connIds.size > 0
-        ? unattemptedCandidates.length > 0
-          ? 'active-connections-unattempted-first'
-          : revalidatedCandidates.length > 0
-            ? 'active-connections-revalidated'
-            : 'active-connections-all-visible'
-        : recentInboundReachable
-          ? 'recent-inbound-fallback'
-          : 'none';
-    if (!connIds.size && recentInboundReachable) {
-      const recentInboundConnIds = Array.from(this.resolveRecentInboundConnIds(entry.accountId));
-      const unattemptedRecentInboundConnIds = recentInboundConnIds.filter(
-        (connId) => !attemptedConnIds.has(connId),
-      );
-      connIds = new Set(
-        unattemptedRecentInboundConnIds.length > 0
-          ? unattemptedRecentInboundConnIds
-          : recentInboundConnIds,
-      );
-    }
-    if (!connIds.size) {
-      this.logInfo(
-        'outbox',
-        `push-skip ${JSON.stringify({
-          messageId: entry.messageId,
-          accountId: entry.accountId,
-          reason: 'no-active-connection',
-          recentInboundReachable,
-        })}`,
-        { debugOnly: true },
-      );
-      return false;
-    }
+    const { connIds, recentInboundReachable, routeReason, ownerConnId } = guard;
 
     try {
-      const payload = {
-        ...entry.payload,
-        idempotencyKey: entry.messageId,
-      };
-
-      ctx.broadcastToConnIds(BNCR_PUSH_EVENT, payload, connIds);
-      this.logInfo(
-        'outbox',
-        `route-select ${JSON.stringify({
-          messageId: entry.messageId,
-          accountId: entry.accountId,
-          routeReason,
-          connIds: Array.from(connIds),
-          ownerConnId: owner?.connId || '',
-          ownerClientId: owner?.clientId || '',
-          recentInboundReachable,
-          event: BNCR_PUSH_EVENT,
-        })}`,
-        { debugOnly: true },
-      );
-      entry.lastPushAt = now();
-      entry.lastPushConnId =
-        ownerConnId || (connIds.size === 1 ? Array.from(connIds)[0] : undefined);
-      entry.lastPushClientId = ownerConnId ? owner?.clientId : undefined;
-      if (!Array.isArray(entry.routeAttemptConnIds)) entry.routeAttemptConnIds = [];
-      if (entry.lastPushConnId && !entry.routeAttemptConnIds.includes(entry.lastPushConnId)) {
-        entry.routeAttemptConnIds.push(entry.lastPushConnId);
-      }
-      this.outbox.set(entry.messageId, entry);
-      this.logInfo('outbox push ok', `mid=${entry.messageId}|q=${this.outbox.size}`);
-      this.logInfo(
-        'outbox',
-        `push-ok ${JSON.stringify({
-          messageId: entry.messageId,
-          accountId: entry.accountId,
-          connIds: Array.from(connIds),
-          ownerConnId: entry.lastPushConnId || '',
-          ownerClientId: entry.lastPushClientId || '',
-          recentInboundReachable,
-          event: BNCR_PUSH_EVENT,
-        })}`,
-        { debugOnly: true },
-      );
-      this.lastOutboundByAccount.set(entry.accountId, entry.lastPushAt);
-      this.markActivity(entry.accountId, entry.lastPushAt);
-      this.scheduleSave();
+      this.pushTextSuccessPath({
+        entry,
+        owner,
+        connIds,
+        recentInboundReachable,
+        routeReason,
+        ownerConnId,
+      });
       return true;
     } catch (error) {
-      entry.lastError = asString((error as any)?.message || error || 'push-error');
-      this.outbox.set(entry.messageId, entry);
-      this.logInfo('outbox push fail', `mid=${entry.messageId}|q=${this.outbox.size}|err=${entry.lastError}`);
-      this.logInfo(
-        'outbox',
-        `push-fail ${JSON.stringify({
-          messageId: entry.messageId,
-          accountId: entry.accountId,
-          error: entry.lastError,
-        })}`,
-        { debugOnly: true },
-      );
+      this.handleTextPushFailure({
+        entry,
+        error,
+      });
       return false;
     }
   }
 
+  private logOutboxPushSkip(args: {
+    messageId: string;
+    accountId: string;
+    kind?: 'file-transfer';
+    reason: string;
+    recentInboundReachable?: boolean;
+  }) {
+    this.logInfo(
+      'outbox',
+      `push-skip ${JSON.stringify(buildOutboxPushSkipDebugInfo(args))}`,
+      { debugOnly: true },
+    );
+  }
+
+  private logOutboxRouteSelect(args: {
+    messageId: string;
+    accountId: string;
+    kind?: 'file-transfer';
+    routeReason: string;
+    connIds: Iterable<string>;
+    ownerConnId: string;
+    ownerClientId: string;
+    recentInboundReachable: boolean;
+    event: string;
+  }) {
+    this.logInfo(
+      'outbox',
+      `route-select ${JSON.stringify(buildOutboxRouteSelectDebugInfo(args))}`,
+      { debugOnly: true },
+    );
+  }
+
+  private logOutboxPushFailure(args: {
+    messageId: string;
+    accountId: string;
+    retryCount: number;
+    kind?: 'file-transfer';
+    retryable?: boolean;
+    lastError?: string;
+  }) {
+    this.logInfo(
+      'outbox',
+      `push-fail ${JSON.stringify(buildPushFailureDebugInfo(args))}`,
+      { debugOnly: true },
+    );
+  }
+
+  private logOutboxPushOkSummary(messageId: string) {
+    this.logInfo('outbox push', `mid=${messageId}|q=${this.outbox.size}`);
+  }
+
+  private logOutboxPushFailureSummary(messageId: string, lastError?: string) {
+    this.logInfo('outbox push fail', `mid=${messageId}|q=${this.outbox.size}|err=${lastError}`);
+  }
+
+  private logOutboxAckSummary(
+    scope: 'outbox ack ok' | 'outbox ack retry' | 'outbox ack timeout' | 'outbox ack fatal',
+    args: {
+      messageId: string;
+      connId?: string;
+      clientId?: string;
+      err?: string;
+    },
+  ) {
+    const parts = [`mid=${args.messageId}`, `q=${this.outbox.size}`];
+    if (args.connId) parts.push(`conn=${args.connId}`);
+    if (args.clientId) parts.push(`client=${args.clientId}`);
+    if (args.err) parts.push(`err=${args.err}`);
+    this.logInfo(scope, parts.join('|'));
+  }
+
+  private logOutboxAckWait(args: {
+    entry: OutboxEntry;
+    requireAck: boolean;
+    ackResult: 'acked' | 'timeout';
+    onlineNow: boolean;
+    recentInboundReachable: boolean;
+  }) {
+    this.logInfo(
+      'outbox',
+      `ack ${JSON.stringify(
+        buildOutboxAckDebugInfo({
+          messageId: args.entry.messageId,
+          accountId: args.entry.accountId,
+          kind:
+            isPlainObject(args.entry.payload?._meta) && args.entry.payload?._meta?.kind === 'file-transfer'
+              ? 'file-transfer'
+              : undefined,
+          requireAck: args.requireAck,
+          ackResult: args.ackResult,
+          onlineNow: args.onlineNow,
+          recentInboundReachable: args.recentInboundReachable,
+          connIds: args.entry.lastPushConnId ? [args.entry.lastPushConnId] : [],
+          ownerConnId: args.entry.lastPushConnId,
+          ownerClientId: args.entry.lastPushClientId,
+          event: BNCR_PUSH_EVENT,
+        }),
+      )}`,
+      { debugOnly: true },
+    );
+  }
+
+  private logOutboxAckReroute(args: {
+    accountId: string;
+    entry: OutboxEntry;
+    requireAck: boolean;
+    currentConnId: string;
+    availableConnIds: string[];
+    decision: ReturnType<typeof computeRetryRerouteDecision>;
+    localNextDelay: number | null;
+  }) {
+    this.logOutboxAckSummary(
+      args.requireAck ? 'outbox ack timeout' : 'outbox ack retry',
+      {
+        messageId: args.entry.messageId,
+        connId: args.entry.lastPushConnId,
+        clientId: args.entry.lastPushClientId,
+        err: args.requireAck ? undefined : args.entry.lastError,
+      },
+    );
+    this.logInfo(
+      'outbox',
+      `retry-reroute ${JSON.stringify(
+        buildRetryRerouteDebugInfo({
+          messageId: args.entry.messageId,
+          accountId: args.accountId,
+          currentConnId: args.currentConnId,
+          decision: args.decision,
+          availableConnIds: args.availableConnIds,
+        }),
+      )}`,
+      { debugOnly: true },
+    );
+
+    this.logInfo(
+      'outbox',
+      `schedule ${JSON.stringify(
+        buildOutboxScheduleDebugInfo({
+          bridgeId: this.bridgeId,
+          accountId: args.accountId,
+          messageId: args.entry.messageId,
+          source: OUTBOUND_SCHEDULE_SOURCE.RETRY_REROUTE_WAIT,
+          wait: computeOutboxRetryWait(args.decision.nextAttemptAt, now()),
+          localNextDelay: args.localNextDelay,
+        }),
+      )}`,
+      { debugOnly: true },
+    );
+  }
+
+  private respondAckResult(
+    respond: GatewayRequestHandlerOptions['respond'],
+    stale: boolean,
+    result: { ok: true; movedToDeadLetter?: true; willRetry?: true },
+  ) {
+    respond(
+      true,
+      stale
+        ? { ...result, stale: true, staleAccepted: true }
+        : result,
+    );
+  }
+
+  private prepareAckHandling(args: {
+    params: any;
+    respond: GatewayRequestHandlerOptions['respond'];
+    client: GatewayRequestHandlerOptions['client'];
+    context: GatewayRequestHandlerOptions['context'];
+  }): {
+    accountId: string;
+    connId: string;
+    clientId?: string;
+    messageId: string;
+    entry: OutboxEntry;
+    staleObserved: { stale: boolean };
+  } | null {
+    const { params, respond, client, context } = args;
+    const accountId = normalizeAccountId(asString(params?.accountId || ''));
+    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
+    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
+    const messageId = asString(params?.messageId || '').trim();
+    const staleObserved = this.observeLease('ack', params ?? {});
+
+    this.logInfo(
+      'outbox',
+      `ack ${JSON.stringify({
+        accountId,
+        messageId,
+        ok: params?.ok !== false,
+        fatal: params?.fatal === true,
+        error: asString(params?.error || ''),
+        stale: staleObserved.stale,
+      })}`,
+      { debugOnly: true },
+    );
+    if (!messageId) {
+      respond(false, { error: 'messageId required' });
+      return null;
+    }
+
+    const entry = this.outbox.get(messageId);
+    if (!entry) {
+      respond(true, { ok: true, message: 'already-acked-or-missing', stale: staleObserved.stale });
+      return null;
+    }
+
+    if (entry.accountId !== accountId) {
+      respond(false, { error: 'account mismatch' });
+      return null;
+    }
+
+    if (staleObserved.stale) {
+      const sameConn = !!entry.lastPushConnId && entry.lastPushConnId === connId;
+      const sameClient =
+        !entry.lastPushConnId &&
+        !!entry.lastPushClientId &&
+        !!clientId &&
+        entry.lastPushClientId === clientId;
+      if (!(sameConn || sameClient)) {
+        this.logWarn(
+          'stale',
+          `ignore kind=ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} messageId=${messageId} reason=owner-mismatch lastPushConnId=${entry.lastPushConnId || '-'} lastPushClientId=${entry.lastPushClientId || '-'}`,
+          { debugOnly: true },
+        );
+        respond(true, { ok: true, stale: true, ignored: true });
+        return null;
+      }
+    } else {
+      this.rememberGatewayContext(context);
+      this.markSeen(accountId, connId, clientId);
+    }
+
+    return {
+      accountId,
+      connId,
+      clientId,
+      messageId,
+      entry,
+      staleObserved,
+    };
+  }
+
+  private handleAckOk(args: {
+    accountId: string;
+    messageId: string;
+    connId: string;
+    clientId?: string;
+    stale: boolean;
+  }) {
+    this.markOutboundCapability({
+      accountId: args.accountId,
+      connId: args.connId,
+      clientId: args.clientId,
+      outboundReady: true,
+      preferredForOutbound: true,
+    });
+    this.lastAckOkByAccount.set(args.accountId, now());
+    this.outbox.delete(args.messageId);
+    this.scheduleSave();
+    this.resolveMessageAck(args.messageId, 'acked');
+    this.logOutboxAckSummary('outbox ack ok', {
+      messageId: args.messageId,
+      connId: args.connId,
+      clientId: args.clientId,
+    });
+  }
+
+  private handleAckFatal(args: {
+    entry: OutboxEntry;
+    messageId: string;
+    connId: string;
+    clientId?: string;
+    error: string;
+  }) {
+    this.moveToDeadLetter(args.entry, args.error);
+    this.logOutboxAckSummary('outbox ack fatal', {
+      messageId: args.messageId,
+      connId: args.connId,
+      clientId: args.clientId,
+      err: args.error,
+    });
+  }
+
+  private handleAckRetry(args: {
+    entry: OutboxEntry;
+    messageId: string;
+    connId: string;
+    clientId?: string;
+    error: string;
+  }) {
+    args.entry.nextAttemptAt = now() + 1_000;
+    args.entry.lastError = args.error;
+    this.outbox.set(args.messageId, args.entry);
+    this.scheduleSave();
+    this.logOutboxAckSummary('outbox ack retry', {
+      messageId: args.messageId,
+      connId: args.connId,
+      clientId: args.clientId,
+      err: args.entry.lastError,
+    });
+  }
+
+  private handleAckOutcome(args: {
+    params: any;
+    respond: GatewayRequestHandlerOptions['respond'];
+    accountId: string;
+    connId: string;
+    clientId?: string;
+    messageId: string;
+    entry: OutboxEntry;
+    staleObserved: { stale: boolean };
+  }) {
+    const { params, respond, accountId, connId, clientId, messageId, entry, staleObserved } = args;
+    const ok = params?.ok !== false;
+    const fatal = params?.fatal === true;
+
+    if (ok) {
+      this.handleAckOk({
+        accountId,
+        messageId,
+        connId,
+        clientId,
+        stale: staleObserved.stale,
+      });
+      this.respondAckResult(respond, staleObserved.stale, { ok: true });
+      this.flushPushQueue({
+        accountId,
+        trigger: OUTBOUND_FLUSH_TRIGGER.ACK_OK,
+        reason: OUTBOUND_FLUSH_REASON.MESSAGE_ACKED,
+      });
+      return;
+    }
+
+    if (fatal) {
+      const error = asString(params?.error || 'fatal-ack');
+      this.handleAckFatal({
+        entry,
+        messageId,
+        connId,
+        clientId,
+        error,
+      });
+      this.respondAckResult(respond, staleObserved.stale, {
+        ok: true,
+        movedToDeadLetter: true,
+      });
+      return;
+    }
+
+    this.handleAckRetry({
+      entry,
+      messageId,
+      connId,
+      clientId,
+      error: asString(params?.error || 'retryable-ack'),
+    });
+
+    this.respondAckResult(respond, staleObserved.stale, {
+      ok: true,
+      willRetry: true,
+    });
+  }
+
+  private prepareInboundAcceptance(args: {
+    parsed: ReturnType<typeof parseBncrInboundParams>;
+    canonicalAgentId: string;
+  }):
+    | {
+        ok: true;
+        accountId: string;
+        sessionKey: string;
+        inboundText: string;
+        hasMedia: boolean;
+      }
+    | {
+        ok: false;
+        status: boolean;
+        payload: ReturnType<typeof buildInboundResponsePayload>;
+      } {
+    const { parsed, canonicalAgentId } = args;
+    const {
+      accountId,
+      platform,
+      groupId,
+      userId,
+      sessionKeyfromroute,
+      route,
+      text,
+      mediaBase64,
+      mediaPathFromTransfer,
+      msgId,
+      peer,
+      extracted,
+      dedupKey,
+    } = parsed;
+
+    if (!platform || (!userId && !groupId)) {
+      return {
+        ok: false,
+        status: false,
+        payload: buildInboundResponsePayload({ kind: 'invalid-peer' }),
+      };
+    }
+    if (this.markInboundDedupSeen(dedupKey)) {
+      return {
+        ok: false,
+        status: true,
+        payload: buildInboundResponsePayload({
+          kind: 'duplicated',
+          accountId,
+          msgId: msgId ?? null,
+        }),
+      };
+    }
+
+    const cfg = this.api.runtime.config.current();
+    const gate = checkBncrMessageGate({
+      parsed,
+      cfg,
+      account: resolveAccount(cfg, accountId),
+    });
+    if (!gate.allowed) {
+      return {
+        ok: false,
+        status: true,
+        payload: buildInboundResponsePayload({
+          kind: 'gate-denied',
+          accountId,
+          msgId: msgId ?? null,
+          reason: gate.reason,
+        }),
+      };
+    }
+
+    const { sessionKey, inboundText } = resolveInboundSessionContext({
+      cfg,
+      accountId,
+      peer,
+      route,
+      sessionKeyFromRoute: sessionKeyfromroute,
+      canonicalAgentId,
+      taskKey: extracted.taskKey,
+      text,
+      extractedText: extracted.text,
+      resolveAgentRoute: (params) => this.api.runtime.channel.routing.resolveAgentRoute(params),
+    });
+
+    return {
+      ok: true,
+      accountId,
+      sessionKey,
+      inboundText,
+      hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
+    };
+  }
+
+  private refreshLiveConnectionState(args: {
+    accountId: string;
+    connId: string;
+    clientId?: string;
+    outboundReady: boolean;
+    preferredForOutbound: boolean;
+    inboundOnly: boolean;
+    context: GatewayRequestHandlerOptions['context'];
+  }) {
+    const { accountId, connId, clientId, outboundReady, preferredForOutbound, inboundOnly, context } = args;
+    this.refreshAcceptedFileTransferLiveState({
+      accountId,
+      connId,
+      clientId,
+      context,
+    });
+    this.markOutboundCapability({
+      accountId,
+      connId,
+      clientId,
+      outboundReady,
+      preferredForOutbound,
+      inboundOnly,
+    });
+  }
+
+  private refreshAcceptedFileTransferLiveState(args: {
+    accountId: string;
+    connId: string;
+    clientId?: string;
+    context: GatewayRequestHandlerOptions['context'];
+  }) {
+    const { accountId, connId, clientId, context } = args;
+    this.rememberGatewayContext(context);
+    this.markSeen(accountId, connId, clientId);
+    this.markActivity(accountId);
+  }
+
+  private logOutboxPushOk(args: {
+    messageId: string;
+    accountId: string;
+    kind?: 'file-transfer';
+    connIds: Iterable<string>;
+    ownerConnId: string;
+    ownerClientId: string;
+    recentInboundReachable: boolean;
+    event: string;
+  }) {
+    this.logInfo(
+      'outbox',
+      `push ${JSON.stringify(buildOutboxPushOkDebugInfo(args))}`,
+      { debugOnly: true },
+    );
+  }
+
+  private recordOutboxPrePushFailure(args: {
+    entry: OutboxEntry;
+    lastError: string;
+  }) {
+    args.entry.lastError = args.lastError;
+    this.outbox.set(args.entry.messageId, args.entry);
+  }
+
+  private recordOutboxPushFailure(args: {
+    entry: OutboxEntry;
+    error: unknown;
+    fallbackError: string;
+    persist?: boolean;
+  }) {
+    args.entry.lastError = asString((args.error as any)?.message || args.error || args.fallbackError);
+    this.outbox.set(args.entry.messageId, args.entry);
+    if (args.persist) this.scheduleSave();
+  }
+
+  private recordOutboxPushSuccess(args: {
+    entry: OutboxEntry;
+    connIds: Iterable<string>;
+    ownerConnId?: string;
+    ownerClientId?: string;
+    clearLastError?: boolean;
+  }) {
+    const connIds = Array.from(args.connIds);
+    args.entry.lastPushAt = now();
+    args.entry.lastPushConnId =
+      args.ownerConnId || (connIds.length === 1 ? connIds[0] : undefined);
+    args.entry.lastPushClientId = args.ownerClientId;
+    if (!Array.isArray(args.entry.routeAttemptConnIds)) args.entry.routeAttemptConnIds = [];
+    if (
+      args.entry.lastPushConnId &&
+      !args.entry.routeAttemptConnIds.includes(args.entry.lastPushConnId)
+    ) {
+      args.entry.routeAttemptConnIds.push(args.entry.lastPushConnId);
+    }
+    if (args.clearLastError) args.entry.lastError = undefined;
+    this.outbox.set(args.entry.messageId, args.entry);
+    this.lastOutboundByAccount.set(args.entry.accountId, args.entry.lastPushAt);
+    this.markActivity(args.entry.accountId, args.entry.lastPushAt);
+    this.scheduleSave();
+  }
+
   private schedulePushDrain(delayMs = 0) {
+    // Structure note (drain scheduler):
+    // This is the single-timer gate for outbound retry scheduling. It intentionally coalesces
+    // multiple nudges into one pending timer and delegates all actual decision-making to
+    // flushPushQueue. If extracted later, preserve the current "one pending timer per bridge"
+    // behavior so retry cadence and burst control do not change accidentally.
     if (this.pushTimer) return;
-    const delay = Math.max(0, Math.min(Number(delayMs || 0), 30_000));
+    const delay = clampOutboxDrainDelay(delayMs);
+    this.logInfo(
+      'outbox',
+      `schedule ${JSON.stringify(
+        buildOutboxScheduleDebugInfo({
+          bridgeId: this.bridgeId,
+          source: OUTBOUND_SCHEDULE_SOURCE.SCHEDULE_PUSH_DRAIN,
+          wait: delay,
+        }),
+      )}`,
+      { debugOnly: true },
+    );
     this.pushTimer = setTimeout(() => {
       this.pushTimer = null;
-      void this.flushPushQueue({ trigger: 'timer', reason: 'scheduled-drain' });
+      void this.flushPushQueue({
+        trigger: OUTBOUND_FLUSH_TRIGGER.TIMER,
+        reason: OUTBOUND_FLUSH_REASON.SCHEDULED_DRAIN,
+      });
     }, delay);
   }
 
@@ -2327,26 +2925,51 @@ class BncrBridgeRuntime {
     trigger?: string;
     reason?: string;
   }): Promise<void> {
+    // Structure guide for future safe extraction:
+    // - pre-check: choose target accounts, skip accounts already draining, emit flush context logs
+    // - tryPush: pick one due entry per account and attempt actual outbound delivery
+    // - ack wait: wait for message ack when policy requires it, then decide whether queue can advance
+    // - degrade: mark timed-out / unconfirmed outbound capability on the attempted owner connection
+    // - reroute: avoid the timed-out route, optionally revalidate a previously-attempted conn, then retry once
+    // - retry scheduling: keep the entry in outbox, compute backoff / nextAttemptAt, and schedule next drain
+    // - dead letter: after max retries, move the entry out of the active outbox into deadLetter
+    //
+    // Wake-source note:
+    // flushPushQueue is entered from several distinct wake sources with different meanings:
+    // - enqueue/manual: a new outbound entry was added and may be due immediately
+    // - timer/scheduled-drain: retry scheduling says a previously-deferred entry is now worth retrying
+    // - connect/ws-online: a transport became available again
+    // - ack-ok/message-acked: one completed message may let the queue advance to the next
+    // - activity/activity-heartbeat: capability/liveness was refreshed
+    // - inbound/inbound-accepted: inbound traffic provided a fresh reachability signal
+    // Keep these wake reasons explicit in future refactors; they are observability and behavior boundaries,
+    // not just log decoration.
+    //
+    // Refactor boundary note:
+    // flushPushQueue is the core outbound state machine. It currently couples queue selection,
+    // route choice, ack policy, degrade/failover, retry timing, and dead-letter transitions.
+    // Future extraction should preserve these semantics first; do not split behavior and routing in
+    // the same change unless tests already lock the full lifecycle.
     const filterAcc = args?.accountId ? normalizeAccountId(args.accountId) : null;
     const trigger = asString(args?.trigger || '').trim() || 'manual';
     const reason = asString(args?.reason || '').trim() || undefined;
-    const targetAccounts = filterAcc
-      ? [filterAcc]
-      : Array.from(
-          new Set(
-            Array.from(this.outbox.values()).map((entry) => normalizeAccountId(entry.accountId)),
-          ),
-        );
+    const targetAccounts = selectOutboxTargetAccounts({
+      accountId: filterAcc,
+      outboxEntries: this.outbox.values(),
+      normalizeAccountId,
+    });
     this.logInfo(
       'outbox',
-      `flush ${JSON.stringify({
-        bridge: this.bridgeId,
-        accountId: filterAcc,
-        targetAccounts,
-        outboxSize: this.outbox.size,
-        trigger,
-        reason,
-      })}`,
+      `flush ${JSON.stringify(
+        buildFlushDebugInfo({
+          bridgeId: this.bridgeId,
+          accountId: filterAcc,
+          targetAccounts,
+          outboxSize: this.outbox.size,
+          trigger,
+          reason,
+        }),
+      )}`,
       { debugOnly: true },
     );
 
@@ -2358,18 +2981,15 @@ class BncrBridgeRuntime {
       const recentInboundReachable = this.hasRecentInboundReachability(acc);
       this.logInfo(
         'outbox',
-        `online ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId: acc,
-          online,
-          recentInboundReachable,
-          connections: Array.from(this.connections.values()).map((c) => ({
-            accountId: c.accountId,
-            connId: c.connId,
-            clientId: c.clientId,
-            lastSeenAt: c.lastSeenAt,
-          })),
-        })}`,
+        `online ${JSON.stringify(
+          buildOutboxOnlineDebugInfo({
+            bridgeId: this.bridgeId,
+            accountId: acc,
+            online,
+            recentInboundReachable,
+            connections: this.connections.values(),
+          }),
+        )}`,
         { debugOnly: true },
       );
       this.pushDrainRunningAccounts.add(acc);
@@ -2378,16 +2998,33 @@ class BncrBridgeRuntime {
 
         while (true) {
           const t = now();
-          const entries = Array.from(this.outbox.values())
-            .filter((entry) => normalizeAccountId(entry.accountId) === acc)
-            .sort((a, b) => a.createdAt - b.createdAt);
+          const entries = listAccountOutboxEntries({
+            accountId: acc,
+            outboxEntries: this.outbox.values(),
+            normalizeAccountId,
+          });
 
           if (!entries.length) break;
 
-          const entry = entries.find((item) => item.nextAttemptAt <= t);
+          const entry = findDueOutboxEntry(entries, t);
           if (!entry) {
-            const wait = Math.max(0, entries[0].nextAttemptAt - t);
-            localNextDelay = localNextDelay == null ? wait : Math.min(localNextDelay, wait);
+            const wait = computeNextOutboxDelay(entries, t);
+            if (wait != null) {
+              localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
+              this.logInfo(
+                'outbox',
+                `schedule ${JSON.stringify(
+                  buildOutboxScheduleDebugInfo({
+                    bridgeId: this.bridgeId,
+                    accountId: acc,
+                    source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_NO_DUE_ENTRY,
+                    wait,
+                    localNextDelay,
+                  }),
+                )}`,
+                { debugOnly: true },
+              );
+            }
             break;
           }
 
@@ -2401,18 +3038,13 @@ class BncrBridgeRuntime {
               ackResult = await this.waitForMessageAck(entry.messageId, PUSH_ACK_TIMEOUT_MS);
             }
 
-            this.logInfo(
-              'outbox',
-              `ack ${JSON.stringify({
-                messageId: entry.messageId,
-                accountId: entry.accountId,
-                requireAck,
-                ackResult,
-                onlineNow,
-                recentInboundReachable,
-              })}`,
-              { debugOnly: true },
-            );
+            this.logOutboxAckWait({
+              entry,
+              requireAck,
+              ackResult,
+              onlineNow,
+              recentInboundReachable,
+            });
 
             if (!this.outbox.has(entry.messageId)) {
               await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
@@ -2429,7 +3061,9 @@ class BncrBridgeRuntime {
                 accountId: acc,
                 connId: entry.lastPushConnId || undefined,
                 clientId: entry.lastPushClientId || undefined,
-                reason: requireAck ? 'ack-timeout' : 'push-unconfirmed',
+                reason: requireAck
+                  ? OUTBOUND_DEGRADE_REASON.ACK_TIMEOUT
+                  : OUTBOUND_DEGRADE_REASON.PUSH_UNCONFIRMED,
               });
             }
 
@@ -2437,62 +3071,59 @@ class BncrBridgeRuntime {
               ? entry.routeAttemptConnIds.filter((v): v is string => typeof v === 'string' && !!v)
               : [];
             const currentConnId = asString(entry.lastPushConnId || '').trim();
-            if (currentConnId && !attemptedConnIds.includes(currentConnId)) attemptedConnIds.push(currentConnId);
             const availableConnIds = Array.from(this.resolvePushConnIds(acc));
-            const revalidatedConnIds = attemptedConnIds.filter((connId) =>
-              this.isRevalidatedAttemptedConn(entry, connId),
-            );
-            const hasUntriedAlternative = availableConnIds.some((connId) => !attemptedConnIds.includes(connId));
-            const shouldFastReroute = requireAck && entry.fastReroutePending !== true && hasUntriedAlternative;
-
-            entry.routeAttemptConnIds = attemptedConnIds;
-            if (shouldFastReroute) entry.fastReroutePending = true;
-
-            entry.retryCount += 1;
-            entry.lastAttemptAt = now();
-            if (entry.retryCount > MAX_RETRY) {
-              this.logInfo(
-                'outbox ack fatal',
-                `mid=${entry.messageId}|q=${this.outbox.size}|err=${entry.lastError || (requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed')}`,
-              );
-              this.moveToDeadLetter(
-                entry,
-                entry.lastError || (requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed'),
-              );
-              continue;
-            }
-            entry.nextAttemptAt = shouldFastReroute ? now() + 1_000 : now() + backoffMs(entry.retryCount);
-            entry.lastError = requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed';
-            if (!hasUntriedAlternative) {
-              entry.routeAttemptConnIds = [];
-              entry.routeAttemptRound = Number(entry.routeAttemptRound || 0) + 1;
-              entry.fastReroutePending = false;
-            }
-            this.outbox.set(entry.messageId, entry);
-            this.scheduleSave();
-            this.logInfo(
-              requireAck ? 'outbox ack timeout' : 'outbox ack retry',
-              `mid=${entry.messageId}|q=${this.outbox.size}${requireAck ? '' : `|err=${entry.lastError}`}`,
-            );
-            this.logInfo(
-              'outbox',
-              `retry-reroute ${JSON.stringify({
-                messageId: entry.messageId,
-                accountId: acc,
-                currentConnId,
+            const decision = computeRetryRerouteDecision(
+              {
+                nowMs: now(),
+                maxRetry: MAX_RETRY,
+                requireAck,
+                currentRetryCount: entry.retryCount,
+                currentRouteAttemptRound: Number(entry.routeAttemptRound || 0),
+                currentFastReroutePending: entry.fastReroutePending === true,
+                lastError: entry.lastError,
+                currentConnId: currentConnId || undefined,
                 attemptedConnIds,
                 availableConnIds,
-                revalidatedConnIds,
-                hasUntriedAlternative,
-                shouldFastReroute,
-                routeAttemptRound: entry.routeAttemptRound || 0,
-                nextAttemptAt: entry.nextAttemptAt,
-              })}`,
-              { debugOnly: true },
+              },
+              { backoffMs },
             );
 
-            const wait = Math.max(0, entry.nextAttemptAt - now());
-            localNextDelay = localNextDelay == null ? wait : Math.min(localNextDelay, wait);
+            if (decision.kind === 'dead-letter') {
+              this.logInfo(
+                'outbox ack fatal',
+                `mid=${entry.messageId}|q=${this.outbox.size}|err=${decision.terminalReason}`,
+              );
+              this.moveToDeadLetter(entry, decision.terminalReason);
+              continue;
+            }
+
+            entry.routeAttemptConnIds = decision.attemptedConnIds;
+            entry.fastReroutePending = decision.fastReroutePending;
+            entry.retryCount = decision.nextRetryCount;
+            entry.lastAttemptAt = decision.lastAttemptAt;
+            entry.nextAttemptAt = decision.nextAttemptAt;
+            entry.lastError = decision.lastError;
+            entry.routeAttemptRound = decision.routeAttemptRound;
+            this.outbox.set(entry.messageId, entry);
+            this.scheduleSave();
+            if (requireAck) {
+              this.lastAckTimeoutByAccount.set(acc, now());
+              this.ackTimeoutCountByAccount.set(
+                acc,
+                this.getCounter(this.ackTimeoutCountByAccount, acc) + 1,
+              );
+            }
+            const wait = computeOutboxRetryWait(decision.nextAttemptAt, now());
+            localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
+            this.logOutboxAckReroute({
+              accountId: acc,
+              entry,
+              requireAck,
+              currentConnId,
+              availableConnIds,
+              decision,
+              localNextDelay,
+            });
             await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
             break;
           }
@@ -2502,34 +3133,82 @@ class BncrBridgeRuntime {
             continue;
           }
 
-          const nextAttempt = entry.retryCount + 1;
-          if (nextAttempt > MAX_RETRY) {
-            this.moveToDeadLetter(entry, entry.lastError || 'push-retry-limit');
+          const decision = computePushFailureDecision(
+            {
+              nowMs: t,
+              maxRetry: MAX_RETRY,
+              currentRetryCount: entry.retryCount,
+              lastError: entry.lastError,
+            },
+            { backoffMs },
+          );
+          if (decision.kind === 'dead-letter') {
+            this.moveToDeadLetter(entry, decision.terminalReason);
             continue;
           }
 
-          entry.retryCount = nextAttempt;
-          entry.lastAttemptAt = t;
-          entry.nextAttemptAt = t + backoffMs(nextAttempt);
-          entry.lastError = entry.lastError || 'push-retry';
+          entry.retryCount = decision.nextRetryCount;
+          entry.lastAttemptAt = decision.lastAttemptAt;
+          entry.nextAttemptAt = decision.nextAttemptAt;
+          entry.lastError = decision.lastError;
           this.outbox.set(entry.messageId, entry);
           this.scheduleSave();
 
-          const wait = Math.max(0, entry.nextAttemptAt - t);
-          localNextDelay = localNextDelay == null ? wait : Math.min(localNextDelay, wait);
+          const wait = computeOutboxRetryWait(decision.nextAttemptAt, t);
+          localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
+          this.logInfo(
+            'outbox',
+            `schedule ${JSON.stringify(
+              buildOutboxScheduleDebugInfo({
+                bridgeId: this.bridgeId,
+                accountId: acc,
+                messageId: entry.messageId,
+                source: OUTBOUND_SCHEDULE_SOURCE.PUSH_FAIL_WAIT,
+                wait,
+                localNextDelay,
+              }),
+            )}`,
+            { debugOnly: true },
+          );
           break;
         }
 
         if (localNextDelay != null) {
-          globalNextDelay =
-            globalNextDelay == null ? localNextDelay : Math.min(globalNextDelay, localNextDelay);
+          globalNextDelay = updateMinOutboxDelay(globalNextDelay, localNextDelay);
+          this.logInfo(
+            'outbox',
+            `schedule ${JSON.stringify(
+              buildOutboxScheduleDebugInfo({
+                bridgeId: this.bridgeId,
+                accountId: acc,
+                source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_NEXT_DELAY_MERGE,
+                localNextDelay,
+                globalNextDelay,
+              }),
+            )}`,
+            { debugOnly: true },
+          );
         }
       } finally {
         this.pushDrainRunningAccounts.delete(acc);
       }
     }
 
-    if (globalNextDelay != null) this.schedulePushDrain(globalNextDelay);
+    if (globalNextDelay != null) {
+      this.logInfo(
+        'outbox',
+        `schedule ${JSON.stringify(
+          buildOutboxScheduleDebugInfo({
+            bridgeId: this.bridgeId,
+            source: OUTBOUND_SCHEDULE_SOURCE.FLUSH_NEXT_DRAIN,
+            globalNextDelay,
+            wait: globalNextDelay,
+          }),
+        )}`,
+        { debugOnly: true },
+      );
+      this.schedulePushDrain(globalNextDelay);
+    }
   }
 
   private async waitForMessageAck(messageId: string, waitMs: number): Promise<'acked' | 'timeout'> {
@@ -2723,52 +3402,45 @@ class BncrBridgeRuntime {
     const acc = normalizeAccountId(args.accountId);
     const key = this.connectionKey(acc, args.clientId);
     const t = Number(args.at || now());
-    const current = this.connections.get(key) as (BncrConnection & {
-      outboundReadyUntil?: number;
-      preferredForOutboundUntil?: number;
-      inboundOnly?: boolean;
-    }) | undefined;
+    const current = this.connections.get(key) as BncrConnection | undefined;
     if (!current || current.connId !== args.connId) return;
 
-    if (args.inboundOnly === true) {
-      current.inboundOnly = true;
-      current.outboundReadyUntil = undefined;
-      current.preferredForOutboundUntil = undefined;
-    } else {
-      if (typeof args.inboundOnly === 'boolean') current.inboundOnly = false;
-      if (args.outboundReady === true || args.preferredForOutbound === true) {
-        current.outboundReadyUntil = t + OUTBOUND_READY_TTL_MS;
-      }
-      if (args.preferredForOutbound === true) {
-        current.preferredForOutboundUntil = t + PREFERRED_OUTBOUND_TTL_MS;
-      }
-    }
+    const next = applyOutboundCapability({
+      connection: current,
+      at: t,
+      outboundReadyTtlMs: OUTBOUND_READY_TTL_MS,
+      preferredOutboundTtlMs: PREFERRED_OUTBOUND_TTL_MS,
+      outboundReady: args.outboundReady,
+      preferredForOutbound: args.preferredForOutbound,
+      inboundOnly: args.inboundOnly,
+    });
 
-    this.connections.set(key, current as BncrConnection);
+    this.connections.set(key, next as BncrConnection);
+    const snapshot = buildCapabilitySnapshot(next);
     const connectionCapabilityPayload = {
       bridge: this.bridgeId,
       accountId: acc,
-      connId: current.connId,
-      clientId: current.clientId,
+      connId: next.connId,
+      clientId: next.clientId,
       outboundReady: args.outboundReady === true,
       preferredForOutbound: args.preferredForOutbound === true,
-      inboundOnly: current.inboundOnly === true,
-      outboundReadyUntil: current.outboundReadyUntil || null,
-      preferredForOutboundUntil: current.preferredForOutboundUntil || null,
+      inboundOnly: snapshot.inboundOnly,
+      outboundReadyUntil: snapshot.outboundReadyUntil,
+      preferredForOutboundUntil: snapshot.preferredForOutboundUntil,
     };
     const connectionCapabilitySig = JSON.stringify({
       bridge: this.bridgeId,
       accountId: acc,
-      connId: current.connId,
-      clientId: current.clientId || null,
+      connId: next.connId,
+      clientId: next.clientId || null,
       outboundReady: args.outboundReady === true,
       preferredForOutbound: args.preferredForOutbound === true,
-      inboundOnly: current.inboundOnly === true,
-      outboundReadyActive: Number(current.outboundReadyUntil || 0) > t,
-      preferredForOutboundActive: Number(current.preferredForOutboundUntil || 0) > t,
+      inboundOnly: snapshot.inboundOnly,
+      outboundReadyActive: Number(snapshot.outboundReadyUntil || 0) > t,
+      preferredForOutboundActive: Number(snapshot.preferredForOutboundUntil || 0) > t,
     });
     this.logInfoDedupJson('connection', 'capability', connectionCapabilityPayload, {
-      key: `connection-capability:${acc}:${current.clientId || current.connId}`,
+      key: `connection-capability:${acc}:${next.clientId || next.connId}`,
       sig: connectionCapabilitySig,
       debugOnly: true,
     });
@@ -2780,20 +3452,14 @@ class BncrBridgeRuntime {
     currentClientId?: string,
   ): boolean {
     const acc = normalizeAccountId(accountId);
-    const t = now();
-    const currentConn = asString(currentConnId || '').trim();
-    const currentClient = asString(currentClientId || '').trim() || undefined;
-
-    for (const conn of this.connections.values()) {
-      if (conn.accountId !== acc) continue;
-      if (!conn.connId) continue;
-      if (t - conn.lastSeenAt > CONNECT_TTL_MS) continue;
-      const sameConn = !!currentConn && conn.connId === currentConn;
-      const sameClient = !currentConn && !!currentClient && conn.clientId === currentClient;
-      if (sameConn || sameClient) continue;
-      return true;
-    }
-    return false;
+    return hasAlternativeLiveConnectionFromRuntime({
+      accountId: acc,
+      now: now(),
+      connectTtlMs: CONNECT_TTL_MS,
+      currentConnId,
+      currentClientId,
+      connections: this.connections.values(),
+    });
   }
 
   private degradeOutboundCapability(args: {
@@ -2811,33 +3477,16 @@ class BncrBridgeRuntime {
       args.clientId,
     );
     const currentKey = this.activeConnectionByAccount.get(acc) || null;
-    let matchedKey: string | null = null;
-    let matchedConn: (BncrConnection & {
-      outboundReadyUntil?: number;
-      preferredForOutboundUntil?: number;
-      inboundOnly?: boolean;
-    }) | null = null;
+    const matched = findCapabilityConnection({
+      accountId: acc,
+      connId: args.connId,
+      clientId: args.clientId,
+      connections: this.connections.entries(),
+    });
 
-    for (const [key, conn] of this.connections.entries()) {
-      if (conn.accountId !== acc) continue;
-      if (args.connId && conn.connId !== args.connId) continue;
-      if (args.clientId && conn.clientId !== args.clientId) continue;
-      matchedKey = key;
-      matchedConn = conn as BncrConnection & {
-        outboundReadyUntil?: number;
-        preferredForOutboundUntil?: number;
-        inboundOnly?: boolean;
-      };
-      break;
-    }
+    if (!matched) return;
 
-    if (!matchedKey || !matchedConn) return;
-
-    const before = {
-      outboundReadyUntil: matchedConn.outboundReadyUntil || null,
-      preferredForOutboundUntil: matchedConn.preferredForOutboundUntil || null,
-      inboundOnly: matchedConn.inboundOnly === true,
-    };
+    const before = buildCapabilitySnapshot(matched.connection);
 
     if (!hasAlternativeLiveConnection) {
       this.logInfo(
@@ -2845,12 +3494,12 @@ class BncrBridgeRuntime {
         `outbound-degrade skip ${JSON.stringify({
           bridge: this.bridgeId,
           accountId: acc,
-          connId: matchedConn.connId,
-          clientId: matchedConn.clientId,
+          connId: matched.connection.connId,
+          clientId: matched.connection.clientId,
           reason: args.reason,
           at: t,
           currentActiveKey: currentKey,
-          degradedKey: matchedKey,
+          degradedKey: matched.key,
           skipReason: 'no-alternative-live-connection',
           before,
         })}`,
@@ -2859,27 +3508,22 @@ class BncrBridgeRuntime {
       return;
     }
 
-    matchedConn.outboundReadyUntil = undefined;
-    matchedConn.preferredForOutboundUntil = undefined;
-    this.connections.set(matchedKey, matchedConn as BncrConnection);
+    const next = clearOutboundCapability(matched.connection);
+    this.connections.set(matched.key, next as BncrConnection);
 
     this.logInfo(
       'connection',
       `outbound-degrade ${JSON.stringify({
         bridge: this.bridgeId,
         accountId: acc,
-        connId: matchedConn.connId,
-        clientId: matchedConn.clientId,
+        connId: next.connId,
+        clientId: next.clientId,
         reason: args.reason,
         at: t,
         currentActiveKey: currentKey,
-        degradedKey: matchedKey,
+        degradedKey: matched.key,
         before,
-        after: {
-          outboundReadyUntil: matchedConn.outboundReadyUntil || null,
-          preferredForOutboundUntil: matchedConn.preferredForOutboundUntil || null,
-          inboundOnly: matchedConn.inboundOnly === true,
-        },
+        after: buildCapabilitySnapshot(next),
       })}`,
       { debugOnly: true },
     );
@@ -3088,7 +3732,7 @@ class BncrBridgeRuntime {
       const timer = setTimeout(() => {
         this.fileAckWaiters.delete(key);
         this.logWarn(
-          'file-ack-timeout',
+          OUTBOUND_TERMINAL_REASON.FILE_ACK_TIMEOUT,
           JSON.stringify({
             bridge: this.bridgeId,
             transferId,
@@ -3230,80 +3874,64 @@ class BncrBridgeRuntime {
     return { path: finalPath, fileSha256: sha };
   }
 
-  private buildStatusMeta(accountId: string) {
+  private buildRuntimeQueueSnapshot(accountId: string) {
+    const pending = Array.from(this.outbox.values()).filter((v) => v.accountId === accountId).length;
+    const deadLetter = this.deadLetter.filter((v) => v.accountId === accountId).length;
+    const sessionRoutesCount = Array.from(this.sessionRoutes.values()).filter(
+      (v) => v.accountId === accountId,
+    ).length;
+    return {
+      pending,
+      deadLetter,
+      sessionRoutesCount,
+      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(accountId),
+      legacyAccountResidue: this.countLegacyAccountResidue(accountId),
+    };
+  }
+
+  private buildRuntimeEventCounters(accountId: string) {
+    return {
+      connectEvents: this.getCounter(this.connectEventsByAccount, accountId),
+      inboundEvents: this.getCounter(this.inboundEventsByAccount, accountId),
+      activityEvents: this.getCounter(this.activityEventsByAccount, accountId),
+      ackEvents: this.getCounter(this.ackEventsByAccount, accountId),
+    };
+  }
+
+  private buildRuntimeActivitySnapshot(accountId: string) {
+    return {
+      activeConnections: this.activeConnectionCount(accountId),
+      lastSession: this.lastSessionByAccount.get(accountId) || null,
+      lastActivityAt: this.lastActivityByAccount.get(accountId) || null,
+      lastInboundAt: this.lastInboundByAccount.get(accountId) || null,
+      lastOutboundAt: this.lastOutboundByAccount.get(accountId) || null,
+    };
+  }
+
+  private buildRuntimeStatusInput(accountId: string, overrides: { running?: boolean } = {}) {
     const acc = normalizeAccountId(accountId);
-    return buildStatusMetaFromRuntime({
+    return {
       accountId: acc,
       connected: this.isOnline(acc),
-      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
-      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
-      activeConnections: this.activeConnectionCount(acc),
-      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
-      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
-      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
-      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
+      ...this.buildRuntimeQueueSnapshot(acc),
+      ...this.buildRuntimeEventCounters(acc),
+      ...this.buildRuntimeActivitySnapshot(acc),
       startedAt: this.startedAt,
-      lastSession: this.lastSessionByAccount.get(acc) || null,
-      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
-      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
-      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
-      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc)
-        .length,
-      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
-      legacyAccountResidue: this.countLegacyAccountResidue(acc),
+      running: overrides.running,
       channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
-    });
+    };
+  }
+
+  private buildStatusMeta(accountId: string) {
+    return buildStatusMetaFromRuntime(this.buildRuntimeStatusInput(accountId));
   }
 
   getAccountRuntimeSnapshot(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    return buildAccountRuntimeSnapshot({
-      accountId: acc,
-      connected: this.isOnline(acc),
-      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
-      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
-      activeConnections: this.activeConnectionCount(acc),
-      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
-      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
-      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
-      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
-      startedAt: this.startedAt,
-      lastSession: this.lastSessionByAccount.get(acc) || null,
-      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
-      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
-      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
-      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc)
-        .length,
-      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
-      legacyAccountResidue: this.countLegacyAccountResidue(acc),
-      running: true,
-      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
-    });
+    return buildAccountRuntimeSnapshot(this.buildRuntimeStatusInput(accountId, { running: true }));
   }
 
   private buildStatusHeadline(accountId: string): string {
-    const acc = normalizeAccountId(accountId);
-    return buildStatusHeadlineFromRuntime({
-      accountId: acc,
-      connected: this.isOnline(acc),
-      pending: Array.from(this.outbox.values()).filter((v) => v.accountId === acc).length,
-      deadLetter: this.deadLetter.filter((v) => v.accountId === acc).length,
-      activeConnections: this.activeConnectionCount(acc),
-      connectEvents: this.getCounter(this.connectEventsByAccount, acc),
-      inboundEvents: this.getCounter(this.inboundEventsByAccount, acc),
-      activityEvents: this.getCounter(this.activityEventsByAccount, acc),
-      ackEvents: this.getCounter(this.ackEventsByAccount, acc),
-      startedAt: this.startedAt,
-      lastSession: this.lastSessionByAccount.get(acc) || null,
-      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
-      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
-      lastOutboundAt: this.lastOutboundByAccount.get(acc) || null,
-      sessionRoutesCount: Array.from(this.sessionRoutes.values()).filter((v) => v.accountId === acc)
-        .length,
-      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(acc),
-      legacyAccountResidue: this.countLegacyAccountResidue(acc),
-      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
-    });
+    return buildStatusHeadlineFromRuntime(this.buildRuntimeStatusInput(accountId));
   }
 
   getStatusHeadline(accountId: string): string {
@@ -3331,22 +3959,21 @@ class BncrBridgeRuntime {
   }
 
   private enqueueOutbound(entry: OutboxEntry) {
-    const msg = (entry.payload as any)?.message || {};
-    const type = asString(msg.type || (entry.payload as any)?.type || 'unknown');
-    const text = asString(msg.msg || '');
-    const displayScope = formatDisplayScope(entry.route);
+    // Structure note (outbox enqueue entrypoint):
+    // This is the sync handoff from message construction into the outbound state machine.
+    // Responsibilities are intentionally narrow here: log/summary, persist into outbox,
+    // schedule state save, then nudge flushPushQueue. Future refactors should keep enqueue
+    // lightweight and avoid reintroducing retry / route / ACK policy decisions at this layer.
     this.logInfo(
       'outbound',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        messageId: entry.messageId,
-        accountId: entry.accountId,
-        sessionKey: entry.sessionKey,
-        scope: displayScope,
-        type,
-        textLen: text.length,
-        textPreview: text.slice(0, 120),
-      }),
+      JSON.stringify(
+        buildOutboxEnqueueDebugInfo({
+          bridgeId: this.bridgeId,
+          entry,
+          asString,
+          formatDisplayScope,
+        }),
+      ),
       { debugOnly: true },
     );
     this.logOutboundSummary(entry);
@@ -3356,50 +3983,46 @@ class BncrBridgeRuntime {
   }
 
   private moveToDeadLetter(entry: OutboxEntry, reason: string) {
-    const dead: OutboxEntry = {
-      ...entry,
-      lastError: reason,
-    };
-    this.deadLetter.push(dead);
-    if (this.deadLetter.length > 1000) this.deadLetter = this.deadLetter.slice(-1000);
+    // Structure note (terminal transition):
+    // Dead-lettering is the terminal state transition for an outbox entry. It also resolves any
+    // waiter still blocked on the message id with timeout semantics, so future extraction should
+    // treat dead-letter storage and waiter cleanup as one boundary rather than separate utilities.
+    //
+    // Queue-lifecycle note:
+    // This path is shared by both explicit fatal outcomes and retry exhaustion. Keep that distinction
+    // visible in callers, but keep the final sink centralized here so terminal accounting, persistence,
+    // and waiter cleanup cannot drift apart.
+    const dead = buildDeadLetterEntry(entry, reason);
+    this.deadLetter = appendDeadLetter({
+      deadLetter: this.deadLetter,
+      entry: dead,
+      maxEntries: 1000,
+    });
     this.outbox.delete(entry.messageId);
     this.resolveMessageAck(entry.messageId, 'timeout');
     this.scheduleSave();
   }
 
   private collectDue(accountId: string, maxBatch: number): Array<Record<string, unknown>> {
-    const due: Array<Record<string, unknown>> = [];
-    const t = now();
     const key = normalizeAccountId(accountId);
+    const result = collectDueOutboxEntries({
+      outbox: this.outbox.values(),
+      accountId: key,
+      now: now(),
+      maxBatch,
+      maxRetry: MAX_RETRY,
+      backoffMs,
+    });
 
-    for (const entry of this.outbox.values()) {
-      if (entry.accountId !== key) continue;
-      if (entry.nextAttemptAt > t) continue;
-
-      const nextAttempt = entry.retryCount + 1;
-      if (nextAttempt > MAX_RETRY) {
-        this.moveToDeadLetter(entry, 'retry-limit');
-        continue;
-      }
-
-      entry.retryCount = nextAttempt;
-      entry.lastAttemptAt = t;
-      entry.nextAttemptAt = t + backoffMs(nextAttempt);
+    for (const entry of result.updatedEntries) {
       this.outbox.set(entry.messageId, entry);
-
-      due.push({
-        ...entry.payload,
-        _meta: {
-          retryCount: entry.retryCount,
-          nextAttemptAt: entry.nextAttemptAt,
-        },
-      });
-
-      if (due.length >= maxBatch) break;
+    }
+    for (const entry of result.deadLetterEntries) {
+      this.moveToDeadLetter(entry, entry.lastError || 'retry-limit');
     }
 
-    if (due.length) this.scheduleSave();
-    return due;
+    if (result.duePayloads.length) this.scheduleSave();
+    return result.duePayloads;
   }
 
   private async payloadMediaToBase64(
@@ -3417,6 +4040,301 @@ class BncrBridgeRuntime {
     };
   }
 
+  private async loadOutboundTransferMedia(params: {
+    mediaUrl: string;
+    mediaLocalRoots?: readonly string[];
+  }): Promise<{
+    loaded: Awaited<ReturnType<OpenClawPluginApi['runtime']['media']['loadWebMedia']>>;
+    size: number;
+    mimeType?: string;
+    fileName: string;
+  }> {
+    const loaded = await this.api.runtime.media.loadWebMedia(params.mediaUrl, {
+      localRoots: params.mediaLocalRoots,
+      maxBytes: 50 * 1024 * 1024,
+    });
+    const size = loaded.buffer.byteLength;
+    const mimeType = loaded.contentType;
+    const fileName = resolveOutboundFileName({
+      mediaUrl: params.mediaUrl,
+      fileName: loaded.fileName,
+      mimeType,
+    });
+    return { loaded, size, mimeType, fileName };
+  }
+
+  private buildTransferRouteDiagnostics(args: {
+    accountId: string;
+    recentInboundReachable: boolean;
+  }) {
+    const directConnIds = this.resolvePushConnIds(args.accountId);
+    const recentConnIds = args.recentInboundReachable
+      ? this.resolveRecentInboundConnIds(args.accountId)
+      : new Set<string>();
+    const activeConnectionKey = this.activeConnectionByAccount.get(args.accountId) || null;
+    const accountConnections = Array.from(this.connections.values())
+      .filter((c) => c.accountId === args.accountId)
+      .map((c) => ({
+        connId: c.connId,
+        clientId: c.clientId,
+        connectedAt: c.connectedAt,
+        lastSeenAt: c.lastSeenAt,
+      }));
+
+    return {
+      directConnIds,
+      recentConnIds,
+      activeConnectionKey,
+      accountConnections,
+    };
+  }
+
+  private selectTransferConnIds(args: {
+    directConnIds: Set<string>;
+    recentConnIds: Set<string>;
+    recentInboundReachable: boolean;
+  }) {
+    let connIds = args.directConnIds;
+    if (!connIds.size && args.recentInboundReachable) {
+      connIds = args.recentConnIds;
+    }
+    return connIds;
+  }
+
+  private logFileChunkDiag(args: {
+    accountId: string;
+    sessionKey: string;
+    mediaUrl: string;
+    hasGatewayContext: boolean;
+    activeConnectionKey: string | null;
+    ownerConnId?: string;
+    ownerClientId?: string;
+    directConnIds: Iterable<string>;
+    recentInboundReachable: boolean;
+    recentConnIds: Iterable<string>;
+    accountConnections: Array<{
+      connId: string;
+      clientId?: string;
+      connectedAt: number;
+      lastSeenAt: number;
+    }>;
+  }) {
+    this.logInfo(
+      'file-chunk-diag',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        accountId: args.accountId,
+        sessionKey: args.sessionKey,
+        mediaUrl: args.mediaUrl,
+        hasGatewayContext: args.hasGatewayContext,
+        activeConnectionKey: args.activeConnectionKey,
+        ownerConnId: args.ownerConnId || null,
+        ownerClientId: args.ownerClientId || null,
+        directConnIds: Array.from(args.directConnIds),
+        recentInboundReachable: args.recentInboundReachable,
+        recentConnIds: Array.from(args.recentConnIds),
+        accountConnections: args.accountConnections,
+      }),
+      { debugOnly: true },
+    );
+  }
+
+  private logFileTransferStart(args: {
+    transferId: string;
+    accountId: string;
+    sessionKey: string;
+    mediaUrl: string;
+    fileName: string;
+    mimeType?: string;
+    fileSize: number;
+    chunkSize: number;
+    totalChunks: number;
+    connIds: Iterable<string>;
+    ownerConnId?: string;
+    ownerClientId?: string;
+  }) {
+    this.logInfo(
+      'file-transfer-start',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        transferId: args.transferId,
+        accountId: args.accountId,
+        sessionKey: args.sessionKey,
+        mediaUrl: args.mediaUrl,
+        fileName: args.fileName,
+        mimeType: args.mimeType,
+        fileSize: args.fileSize,
+        chunkSize: args.chunkSize,
+        totalChunks: args.totalChunks,
+        connIds: Array.from(args.connIds),
+        ownerConnId: args.ownerConnId || null,
+        ownerClientId: args.ownerClientId || null,
+      }),
+      { debugOnly: true },
+    );
+  }
+
+  private logFileTransferChunkSend(args: {
+    transferId: string;
+    accountId: string;
+    chunkIndex: number;
+    attempt: number;
+    offset: number;
+    size: number;
+    connIds: Iterable<string>;
+  }) {
+    this.logInfo(
+      'file-transfer-chunk-send',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        transferId: args.transferId,
+        accountId: args.accountId,
+        chunkIndex: args.chunkIndex,
+        attempt: args.attempt,
+        offset: args.offset,
+        size: args.size,
+        connIds: Array.from(args.connIds),
+      }),
+      { debugOnly: true },
+    );
+  }
+
+  private logFileTransferChunkAck(args: {
+    transferId: string;
+    accountId: string;
+    chunkIndex: number;
+    attempt: number;
+  }) {
+    this.logInfo(
+      'file-transfer-chunk-ack',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        transferId: args.transferId,
+        accountId: args.accountId,
+        chunkIndex: args.chunkIndex,
+        attempt: args.attempt,
+      }),
+      { debugOnly: true },
+    );
+  }
+
+  private logFileTransferChunkAckFail(args: {
+    transferId: string;
+    accountId: string;
+    chunkIndex: number;
+    attempt: number;
+    error: unknown;
+  }) {
+    this.logWarn(
+      'file-transfer-chunk-ack-fail',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        transferId: args.transferId,
+        accountId: args.accountId,
+        chunkIndex: args.chunkIndex,
+        attempt: args.attempt,
+        error: asString((args.error as Error)?.message || args.error),
+      }),
+      { debugOnly: true },
+    );
+  }
+
+  private logFileTransferCompleteSend(args: {
+    transferId: string;
+    accountId: string;
+    connIds: Iterable<string>;
+  }) {
+    this.logInfo(
+      'file-transfer-complete-send',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        transferId: args.transferId,
+        accountId: args.accountId,
+        connIds: Array.from(args.connIds),
+      }),
+      { debugOnly: true },
+    );
+  }
+
+  private logFileTransferCompleteAck(args: {
+    transferId: string;
+    accountId: string;
+    payload: { path: string };
+  }) {
+    this.logInfo(
+      'file-transfer-complete-ack',
+      JSON.stringify({
+        bridge: this.bridgeId,
+        transferId: args.transferId,
+        accountId: args.accountId,
+        payload: args.payload,
+      }),
+      { debugOnly: true },
+    );
+  }
+
+  private buildFileTransferInitPayload(args: {
+    transferId: string;
+    sessionKey: string;
+    route: BncrRoute;
+    fileName: string;
+    mimeType?: string;
+    fileSize: number;
+    chunkSize: number;
+    totalChunks: number;
+    fileSha256: string;
+  }) {
+    return {
+      transferId: args.transferId,
+      direction: 'oc2bncr' as const,
+      sessionKey: args.sessionKey,
+      platform: args.route.platform,
+      groupId: args.route.groupId,
+      userId: args.route.userId,
+      fileName: args.fileName,
+      mimeType: args.mimeType,
+      fileSize: args.fileSize,
+      chunkSize: args.chunkSize,
+      totalChunks: args.totalChunks,
+      fileSha256: args.fileSha256,
+      ts: now(),
+    };
+  }
+
+  private buildInitialFileSendTransferState(args: {
+    transferId: string;
+    accountId: string;
+    sessionKey: string;
+    route: BncrRoute;
+    fileName: string;
+    mimeType?: string;
+    fileSize: number;
+    chunkSize: number;
+    totalChunks: number;
+    fileSha256: string;
+    ownerConnId?: string;
+    ownerClientId?: string;
+  }): FileSendTransferState {
+    return {
+      transferId: args.transferId,
+      accountId: normalizeAccountId(args.accountId),
+      sessionKey: args.sessionKey,
+      route: args.route,
+      fileName: args.fileName,
+      mimeType: args.mimeType || 'application/octet-stream',
+      fileSize: args.fileSize,
+      chunkSize: args.chunkSize,
+      totalChunks: args.totalChunks,
+      fileSha256: args.fileSha256,
+      startedAt: now(),
+      status: 'init',
+      ackedChunks: new Set(),
+      failedChunks: new Map(),
+      ownerConnId: args.ownerConnId,
+      ownerClientId: args.ownerClientId,
+    };
+  }
+
   private async sleepMs(ms: number): Promise<void> {
     await new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
   }
@@ -3426,6 +4344,10 @@ class BncrBridgeRuntime {
     chunkIndex: number;
     timeoutMs?: number;
   }): Promise<void> {
+    // Refactor boundary note (file-transfer / ACK coupling):
+    // Chunk-level ACK waiting is part of the file-transfer sub-protocol, but it depends directly on
+    // mutable transfer runtime state in fileSendTransfers. If this is extracted later, preserve the
+    // current state ownership and timeout semantics before moving polling/wait logic out to another file.
     const { transferId, chunkIndex } = params;
     const timeoutMs = Math.max(
       1_000,
@@ -3463,6 +4385,10 @@ class BncrBridgeRuntime {
     transferId: string;
     timeoutMs?: number;
   }): Promise<{ path: string }> {
+    // Refactor boundary note (file-transfer completion):
+    // Completion ACK waiting shares the same transfer lifecycle boundary as chunk ACKs and relies on
+    // transfer status transitions performed elsewhere in channel.ts. Keep completion wait behavior and
+    // transfer-state mutation boundaries aligned if/when file-transfer pieces are moved out.
     const { transferId } = params;
     const timeoutMs = Math.max(2_000, Math.min(Number(params.timeoutMs || 60_000), 120_000));
     const started = now();
@@ -3500,23 +4426,20 @@ class BncrBridgeRuntime {
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
   }): Promise<{
+    // Refactor boundary note (file-transfer root):
+    // This method is the root of the outbound file-transfer protocol. It owns media loading,
+    // inline-vs-chunk mode selection, route/owner selection for transfer delivery, chunk send,
+    // chunk ACK waits, complete ACK waits, and abort propagation. Future extraction should treat
+    // these as one protocol boundary first, rather than splitting transport and state handling separately.
     mode: 'base64' | 'chunk';
     mimeType?: string;
     fileName?: string;
     mediaBase64?: string;
     path?: string;
   }> {
-    const loaded = await this.api.runtime.media.loadWebMedia(params.mediaUrl, {
-      localRoots: params.mediaLocalRoots,
-      maxBytes: 50 * 1024 * 1024,
-    });
-
-    const size = loaded.buffer.byteLength;
-    const mimeType = loaded.contentType;
-    const fileName = resolveOutboundFileName({
+    const { loaded, size, mimeType, fileName } = await this.loadOutboundTransferMedia({
       mediaUrl: params.mediaUrl,
-      fileName: loaded.fileName,
-      mimeType,
+      mediaLocalRoots: params.mediaLocalRoots,
     });
 
     if (!FILE_FORCE_CHUNK && size <= FILE_INLINE_THRESHOLD) {
@@ -3531,44 +4454,31 @@ class BncrBridgeRuntime {
     const ctx = this.gatewayContext;
     const owner = this.resolveOutboxPushOwner(params.accountId);
     const recentInboundReachable = this.hasRecentInboundReachability(params.accountId);
-    const directConnIds = this.resolvePushConnIds(params.accountId);
-    const recentConnIds = recentInboundReachable
-      ? this.resolveRecentInboundConnIds(params.accountId)
-      : new Set<string>();
     const accountId = normalizeAccountId(params.accountId);
-    const activeConnectionKey = this.activeConnectionByAccount.get(accountId) || null;
-    const accountConnections = Array.from(this.connections.values())
-      .filter((c) => c.accountId === accountId)
-      .map((c) => ({
-        connId: c.connId,
-        clientId: c.clientId,
-        connectedAt: c.connectedAt,
-        lastSeenAt: c.lastSeenAt,
-      }));
-    this.logInfo(
-      'file-chunk-diag',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        accountId,
-        sessionKey: params.sessionKey,
-        mediaUrl: params.mediaUrl,
-        hasGatewayContext: Boolean(ctx),
-        activeConnectionKey,
-        ownerConnId: owner?.connId || null,
-        ownerClientId: owner?.clientId || null,
-        directConnIds: Array.from(directConnIds),
-        recentInboundReachable,
-        recentConnIds: Array.from(recentConnIds),
-        accountConnections,
-      }),
-      { debugOnly: true },
-    );
+    const routeDiagnostics = this.buildTransferRouteDiagnostics({
+      accountId,
+      recentInboundReachable,
+    });
+    this.logFileChunkDiag({
+      accountId,
+      sessionKey: params.sessionKey,
+      mediaUrl: params.mediaUrl,
+      hasGatewayContext: Boolean(ctx),
+      activeConnectionKey: routeDiagnostics.activeConnectionKey,
+      ownerConnId: owner?.connId,
+      ownerClientId: owner?.clientId,
+      directConnIds: routeDiagnostics.directConnIds,
+      recentInboundReachable,
+      recentConnIds: routeDiagnostics.recentConnIds,
+      accountConnections: routeDiagnostics.accountConnections,
+    });
     if (!ctx) throw new Error('gateway context unavailable');
 
-    let connIds = directConnIds;
-    if (!connIds.size && recentInboundReachable) {
-      connIds = recentConnIds;
-    }
+    const connIds = this.selectTransferConnIds({
+      directConnIds: routeDiagnostics.directConnIds,
+      recentConnIds: routeDiagnostics.recentConnIds,
+      recentInboundReachable,
+    });
     if (!connIds.size) throw new Error('no active bncr client for file chunk transfer');
 
     const transferId = randomUUID();
@@ -3576,63 +4486,50 @@ class BncrBridgeRuntime {
     const totalChunks = Math.ceil(size / chunkSize);
     const fileSha256 = createHash('sha256').update(loaded.buffer).digest('hex');
 
-    this.logInfo(
-      'file-transfer-start',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId,
-        accountId,
-        sessionKey: params.sessionKey,
-        mediaUrl: params.mediaUrl,
-        fileName,
-        mimeType,
-        fileSize: size,
-        chunkSize,
-        totalChunks,
-        connIds: Array.from(connIds),
-        ownerConnId: owner?.connId || null,
-        ownerClientId: owner?.clientId || null,
-      }),
-      { debugOnly: true },
-    );
-
-    const st: FileSendTransferState = {
+    this.logFileTransferStart({
       transferId,
-      accountId: normalizeAccountId(params.accountId),
+      accountId,
+      sessionKey: params.sessionKey,
+      mediaUrl: params.mediaUrl,
+      fileName,
+      mimeType,
+      fileSize: size,
+      chunkSize,
+      totalChunks,
+      connIds,
+      ownerConnId: owner?.connId,
+      ownerClientId: owner?.clientId,
+    });
+
+    const st = this.buildInitialFileSendTransferState({
+      transferId,
+      accountId: params.accountId,
       sessionKey: params.sessionKey,
       route: params.route,
       fileName,
-      mimeType: mimeType || 'application/octet-stream',
+      mimeType,
       fileSize: size,
       chunkSize,
       totalChunks,
       fileSha256,
-      startedAt: now(),
-      status: 'init',
-      ackedChunks: new Set(),
-      failedChunks: new Map(),
       ownerConnId: owner?.connId,
       ownerClientId: owner?.clientId,
-    };
+    });
     this.fileSendTransfers.set(transferId, st);
 
     ctx.broadcastToConnIds(
       BNCR_FILE_INIT_EVENT,
-      {
+      this.buildFileTransferInitPayload({
         transferId,
-        direction: 'oc2bncr',
         sessionKey: params.sessionKey,
-        platform: params.route.platform,
-        groupId: params.route.groupId,
-        userId: params.route.userId,
+        route: params.route,
         fileName,
         mimeType,
         fileSize: size,
         chunkSize,
         totalChunks,
         fileSha256,
-        ts: now(),
-      },
+      }),
       connIds,
     );
 
@@ -3660,20 +4557,15 @@ class BncrBridgeRuntime {
           connIds,
         );
 
-        this.logInfo(
-          'file-transfer-chunk-send',
-          JSON.stringify({
-            bridge: this.bridgeId,
-            transferId,
-            accountId,
-            chunkIndex: idx,
-            attempt,
-            offset: start,
-            size: slice.byteLength,
-            connIds: Array.from(connIds),
-          }),
-          { debugOnly: true },
-        );
+        this.logFileTransferChunkSend({
+          transferId,
+          accountId,
+          chunkIndex: idx,
+          attempt,
+          offset: start,
+          size: slice.byteLength,
+          connIds,
+        });
 
         try {
           await this.waitChunkAck({
@@ -3681,33 +4573,23 @@ class BncrBridgeRuntime {
             chunkIndex: idx,
             timeoutMs: FILE_TRANSFER_ACK_TTL_MS,
           });
-          this.logInfo(
-            'file-transfer-chunk-ack',
-            JSON.stringify({
-              bridge: this.bridgeId,
-              transferId,
-              accountId,
-              chunkIndex: idx,
-              attempt,
-            }),
-            { debugOnly: true },
-          );
+          this.logFileTransferChunkAck({
+            transferId,
+            accountId,
+            chunkIndex: idx,
+            attempt,
+          });
           ok = true;
           break;
         } catch (err) {
           lastErr = err;
-          this.logWarn(
-            'file-transfer-chunk-ack-fail',
-            JSON.stringify({
-              bridge: this.bridgeId,
-              transferId,
-              accountId,
-              chunkIndex: idx,
-              attempt,
-              error: asString((err as Error)?.message || err),
-            }),
-            { debugOnly: true },
-          );
+          this.logFileTransferChunkAckFail({
+            transferId,
+            accountId,
+            chunkIndex: idx,
+            attempt,
+            error: err,
+          });
           await this.sleepMs(150 * attempt);
         }
       }
@@ -3738,29 +4620,19 @@ class BncrBridgeRuntime {
       connIds,
     );
 
-    this.logInfo(
-      'file-transfer-complete-send',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId,
-        accountId,
-        connIds: Array.from(connIds),
-      }),
-      { debugOnly: true },
-    );
+    this.logFileTransferCompleteSend({
+      transferId,
+      accountId,
+      connIds,
+    });
 
     const done = await this.waitCompleteAck({ transferId, timeoutMs: 60_000 });
 
-    this.logInfo(
-      'file-transfer-complete-ack',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId,
-        accountId,
-        payload: done,
-      }),
-      { debugOnly: true },
-    );
+    this.logFileTransferCompleteAck({
+      transferId,
+      accountId,
+      payload: done,
+    });
 
     return {
       mode: 'chunk',
@@ -3774,130 +4646,101 @@ class BncrBridgeRuntime {
     accountId: string;
     sessionKey: string;
     route: BncrRoute;
-    payload: {
-      text?: string;
-      mediaUrl?: string;
-      mediaUrls?: string[];
-      asVoice?: boolean;
-      audioAsVoice?: boolean;
-      kind?: 'tool' | 'block' | 'final';
-      replyToId?: string;
-    };
+    payload: ReplyPayloadInput;
     mediaLocalRoots?: readonly string[];
   }) {
     const { accountId, sessionKey, route, payload, mediaLocalRoots } = params;
+    const normalized = normalizeReplyPayload(payload, { asString });
 
-    this.logInfo(
-      'outbound',
-      `enqueue-from-reply ${JSON.stringify({
-        accountId,
-        sessionKey,
-        route: {
-          platform: route?.platform,
-          groupId: route?.groupId,
-          userId: route?.userId,
-        },
-        payload: {
-          text: asString(payload?.text || ''),
-          mediaUrl: asString(payload?.mediaUrl || ''),
-          mediaUrls: Array.isArray(payload?.mediaUrls) ? payload.mediaUrls : undefined,
-          asVoice: payload?.asVoice === true,
-          audioAsVoice: payload?.audioAsVoice === true,
-          kind: payload?.kind,
-          replyToId: asString(payload?.replyToId || ''),
-        },
-      })}`,
-      { debugOnly: true },
-    );
-
-    const mediaList = payload.mediaUrls?.length
-      ? payload.mediaUrls
-      : payload.mediaUrl
-        ? [payload.mediaUrl]
-        : [];
-
-    if (mediaList.length > 0) {
-      let first = true;
-      const currentTime = now();
-      for (const mediaUrl of mediaList) {
-        const normalizedMediaUrl = asString(mediaUrl || '').trim();
-        if (!normalizedMediaUrl) continue;
-
-        const normalizedText = normalizeMessageText(first ? payload.text : '');
-        const normalizedReplyToId = normalizeReplyToId(payload.replyToId);
-        const fallback = this.tryBuildMediaDedupeFallback({
-          sessionKey,
-          mediaUrl: normalizedMediaUrl,
-          text: normalizedText,
-          replyToId: normalizedReplyToId,
-          currentTime,
-        });
-
-        if (fallback !== null) {
-          this.logInfo(
-            'outbound',
-            `media-dedupe-hit ${JSON.stringify({
-              sessionKey,
-              mediaUrl: normalizedMediaUrl,
-              replyToId: normalizedReplyToId || undefined,
-              fallbackText: fallback.text,
-              reason: fallback.reason,
-            })}`,
-            { debugOnly: true },
-          );
-          this.enqueueOutbound(
-            this.buildTextOutboxEntry({
-              accountId,
-              sessionKey,
-              route,
-              text: fallback.text,
-              kind: payload.kind,
-              replyToId: normalizedReplyToId || undefined,
-            }),
-          );
-          first = false;
-          continue;
-        }
-
-        this.enqueueOutbound(
-          this.buildFileTransferOutboxEntry({
-            accountId,
-            sessionKey,
-            route,
-            mediaUrl: normalizedMediaUrl,
-            mediaLocalRoots,
-            text: first ? asString(payload.text || '') : '',
-            asVoice: payload.asVoice,
-            audioAsVoice: payload.audioAsVoice,
-            kind: payload.kind,
-            replyToId: normalizedReplyToId || undefined,
-          }),
-        );
-        this.rememberRecentMediaSend({
-          sessionKey,
-          mediaUrl: normalizedMediaUrl,
-          text: normalizedText,
-          replyToId: normalizedReplyToId,
-          createdAt: currentTime,
-        });
-        first = false;
-      }
-      return;
-    }
-
-    const text = asString(payload.text || '').trim();
-    if (!text) return;
-
-    this.enqueueOutbound(
-      this.buildTextOutboxEntry({
+    enqueueNormalizedReplyPayload(
+      {
         accountId,
         sessionKey,
         route,
-        text,
-        kind: payload.kind,
-        replyToId: asString(payload.replyToId || '').trim() || undefined,
-      }),
+        payload: normalized,
+        mediaLocalRoots,
+      },
+      {
+        logEnqueueFromReply: (args) => this.logEnqueueFromReply(args),
+        hasReplyMediaEntries,
+        enqueueReplyMediaEntries: (args) => this.enqueueReplyMediaEntries(args),
+        enqueueReplyTextEntry: (args) =>
+          enqueueReplyTextEntry(args, {
+            enqueueOutbound: (entry) => this.enqueueOutbound(entry),
+            buildTextOutboxEntry: (entryArgs) => this.buildTextOutboxEntry(entryArgs),
+          }),
+      },
     );
+  }
+
+  private logEnqueueFromReply(args: {
+    accountId: string;
+    sessionKey: string;
+    route: BncrRoute;
+    payload: NormalizedReplyPayload;
+  }) {
+    this.logInfo(
+      'outbound',
+      `enqueue-from-reply ${JSON.stringify(buildEnqueueFromReplyDebugInfo(args))}`,
+      { debugOnly: true },
+    );
+  }
+
+  private enqueueSingleReplyMediaEntry(args: {
+    params: ReplyMediaEntriesParams;
+    mediaUrl: string;
+    first: boolean;
+    currentTime: number;
+  }) {
+    const normalizedText = normalizeMessageText(args.first ? args.params.payload.text : '');
+    const fallback = this.tryBuildMediaDedupeFallback({
+      sessionKey: args.params.sessionKey,
+      mediaUrl: args.mediaUrl,
+      text: normalizedText,
+      replyToId: args.params.payload.replyToId,
+      currentTime: args.currentTime,
+    });
+
+    enqueueSingleReplyMediaEntry(
+      {
+        params: args.params,
+        mediaUrl: args.mediaUrl,
+        normalizedText,
+        text: args.first ? args.params.payload.text : '',
+        fallback,
+        currentTime: args.currentTime,
+      },
+      {
+        enqueueReplyMediaFallbackTextEntry: (params) =>
+          enqueueReplyMediaFallbackTextEntry(params, {
+            logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+            enqueueOutbound: (entry) => this.enqueueOutbound(entry),
+            buildTextOutboxEntry: (entryParams) => this.buildTextOutboxEntry(entryParams),
+          }),
+        enqueueReplyMediaFileTransferEntry: (params) =>
+          enqueueReplyMediaFileTransferEntry(params, {
+            enqueueOutbound: (entry) => this.enqueueOutbound(entry),
+            buildFileTransferOutboxEntry: (entryParams) =>
+              this.buildFileTransferOutboxEntry(entryParams),
+            rememberRecentMediaSend: (entryParams) => this.rememberRecentMediaSend(entryParams),
+          }),
+      },
+    );
+  }
+
+  private enqueueReplyMediaEntries(params: ReplyMediaEntriesParams) {
+    let first = true;
+    const currentTime = now();
+
+    for (const mediaUrl of params.payload.mediaList) {
+      this.enqueueSingleReplyMediaEntry({
+        params,
+        mediaUrl,
+        first,
+        currentTime,
+      });
+      first = false;
+    }
   }
 
   handleConnect = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
@@ -3924,17 +4767,15 @@ class BncrBridgeRuntime {
       { debugOnly: true },
     );
 
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.markOutboundCapability({
+    this.refreshLiveConnectionState({
       accountId,
       connId,
       clientId,
       outboundReady,
       preferredForOutbound,
       inboundOnly,
+      context,
     });
-    this.markActivity(accountId);
     this.incrementCounter(this.connectEventsByAccount, accountId);
     const lease = this.acceptConnection();
 
@@ -3964,119 +4805,33 @@ class BncrBridgeRuntime {
     });
 
     // WS 一旦在线，立即尝试把离线期间积压队列直推出去
-    this.flushPushQueue({ accountId, trigger: 'connect', reason: 'ws-online' });
+    this.flushPushQueue({
+      accountId,
+      trigger: OUTBOUND_FLUSH_TRIGGER.CONNECT,
+      reason: OUTBOUND_FLUSH_REASON.WS_ONLINE,
+    });
   };
 
   handleAck = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    // Structure note (explicit ACK event boundary):
+    // Successful ACK events are the authoritative source for removing outbox entries and resolving
+    // message-ack waiters. flushPushQueue may wait for ACKs, but it is not the source of truth for
+    // final entry deletion. Keep this boundary explicit in future refactors.
     await this.syncDebugFlag();
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    const messageId = asString(params?.messageId || '').trim();
-    const staleObserved = this.observeLease('ack', params ?? {});
+    const prepared = this.prepareAckHandling({ params, respond, client, context });
+    if (!prepared) return;
 
-    this.logInfo(
-      'outbox',
-      `ack ${JSON.stringify({
-        accountId,
-        messageId,
-        ok: params?.ok !== false,
-        fatal: params?.fatal === true,
-        error: asString(params?.error || ''),
-        stale: staleObserved.stale,
-      })}`,
-      { debugOnly: true },
-    );
-    if (!messageId) {
-      respond(false, { error: 'messageId required' });
-      return;
-    }
-
-    const entry = this.outbox.get(messageId);
-    if (!entry) {
-      respond(true, { ok: true, message: 'already-acked-or-missing', stale: staleObserved.stale });
-      return;
-    }
-
-    if (entry.accountId !== accountId) {
-      respond(false, { error: 'account mismatch' });
-      return;
-    }
-
-    if (staleObserved.stale) {
-      const sameConn = !!entry.lastPushConnId && entry.lastPushConnId === connId;
-      const sameClient =
-        !entry.lastPushConnId &&
-        !!entry.lastPushClientId &&
-        !!clientId &&
-        entry.lastPushClientId === clientId;
-      if (!(sameConn || sameClient)) {
-        this.logWarn(
-          'stale',
-          `ignore kind=ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} messageId=${messageId} reason=owner-mismatch lastPushConnId=${entry.lastPushConnId || '-'} lastPushClientId=${entry.lastPushClientId || '-'}`,
-          { debugOnly: true },
-        );
-        respond(true, { ok: true, stale: true, ignored: true });
-        return;
-      }
-    } else {
-      this.rememberGatewayContext(context);
-      this.markSeen(accountId, connId, clientId);
-    }
+    const { accountId } = prepared;
     this.lastAckAtGlobal = now();
     this.incrementCounter(this.ackEventsByAccount, accountId);
-
-    const ok = params?.ok !== false;
-    const fatal = params?.fatal === true;
-
-    if (ok) {
-      this.markOutboundCapability({
-        accountId,
-        connId,
-        clientId,
-        outboundReady: true,
-        preferredForOutbound: true,
-      });
-      this.outbox.delete(messageId);
-      this.scheduleSave();
-      this.resolveMessageAck(messageId, 'acked');
-      this.logInfo('outbox ack ok', `mid=${messageId}|q=${this.outbox.size}`);
-      respond(
-        true,
-        staleObserved.stale ? { ok: true, stale: true, staleAccepted: true } : { ok: true },
-      );
-      this.flushPushQueue({ accountId, trigger: 'ack-ok', reason: 'message-acked' });
-      return;
-    }
-
-    if (fatal) {
-      const error = asString(params?.error || 'fatal-ack');
-      this.moveToDeadLetter(entry, error);
-      this.logInfo('outbox ack fatal', `mid=${messageId}|q=${this.outbox.size}|err=${error}`);
-      respond(
-        true,
-        staleObserved.stale
-          ? { ok: true, movedToDeadLetter: true, stale: true, staleAccepted: true }
-          : { ok: true, movedToDeadLetter: true },
-      );
-      return;
-    }
-
-    entry.nextAttemptAt = now() + 1_000;
-    entry.lastError = asString(params?.error || 'retryable-ack');
-    this.outbox.set(messageId, entry);
-    this.scheduleSave();
-    this.logInfo('outbox ack retry', `mid=${messageId}|q=${this.outbox.size}|err=${entry.lastError}`);
-
-    respond(
-      true,
-      staleObserved.stale
-        ? { ok: true, willRetry: true, stale: true, staleAccepted: true }
-        : { ok: true, willRetry: true },
-    );
+    this.handleAckOutcome({ params, respond, ...prepared });
   };
 
   handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    // Structure note (activity-driven flush nudge):
+    // Activity events refresh liveness/capability state first, then nudge outbound draining.
+    // They are not a retry policy engine by themselves; they only give the scheduler a better
+    // chance to drain with fresher reachability information.
     await this.syncDebugFlag();
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
@@ -4111,17 +4866,15 @@ class BncrBridgeRuntime {
       })}`,
       { debugOnly: true },
     );
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.markOutboundCapability({
+    this.refreshLiveConnectionState({
       accountId,
       connId,
       clientId,
       outboundReady,
       preferredForOutbound,
       inboundOnly,
+      context,
     });
-    this.markActivity(accountId);
     this.incrementCounter(this.activityEventsByAccount, accountId);
 
     // 轻量活动心跳：仅刷新在线活跃状态，不承担拉取职责。
@@ -4134,7 +4887,11 @@ class BncrBridgeRuntime {
       deadLetter: this.deadLetter.filter((v) => v.accountId === accountId).length,
       now: now(),
     });
-    this.flushPushQueue({ accountId, trigger: 'activity', reason: 'activity-heartbeat' });
+    this.flushPushQueue({
+      accountId,
+      trigger: OUTBOUND_FLUSH_TRIGGER.ACTIVITY,
+      reason: OUTBOUND_FLUSH_REASON.ACTIVITY_HEARTBEAT,
+    });
   };
 
   handleDiagnostics = async ({ params, respond }: GatewayRequestHandlerOptions) => {
@@ -4142,37 +4899,27 @@ class BncrBridgeRuntime {
     const cfg = this.api.runtime.config.current();
     const runtime = this.getAccountRuntimeSnapshot(accountId);
     const diagnostics = this.buildExtendedDiagnostics(accountId);
-    const permissions = buildBncrPermissionSummary(cfg ?? {});
-    const probe = probeBncrAccount({
-      accountId,
-      connected: Boolean(runtime?.connected),
-      pending: Number(runtime?.meta?.pending ?? 0),
-      deadLetter: Number(runtime?.meta?.deadLetter ?? 0),
-      activeConnections: this.activeConnectionCount(accountId),
-      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(accountId),
-      legacyAccountResidue: this.countLegacyAccountResidue(accountId),
-      lastActivityAt: runtime?.meta?.lastActivityAt ?? null,
-      structure: {
-        coreComplete: true,
-        inboundComplete: true,
-        outboundComplete: true,
-      },
-    });
 
-    respond(true, {
-      channel: CHANNEL_ID,
-      accountId,
-      runtime,
-      diagnostics,
-      runtimeFlags: this.buildRuntimeFlags(accountId),
-      waiters: {
-        messageAck: this.messageAckWaiters.size,
-        fileAck: this.fileAckWaiters.size,
-      },
-      permissions,
-      probe,
-      now: now(),
-    });
+    respond(
+      true,
+      buildDiagnosticsPayload({
+        cfg,
+        channelId: CHANNEL_ID,
+        accountId,
+        runtime,
+        diagnostics,
+        downlinkHealth: this.buildDownlinkHealth(accountId),
+        runtimeFlags: this.buildRuntimeFlags(accountId),
+        waiters: {
+          messageAck: this.messageAckWaiters.size,
+          fileAck: this.fileAckWaiters.size,
+        },
+        activeConnections: this.activeConnectionCount(accountId),
+        invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(accountId),
+        legacyAccountResidue: this.countLegacyAccountResidue(accountId),
+        now: now(),
+      }),
+    );
   };
 
   handleFileInit = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
@@ -4191,9 +4938,12 @@ class BncrBridgeRuntime {
       respond(true, { ok: true, stale: true, ignored: true });
       return;
     }
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.markActivity(accountId);
+    this.refreshAcceptedFileTransferLiveState({
+      accountId,
+      connId,
+      clientId,
+      context,
+    });
 
     const transferId = asString(params?.transferId || '').trim();
     const sessionKey = asString(params?.sessionKey || '').trim();
@@ -4301,9 +5051,12 @@ class BncrBridgeRuntime {
         return;
       }
     } else {
-      this.rememberGatewayContext(context);
-      this.markSeen(accountId, connId, clientId);
-      this.markActivity(accountId);
+      this.refreshAcceptedFileTransferLiveState({
+        accountId,
+        connId,
+        clientId,
+        context,
+      });
     }
 
     try {
@@ -4388,9 +5141,12 @@ class BncrBridgeRuntime {
         return;
       }
     } else {
-      this.rememberGatewayContext(context);
-      this.markSeen(accountId, connId, clientId);
-      this.markActivity(accountId);
+      this.refreshAcceptedFileTransferLiveState({
+        accountId,
+        connId,
+        clientId,
+        context,
+      });
     }
 
     try {
@@ -4491,9 +5247,12 @@ class BncrBridgeRuntime {
         return;
       }
     } else {
-      this.rememberGatewayContext(context);
-      this.markSeen(accountId, connId, clientId);
-      this.markActivity(accountId);
+      this.refreshAcceptedFileTransferLiveState({
+        accountId,
+        connId,
+        clientId,
+        context,
+      });
     }
 
     st.status = 'aborted';
@@ -4583,9 +5342,12 @@ class BncrBridgeRuntime {
         return;
       }
     } else {
-      this.rememberGatewayContext(context);
-      this.markSeen(accountId, connId, clientId);
-      this.markActivity(accountId);
+      this.refreshAcceptedFileTransferLiveState({
+        accountId,
+        connId,
+        clientId,
+        context,
+      });
     }
 
     if (st) {
@@ -4645,6 +5407,10 @@ class BncrBridgeRuntime {
   };
 
   handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
+    // Structure note (inbound-driven flush nudge):
+    // Inbound acceptance is another explicit wake source for outbound draining. It should stay
+    // separate from retry policy so later refactors can reason clearly about "new inbound signal"
+    // versus "scheduled retry" versus "ACK-driven continuation".
     await this.syncDebugFlag();
     const parsed = parseBncrInboundParams(params);
     const {
@@ -4679,102 +5445,69 @@ class BncrBridgeRuntime {
         clientId,
       })
     ) {
-      respond(true, {
-        accepted: false,
-        stale: true,
-        ignored: true,
-        accountId,
-        msgId: msgId ?? null,
-      });
+      respond(
+        true,
+        buildInboundResponsePayload({
+          kind: 'stale-ignored',
+          accountId,
+          msgId: msgId ?? null,
+        }),
+      );
       return;
     }
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.markOutboundCapability({
+    this.refreshLiveConnectionState({
       accountId,
       connId,
       clientId,
       outboundReady,
       preferredForOutbound,
       inboundOnly,
+      context,
     });
-    this.markActivity(accountId);
     this.logInfo(
       'inbound',
-      `lifecycle ${JSON.stringify({
-        stage: 'accepted',
-        bridge: this.bridgeId,
-        accountId,
-        connId,
-        clientId,
-        outboundReady,
-        preferredForOutbound,
-        inboundOnly,
-        onlineAfterSeen: this.isOnline(accountId),
-        recentInboundReachable: this.hasRecentInboundReachability(accountId),
-        activeConnectionKey: this.activeConnectionByAccount.get(accountId) || null,
-        activeConnections: Array.from(this.connections.values())
-          .filter((c) => c.accountId === accountId)
-          .map((c) => ({
-            connId: c.connId,
-            clientId: c.clientId,
-            connectedAt: c.connectedAt,
-            lastSeenAt: c.lastSeenAt,
-          })),
-      })}`,
+      `lifecycle ${JSON.stringify(
+        buildInboundAcceptedLifecycleDebugInfo({
+          stage: 'accepted',
+          bridge: this.bridgeId,
+          accountId,
+          connId,
+          clientId,
+          outboundReady,
+          preferredForOutbound,
+          inboundOnly,
+          onlineAfterSeen: this.isOnline(accountId),
+          recentInboundReachable: this.hasRecentInboundReachability(accountId),
+          activeConnectionKey: this.activeConnectionByAccount.get(accountId) || null,
+          activeConnections: Array.from(this.connections.values())
+            .filter((c) => c.accountId === accountId)
+            .map((c) => ({
+              connId: c.connId,
+              clientId: c.clientId,
+              connectedAt: c.connectedAt,
+              lastSeenAt: c.lastSeenAt,
+            })),
+        }),
+      )}`,
       { debugOnly: true },
     );
     this.lastInboundAtGlobal = now();
     this.incrementCounter(this.inboundEventsByAccount, accountId);
 
-    if (!platform || (!userId && !groupId)) {
-      respond(false, { error: 'platform/groupId/userId required' });
-      return;
-    }
-    if (this.markInboundDedupSeen(dedupKey)) {
-      respond(true, {
-        accepted: true,
-        duplicated: true,
-        accountId,
-        msgId: msgId ?? null,
-      });
-      return;
-    }
-
     const cfg = this.api.runtime.config.current();
-    const gate = checkBncrMessageGate({
-      parsed,
-      cfg,
-      account: resolveAccount(cfg, accountId),
-    });
-    if (!gate.allowed) {
-      respond(true, {
-        accepted: false,
-        accountId,
-        msgId: msgId ?? null,
-        reason: gate.reason,
-      });
-      return;
-    }
-
     const canonicalAgentId = this.ensureCanonicalAgentId({
       cfg,
       accountId,
       peer,
       channelId: CHANNEL_ID,
     });
-    const resolvedRoute = this.api.runtime.channel.routing.resolveAgentRoute({
-      cfg,
-      channel: CHANNEL_ID,
-      accountId,
-      peer,
-    });
-    const baseSessionKey =
-      normalizeInboundSessionKey(sessionKeyfromroute, route, canonicalAgentId) ||
-      resolvedRoute.sessionKey;
-    const taskSessionKey = withTaskSessionKey(baseSessionKey, extracted.taskKey);
-    const sessionKey = taskSessionKey || baseSessionKey;
-    const inboundText = asString(extracted.text || text || '');
+    const acceptance = this.prepareInboundAcceptance({ parsed, canonicalAgentId });
+    if (!acceptance.ok) {
+      respond(acceptance.status, acceptance.payload);
+      return;
+    }
+
+    const { sessionKey, inboundText, hasMedia } = acceptance;
     this.logInfo(
       'inbound',
       JSON.stringify({
@@ -4787,7 +5520,7 @@ class BncrBridgeRuntime {
         msgType,
         textLen: inboundText.length,
         textPreview: inboundText.slice(0, 120),
-        hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
+        hasMedia,
       }),
       { debugOnly: true },
     );
@@ -4796,17 +5529,24 @@ class BncrBridgeRuntime {
       route,
       msgType,
       text: inboundText,
-      hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
+      hasMedia,
     });
 
-    respond(true, {
-      accepted: true,
+    respond(
+      true,
+      buildInboundResponsePayload({
+        kind: 'accepted',
+        accountId,
+        sessionKey,
+        msgId: msgId ?? null,
+        taskKey: extracted.taskKey ?? null,
+      }),
+    );
+    this.flushPushQueue({
       accountId,
-      sessionKey,
-      msgId: msgId ?? null,
-      taskKey: extracted.taskKey ?? null,
+      trigger: OUTBOUND_FLUSH_TRIGGER.INBOUND,
+      reason: OUTBOUND_FLUSH_REASON.INBOUND_ACCEPTED,
     });
-    this.flushPushQueue({ accountId, trigger: 'inbound', reason: 'inbound-accepted' });
 
     void dispatchBncrInbound({
       api: this.api,
@@ -4947,36 +5687,69 @@ class BncrBridgeRuntime {
     this.logInfo('health', `status-stop ${accountId}|cleared=${cleared}`);
   };
 
-  channelSendText = async (ctx: any) => {
-    await this.syncDebugFlag();
-    const accountId = normalizeAccountId(ctx.accountId);
-    const to = asString(ctx.to || '').trim();
-
+  private logChannelSendEntry(args: {
+    kind: 'text' | 'media';
+    accountId: string;
+    to: string;
+    ctx: any;
+    payload: {
+      text: string;
+      mediaUrl: string;
+      mediaUrls?: string[];
+      asVoice?: boolean;
+      audioAsVoice?: boolean;
+    };
+  }) {
     this.logInfo(
       'outbound',
-      `send-entry:text ${JSON.stringify({
-        accountId,
-        to,
-        text: asString(ctx?.text || ''),
-        mediaUrl: asString(ctx?.mediaUrl || ''),
-        sessionKey: asString(ctx?.sessionKey || ''),
-        mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
+      `send-entry:${args.kind} ${JSON.stringify({
+        accountId: args.accountId,
+        to: args.to,
+        text: args.payload.text,
+        mediaUrl: args.payload.mediaUrl,
+        mediaUrls: args.payload.mediaUrls,
+        asVoice: args.payload.asVoice,
+        audioAsVoice: args.payload.audioAsVoice,
+        sessionKey: asString(args.ctx?.sessionKey || ''),
+        mirrorSessionKey: asString(args.ctx?.mirror?.sessionKey || ''),
         rawCtx: {
-          to: ctx?.to,
-          accountId: ctx?.accountId,
-          threadId: ctx?.threadId,
-          replyToId: ctx?.replyToId,
+          to: args.ctx?.to,
+          accountId: args.ctx?.accountId,
+          threadId: args.ctx?.threadId,
+          replyToId: args.ctx?.replyToId,
         },
       })}`,
       { debugOnly: true },
     );
+  }
+
+  private resolveChannelSendReplyToId(ctx: any) {
+    return asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined;
+  }
+
+  channelSendText = async (ctx: any) => {
+    await this.syncDebugFlag();
+    const accountId = normalizeAccountId(ctx.accountId);
+    const to = asString(ctx.to || '').trim();
+    const replyToId = this.resolveChannelSendReplyToId(ctx);
+
+    this.logChannelSendEntry({
+      kind: 'text',
+      accountId,
+      to,
+      ctx,
+      payload: {
+        text: asString(ctx?.text || ''),
+        mediaUrl: asString(ctx?.mediaUrl || ''),
+      },
+    });
 
     return sendBncrText({
       channelId: CHANNEL_ID,
       accountId,
       to,
       text: asString(ctx.text || ''),
-      replyToId: asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
+      replyToId,
       mediaLocalRoots: ctx.mediaLocalRoots,
       resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
       rememberSessionRoute: (sessionKey, accountId, route) =>
@@ -4992,28 +5765,21 @@ class BncrBridgeRuntime {
     const to = asString(ctx.to || '').trim();
     const asVoice = ctx?.asVoice === true;
     const audioAsVoice = ctx?.audioAsVoice === true;
+    const replyToId = this.resolveChannelSendReplyToId(ctx);
 
-    this.logInfo(
-      'outbound',
-      `send-entry:media ${JSON.stringify({
-        accountId,
-        to,
+    this.logChannelSendEntry({
+      kind: 'media',
+      accountId,
+      to,
+      ctx,
+      payload: {
         text: asString(ctx?.text || ''),
         mediaUrl: asString(ctx?.mediaUrl || ''),
         mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
         asVoice,
         audioAsVoice,
-        sessionKey: asString(ctx?.sessionKey || ''),
-        mirrorSessionKey: asString(ctx?.mirror?.sessionKey || ''),
-        rawCtx: {
-          to: ctx?.to,
-          accountId: ctx?.accountId,
-          threadId: ctx?.threadId,
-          replyToId: ctx?.replyToId,
-        },
-      })}`,
-      { debugOnly: true },
-    );
+      },
+    });
 
     return sendBncrMedia({
       channelId: CHANNEL_ID,
@@ -5024,7 +5790,7 @@ class BncrBridgeRuntime {
       mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
       asVoice,
       audioAsVoice,
-      replyToId: asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
+      replyToId,
       mediaLocalRoots: ctx.mediaLocalRoots,
       resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
       rememberSessionRoute: (sessionKey, accountId, route) =>
@@ -5294,53 +6060,13 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
       buildAccountSnapshot: async ({ account, runtime }: any) => {
         const runtimeBridge = getBridge();
         const rt = runtime || runtimeBridge.getAccountRuntimeSnapshot(account?.accountId);
-        const meta = rt?.meta || {};
-
-        const pending = Number(rt?.pending ?? meta.pending ?? 0);
-        const deadLetter = Number(rt?.deadLetter ?? meta.deadLetter ?? 0);
-        const lastSessionKey = rt?.lastSessionKey ?? meta.lastSessionKey ?? null;
-        const lastSessionScope = rt?.lastSessionScope ?? meta.lastSessionScope ?? null;
-        const lastSessionAt = rt?.lastSessionAt ?? meta.lastSessionAt ?? null;
-        const lastSessionAgo = rt?.lastSessionAgo ?? meta.lastSessionAgo ?? '-';
-        const lastActivityAt = rt?.lastActivityAt ?? meta.lastActivityAt ?? null;
-        const lastActivityAgo = rt?.lastActivityAgo ?? meta.lastActivityAgo ?? '-';
-        const lastInboundAt = rt?.lastInboundAt ?? meta.lastInboundAt ?? null;
-        const lastInboundAgo = rt?.lastInboundAgo ?? meta.lastInboundAgo ?? '-';
-        const lastOutboundAt = rt?.lastOutboundAt ?? meta.lastOutboundAt ?? null;
-        const lastOutboundAgo = rt?.lastOutboundAgo ?? meta.lastOutboundAgo ?? '-';
-        const diagnostics = rt?.diagnostics ?? meta.diagnostics ?? null;
-        // 右侧状态字段统一：离线时也显示 Status（避免出现 configured 文案）
-        const normalizedMode = rt?.mode === 'linked' ? 'linked' : 'Status';
-
-        const displayName = resolveDefaultDisplayName(account?.name, account?.accountId);
-
-        return {
-          accountId: account.accountId,
-          // default 名不可隐藏时，统一展示稳定默认值
-          name: displayName,
-          enabled: account.enabled !== false,
-          configured: true,
-          linked: Boolean(rt?.connected),
-          running: rt?.running ?? false,
-          connected: rt?.connected ?? false,
-          lastEventAt: rt?.lastEventAt ?? null,
-          lastError: rt?.lastError ?? null,
-          mode: normalizedMode,
-          pending,
-          deadLetter,
+        return buildAccountStatusSnapshot({
+          account,
+          runtime: rt,
           healthSummary: runtimeBridge.getStatusHeadline(account?.accountId),
-          lastSessionKey,
-          lastSessionScope,
-          lastSessionAt,
-          lastSessionAgo,
-          lastActivityAt,
-          lastActivityAgo,
-          lastInboundAt,
-          lastInboundAgo,
-          lastOutboundAt,
-          lastOutboundAgo,
-          diagnostics,
-        };
+          // default 名不可隐藏时，统一展示稳定默认值
+          displayName: resolveDefaultDisplayName(account?.name, account?.accountId),
+        });
       },
       resolveAccountState: ({ enabled, configured, account, cfg, runtime }: any) => {
         if (!enabled) return 'disabled';

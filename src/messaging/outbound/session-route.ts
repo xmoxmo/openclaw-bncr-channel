@@ -26,6 +26,28 @@ function asString(v: unknown, fallback = ''): string {
   return String(v);
 }
 
+function attachBncrChannelRouteRefFields(args: {
+  built: Record<string, unknown>;
+  channel: string;
+  accountId?: string;
+  to: string;
+  chatType: 'direct' | 'group';
+  threadId?: string;
+}) {
+  const { built, channel, accountId, to, chatType, threadId } = args;
+  return {
+    ...built,
+    channel,
+    ...(accountId !== undefined ? { accountId } : {}),
+    target: {
+      to,
+      rawTo: to,
+      chatType,
+    },
+    ...(threadId !== undefined ? { thread: { id: threadId } } : {}),
+  };
+}
+
 export function resolveBncrOutboundSessionRoute(params: ResolveBncrOutboundSessionRouteParams) {
   const raw = asString(params.resolvedTarget?.to || params.target).trim();
   if (!raw) return null;
@@ -65,9 +87,16 @@ export function resolveBncrOutboundSessionRoute(params: ResolveBncrOutboundSessi
     ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
   });
 
-  return {
-    ...built,
-    sessionKey,
-    baseSessionKey: sessionKey,
-  };
+  return attachBncrChannelRouteRefFields({
+    built: {
+      ...built,
+      sessionKey,
+      baseSessionKey: sessionKey,
+    },
+    channel: params.channel,
+    accountId: params.accountId,
+    to: displayTo,
+    chatType: 'direct',
+    threadId: params.threadId,
+  });
 }

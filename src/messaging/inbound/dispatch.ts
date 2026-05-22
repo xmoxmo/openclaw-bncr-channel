@@ -9,76 +9,31 @@ import { buildBncrReplyConfig } from './reply-config.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
-export async function dispatchBncrInbound(params: {
+async function prepareBncrInboundSessionContext(args: {
   api: any;
-  channelId: string;
   cfg: any;
+  channelId: string;
   parsed: ParsedInbound;
   canonicalAgentId: string;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
-  enqueueFromReply: (args: {
-    accountId: string;
-    sessionKey: string;
-    route: any;
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
-    mediaLocalRoots?: readonly string[];
-  }) => Promise<void>;
-  setInboundActivity: (accountId: string, at: number) => void;
-  scheduleSave: () => void;
-  logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
 }) {
-  const {
-    api,
-    channelId,
-    cfg,
-    parsed,
-    canonicalAgentId,
-    rememberSessionRoute,
-    enqueueFromReply,
-    setInboundActivity,
-    scheduleSave,
-    logger,
-  } = params;
+  const { api, cfg, channelId, parsed, canonicalAgentId, rememberSessionRoute } = args;
   const {
     accountId,
     route,
     peer,
     sessionKeyfromroute,
-    clientId,
     text,
     msgType,
     mediaBase64,
     mediaPathFromTransfer,
     mimeType,
     fileName,
-    msgId,
     extracted,
     platform,
     groupId,
     userId,
   } = parsed;
-
-  const nativeCommand = await handleBncrNativeCommand({
-    api,
-    channelId,
-    cfg,
-    parsed,
-    canonicalAgentId,
-    rememberSessionRoute,
-    enqueueFromReply,
-    logger,
-  });
-  if (nativeCommand.handled) {
-    const inboundAt = Date.now();
-    setInboundActivity(accountId, inboundAt);
-    scheduleSave();
-    return {
-      accountId,
-      sessionKey: nativeCommand.sessionKey,
-      taskKey: extracted.taskKey ?? null,
-      msgId: msgId ?? null,
-    };
-  }
 
   const resolvedRoute = api.runtime.channel.routing.resolveAgentRoute({
     cfg,
@@ -132,6 +87,89 @@ export async function dispatchBncrInbound(params: {
   });
 
   const displayTo = formatDisplayScope(route);
+  return {
+    resolvedRoute,
+    baseSessionKey,
+    taskSessionKey,
+    sessionKey,
+    storePath,
+    mediaPath,
+    rawBody,
+    body,
+    displayTo,
+  };
+}
+
+export async function dispatchBncrInbound(params: {
+  api: any;
+  channelId: string;
+  cfg: any;
+  parsed: ParsedInbound;
+  canonicalAgentId: string;
+  rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
+  enqueueFromReply: (args: {
+    accountId: string;
+    sessionKey: string;
+    route: any;
+    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
+    mediaLocalRoots?: readonly string[];
+  }) => Promise<void>;
+  setInboundActivity: (accountId: string, at: number) => void;
+  scheduleSave: () => void;
+  logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
+}) {
+  const {
+    api,
+    channelId,
+    cfg,
+    parsed,
+    canonicalAgentId,
+    rememberSessionRoute,
+    enqueueFromReply,
+    setInboundActivity,
+    scheduleSave,
+    logger,
+  } = params;
+  const { accountId, route, clientId, msgId, extracted, mimeType, peer } = parsed;
+
+  const nativeCommand = await handleBncrNativeCommand({
+    api,
+    channelId,
+    cfg,
+    parsed,
+    canonicalAgentId,
+    rememberSessionRoute,
+    enqueueFromReply,
+    logger,
+  });
+  if (nativeCommand.handled) {
+    const inboundAt = Date.now();
+    setInboundActivity(accountId, inboundAt);
+    scheduleSave();
+    return {
+      accountId,
+      sessionKey: nativeCommand.sessionKey,
+      taskKey: extracted.taskKey ?? null,
+      msgId: msgId ?? null,
+    };
+  }
+
+  const {
+    resolvedRoute,
+    sessionKey,
+    storePath,
+    mediaPath,
+    rawBody,
+    body,
+    displayTo,
+  } = await prepareBncrInboundSessionContext({
+    api,
+    cfg,
+    channelId,
+    parsed,
+    canonicalAgentId,
+    rememberSessionRoute,
+  });
   if (!clientId) {
     emitBncrLogLine('warn', '[bncr] inbound missing clientId for chat identity');
     return {

@@ -28,6 +28,13 @@ test('resolveBncrOutboundSessionRoute returns canonical direct hex route for dir
     `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:0:6278285192', 'utf8').toString('hex')}`,
   );
   assert.equal(resolved.to, 'Bncr:tgBot:6278285192');
+  assert.equal(resolved.channel, channel);
+  assert.equal(resolved.accountId, 'Primary');
+  assert.deepEqual(resolved.target, {
+    to: 'Bncr:tgBot:6278285192',
+    rawTo: 'Bncr:tgBot:6278285192',
+    chatType: 'direct',
+  });
 });
 
 test('resolveBncrOutboundSessionRoute returns canonical direct hex route for group display scope', () => {
@@ -48,6 +55,13 @@ test('resolveBncrOutboundSessionRoute returns canonical direct hex route for gro
     `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:-1001:6278285192', 'utf8').toString('hex')}`,
   );
   assert.equal(resolved.to, 'Bncr:tgBot:-1001:6278285192');
+  assert.equal(resolved.channel, channel);
+  assert.equal(resolved.accountId, 'Primary');
+  assert.deepEqual(resolved.target, {
+    to: 'Bncr:tgBot:-1001:6278285192',
+    rawTo: 'Bncr:tgBot:-1001:6278285192',
+    chatType: 'direct',
+  });
 });
 
 test('resolveBncrOutboundSessionRoute can resolve legacy/strict session input back to canonical key', () => {
@@ -66,6 +80,13 @@ test('resolveBncrOutboundSessionRoute can resolve legacy/strict session input ba
     resolved.sessionKey,
     `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:0:6278285192', 'utf8').toString('hex')}`,
   );
+  assert.equal(resolved.channel, channel);
+  assert.equal(resolved.accountId, 'Primary');
+  assert.deepEqual(resolved.target, {
+    to: 'Bncr:tgBot:6278285192',
+    rawTo: 'Bncr:tgBot:6278285192',
+    chatType: 'direct',
+  });
 });
 
 test('resolveBncrOutboundSessionRoute can use resolveRouteBySession fallback', () => {
@@ -84,4 +105,31 @@ test('resolveBncrOutboundSessionRoute can use resolveRouteBySession fallback', (
     resolved.sessionKey,
     `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:-1001:6278285192', 'utf8').toString('hex')}`,
   );
+  assert.equal(resolved.channel, channel);
+  assert.equal(resolved.accountId, 'Primary');
+  assert.deepEqual(resolved.target, {
+    to: 'Bncr:tgBot:-1001:6278285192',
+    rawTo: 'Bncr:tgBot:-1001:6278285192',
+    chatType: 'direct',
+  });
+});
+
+test('resolveBncrOutboundSessionRoute preserves thread route ref when threadId is provided', () => {
+  const resolved = resolveBncrOutboundSessionRoute({
+    cfg,
+    channel,
+    agentId,
+    canonicalAgentId: agentId,
+    accountId: 'Primary',
+    target: 'Bncr:tgBot:6278285192',
+    threadId: 'topic-123',
+  });
+
+  assert.ok(resolved);
+  assert.deepEqual(resolved.thread, { id: 'topic-123' });
+  assert.deepEqual(resolved.target, {
+    to: 'Bncr:tgBot:6278285192',
+    rawTo: 'Bncr:tgBot:6278285192',
+    chatType: 'direct',
+  });
 });

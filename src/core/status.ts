@@ -142,6 +142,58 @@ export function buildAccountRuntimeSnapshot(input: RuntimeStatusInput) {
   };
 }
 
+export function buildAccountStatusSnapshot(input: {
+  account: { accountId: string; name?: string; enabled?: boolean };
+  runtime: any;
+  healthSummary: string;
+  displayName: string;
+}) {
+  const rt = input.runtime || {};
+  const meta = rt?.meta || {};
+
+  const pending = Number(rt?.pending ?? meta.pending ?? 0);
+  const deadLetter = Number(rt?.deadLetter ?? meta.deadLetter ?? 0);
+  const lastSessionKey = rt?.lastSessionKey ?? meta.lastSessionKey ?? null;
+  const lastSessionScope = rt?.lastSessionScope ?? meta.lastSessionScope ?? null;
+  const lastSessionAt = rt?.lastSessionAt ?? meta.lastSessionAt ?? null;
+  const lastSessionAgo = rt?.lastSessionAgo ?? meta.lastSessionAgo ?? '-';
+  const lastActivityAt = rt?.lastActivityAt ?? meta.lastActivityAt ?? null;
+  const lastActivityAgo = rt?.lastActivityAgo ?? meta.lastActivityAgo ?? '-';
+  const lastInboundAt = rt?.lastInboundAt ?? meta.lastInboundAt ?? null;
+  const lastInboundAgo = rt?.lastInboundAgo ?? meta.lastInboundAgo ?? '-';
+  const lastOutboundAt = rt?.lastOutboundAt ?? meta.lastOutboundAt ?? null;
+  const lastOutboundAgo = rt?.lastOutboundAgo ?? meta.lastOutboundAgo ?? '-';
+  const diagnostics = rt?.diagnostics ?? meta.diagnostics ?? null;
+  const normalizedMode = rt?.mode === 'linked' ? 'linked' : 'Status';
+
+  return {
+    accountId: input.account.accountId,
+    name: input.displayName,
+    enabled: input.account.enabled !== false,
+    configured: true,
+    linked: Boolean(rt?.connected),
+    running: rt?.running ?? false,
+    connected: rt?.connected ?? false,
+    lastEventAt: rt?.lastEventAt ?? null,
+    lastError: rt?.lastError ?? null,
+    mode: normalizedMode,
+    pending,
+    deadLetter,
+    healthSummary: input.healthSummary,
+    lastSessionKey,
+    lastSessionScope,
+    lastSessionAt,
+    lastSessionAgo,
+    lastActivityAt,
+    lastActivityAgo,
+    lastInboundAt,
+    lastInboundAgo,
+    lastOutboundAt,
+    lastOutboundAgo,
+    diagnostics,
+  };
+}
+
 export function buildChannelSummaryFromRuntime(input: RuntimeStatusInput) {
   const headline = buildStatusHeadlineFromRuntime(input);
   return {

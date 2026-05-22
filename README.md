@@ -128,7 +128,70 @@ plugins/bncr/src/
 
 ---
 
-## 7. 状态与诊断
+## 7. 媒体发送（OpenClaw 2026.5.18 验证适用）
+
+当前有两种常见媒体发送方式，它们都属于 OpenClaw 标准能力，但**不是同一条实现链路**。
+
+### 方式 A：Agent 回复中的 `MEDIA:<path>`
+
+适用场景：
+
+- agent 在当前会话中直接回附件
+- 由宿主 reply-media / outbound attachment 链统一处理
+
+示例：
+
+```text
+MEDIA:/root/.openclaw/workspace/tmp/demo.png
+```
+
+说明：
+
+- 这条链先经过 OpenClaw 宿主的 `reply-media-paths` / `loadWebMedia` 预处理
+- 本地文件是否允许发送，取决于宿主侧的路径准入与 MIME / 类型白名单
+- 在 `2026.5.18` 口径下，`MEDIA:` 是否成功，**不能直接等价**为 bncr 插件自身的 file-transfer 是否成功
+
+### 方式 B：动作发送链（`message.action` / `send`）
+
+适用场景：
+
+- 需要显式指定目标会话 / 路由
+- 需要验证 OpenClaw 动作发送接口到 bncr channel 的下行链路
+
+示例：
+
+```bash
+openclaw gateway call message.action --params '{
+  "channel": "bncr",
+  "action": "send",
+  "accountId": "Primary",
+  "idempotencyKey": "bncr-media-demo-1",
+  "params": {
+    "to": "Bncr:tgBot:-1003776014601:6278285192",
+    "caption": "图片发送测试",
+    "path": "/root/.openclaw/workspace/tmp/demo.png"
+  }
+}'
+```
+
+说明：
+
+- 这是 OpenClaw 标准动作发送接口，不是 bncr 私有命令
+- 这条链与 `MEDIA:` 的宿主 reply-media 预处理链不同
+- 联调时建议把两条链分开验证，避免把宿主准入问题误判成 bncr 文件传输问题
+
+### 2026.5.18 验证说明
+
+以下口径已在 OpenClaw `2026.5.18` 上完成验证，当前建议把媒体问题拆成两类看：
+
+1. `MEDIA:<path>` 失败：优先检查宿主 reply-media / MIME 白名单 / 本地路径准入
+2. `message.action` 失败：优先检查动作 envelope、目标 `to`、bncr 出站 push/ack 与 file-transfer 日志
+
+后续如果在其他 OpenClaw 版本上完成验证，应继续在本节追加对应版本的验证过程与结论，不直接外推复用 `2026.5.18` 的验证口径。
+
+---
+
+## 8. 状态与诊断
 
 常用检查：
 
@@ -149,7 +212,7 @@ openclaw health --json
 
 ---
 
-## 8. 常见安装/加载问题
+## 9. 常见安装/加载问题
 
 ### 报错：`Cannot find module 'openclaw/plugin-sdk/core'`
 
@@ -177,7 +240,7 @@ npm root -g
 
 然后把 `openclaw` 的真实安装目录软链接到 `~/.openclaw/extensions/bncr/node_modules/openclaw`。
 
-## 9. 自检与测试
+## 10. 自检与测试
 
 ```bash
 cd plugins/bncr
@@ -206,7 +269,7 @@ npm pack
 
 ---
 
-## 9. 上线前检查
+## 11. 上线前检查
 
 上线前建议至少确认：
 

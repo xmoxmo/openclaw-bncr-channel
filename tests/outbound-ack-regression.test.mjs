@@ -84,6 +84,137 @@ function spyFlushPushQueue(bridge) {
   };
 }
 
+test('schedulePushDrain does not register a second timer while one is already pending', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const originalSetTimeout = global.setTimeout;
+  const timers = [];
+
+  try {
+    global.setTimeout = ((fn, delay, ...args) => {
+      const timer = { fn, delay, args, cleared: false };
+      timers.push(timer);
+      return timer;
+    });
+
+    bridge.schedulePushDrain(1234);
+    bridge.schedulePushDrain(5);
+
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 1234);
+    assert.ok(bridge.pushTimer);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    bridge.pushTimer = null;
+    cleanupBridge(bridge);
+  }
+});
+
+test('schedulePushDrain clamps delay into supported range', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const originalSetTimeout = global.setTimeout;
+  const timers = [];
+
+  try {
+    global.setTimeout = ((fn, delay, ...args) => {
+      const timer = { fn, delay, args, cleared: false };
+      timers.push(timer);
+      return timer;
+    });
+
+    bridge.schedulePushDrain(-50);
+    bridge.pushTimer = null;
+    bridge.schedulePushDrain(99_999);
+
+    assert.equal(timers.length, 2);
+    assert.equal(timers[0].delay, 0);
+    assert.equal(timers[1].delay, 30_000);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    bridge.pushTimer = null;
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue does not push entries whose nextAttemptAt is still in the future', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+
+  try {
+    const futureEntry = makeEntry('msg-future-only', 'future only');
+    futureEntry.nextAttemptAt = Date.now() + 5_000;
+    bridge.outbox.set(futureEntry.messageId, futureEntry);
+
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+    bridge.tryPushEntry = async () => {
+      throw new Error('should not push future-due entry');
+    };
+
+    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'future-only' });
+
+    assert.equal(bridge.outbox.has(futureEntry.messageId), true);
+    assert.equal(scheduled.length, 1);
+    assert.ok(scheduled[0] > 0);
+    assert.ok(scheduled[0] <= 5_000);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('waitForMessageAck removes waiter after timeout without leaking state', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    assert.equal(bridge.messageAckWaiters.size, 0);
+
+    const waiter = bridge.waitForMessageAck('msg-timeout-cleanup', 40);
+    assert.equal(bridge.messageAckWaiters.size, 1);
+
+    const result = await waiter;
+    assert.equal(result, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.resolveMessageAck('msg-timeout-cleanup', 'acked'), false);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('late ack after timeout does not resolve twice or recreate waiter state', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    const waiter = bridge.waitForMessageAck('msg-late-ack', 40);
+    const result = await waiter;
+
+    assert.equal(result, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.resolveMessageAck('msg-late-ack', 'acked'), false);
+    assert.equal(bridge.messageAckWaiters.size, 0);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('resolveMessageAck clears only the targeted waiter and leaves others pending', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    const waiter1 = bridge.waitForMessageAck('msg-target', 200);
+    const waiter2 = bridge.waitForMessageAck('msg-other', 40);
+
+    assert.equal(bridge.messageAckWaiters.size, 2);
+    assert.equal(bridge.resolveMessageAck('msg-target', 'acked'), true);
+    assert.equal(bridge.messageAckWaiters.size, 1);
+
+    assert.equal(await waiter1, 'acked');
+    assert.equal(await waiter2, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
 test('enqueueOutbound does not wake another message ack waiter on the same account', async () => {
   const bridge = createBncrBridge(createApiStub());
 
