@@ -1,6 +1,11 @@
 import { buildBncrPermissionSummary } from './permissions.ts';
 import { probeBncrAccount } from './probe.ts';
 
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 type DiagnosticsPayloadArgs = {
   cfg: any;
   channelId: string;
@@ -21,8 +26,8 @@ export function buildDiagnosticsPayload(args: DiagnosticsPayloadArgs) {
   const probe = probeBncrAccount({
     accountId: args.accountId,
     connected: Boolean(args.runtime?.connected),
-    pending: Number(args.runtime?.meta?.pending ?? 0),
-    deadLetter: Number(args.runtime?.meta?.deadLetter ?? 0),
+    pending: finiteNumberOr(args.runtime?.meta?.pending, 0),
+    deadLetter: finiteNumberOr(args.runtime?.meta?.deadLetter, 0),
     activeConnections: args.activeConnections,
     invalidOutboxSessionKeys: args.invalidOutboxSessionKeys,
     legacyAccountResidue: args.legacyAccountResidue,

@@ -1,5 +1,10 @@
 import type { OutboxEntry } from './types.ts';
 
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 type DownlinkHealthInput = {
   accountId: string;
   now: number;
@@ -17,13 +22,13 @@ export function buildDownlinkHealth(input: DownlinkHealthInput) {
   const pending = Array.from(input.outboxEntries).filter((v) => v.accountId === input.accountId);
   const pendingCount = pending.length;
   const oldestPendingCreatedAt = pending.length
-    ? Math.min(...pending.map((entry) => Number(entry.createdAt || input.now)))
+    ? Math.min(...pending.map((entry) => finiteNumberOr(entry.createdAt, input.now)))
     : null;
   const oldestPendingAgeMs = oldestPendingCreatedAt
     ? Math.max(0, input.now - oldestPendingCreatedAt)
     : 0;
   const lastSignalAt =
-    Math.max(Number(input.lastInboundAt || 0), Number(input.lastActivityAt || 0)) || null;
+    Math.max(finiteNumberOr(input.lastInboundAt, 0), finiteNumberOr(input.lastActivityAt, 0)) || null;
   const inboundHealthy = !!lastSignalAt && input.now - lastSignalAt <= 5 * 60 * 1000;
   const ackRecentlyHealthy =
     !!input.lastAckOkAt && input.now - input.lastAckOkAt <= 5 * 60 * 1000;

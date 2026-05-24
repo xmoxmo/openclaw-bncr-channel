@@ -1,13 +1,23 @@
 import type { BncrConnection, OutboxEntry } from './types.ts';
 
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function hasRecentInboundReachability(args: {
   now: number;
   windowMs: number;
   lastInboundAt: number;
   lastActivityAt: number;
 }) {
-  const lastReachableAt = Math.max(args.lastInboundAt, args.lastActivityAt);
-  return lastReachableAt > 0 && args.now - lastReachableAt <= args.windowMs;
+  const nowMs = finiteNumberOr(args.now, 0);
+  const windowMs = finiteNumberOr(args.windowMs, 0);
+  const lastReachableAt = Math.max(
+    finiteNumberOr(args.lastInboundAt, 0),
+    finiteNumberOr(args.lastActivityAt, 0),
+  );
+  return nowMs > 0 && windowMs > 0 && lastReachableAt > 0 && nowMs - lastReachableAt <= windowMs;
 }
 
 export function resolveRecentInboundConnIds(args: {
@@ -20,10 +30,16 @@ export function resolveRecentInboundConnIds(args: {
   const connIds = new Set<string>();
   if (!args.recentInboundReachable) return connIds;
 
+  const nowMs = finiteNumberOr(args.now, 0);
+  const connectTtlMs = finiteNumberOr(args.connectTtlMs, 0);
+  if (!nowMs || !connectTtlMs) return connIds;
+
   for (const c of args.connections) {
     if (c.accountId !== args.accountId) continue;
     if (!c.connId) continue;
-    if (args.now - c.lastSeenAt > args.connectTtlMs * 2) continue;
+    const lastSeenAt = finiteNumberOr(c.lastSeenAt, 0);
+    if (!lastSeenAt) continue;
+    if (nowMs - lastSeenAt > connectTtlMs * 2) continue;
     connIds.add(c.connId);
   }
 
@@ -60,11 +76,16 @@ export function hasAlternativeLiveConnection(args: {
 }) {
   const currentConn = String(args.currentConnId || '').trim();
   const currentClient = String(args.currentClientId || '').trim() || undefined;
+  const nowMs = finiteNumberOr(args.now, 0);
+  const connectTtlMs = finiteNumberOr(args.connectTtlMs, 0);
+  if (!nowMs || !connectTtlMs) return false;
 
   for (const conn of args.connections) {
     if (conn.accountId !== args.accountId) continue;
     if (!conn.connId) continue;
-    if (args.now - conn.lastSeenAt > args.connectTtlMs) continue;
+    const lastSeenAt = finiteNumberOr(conn.lastSeenAt, 0);
+    if (!lastSeenAt) continue;
+    if (nowMs - lastSeenAt > connectTtlMs) continue;
     const sameConn = !!currentConn && conn.connId === currentConn;
     const sameClient = !currentConn && !!currentClient && conn.clientId === currentClient;
     if (sameConn || sameClient) continue;
@@ -93,27 +114,33 @@ export function getRevalidatedAttemptReason(args: {
   const targetConnId = String(args.connId || '').trim();
   if (!targetConnId) return null;
 
-  const lastAttemptAt = Number(args.entry.lastAttemptAt || 0);
+  const nowMs = finiteNumberOr(args.now, 0);
+  const connectTtlMs = finiteNumberOr(args.connectTtlMs, 0);
+  if (!nowMs || !connectTtlMs) return null;
+
+  const lastAttemptAt = finiteNumberOr(args.entry.lastAttemptAt, 0);
   for (const rawConn of args.connections) {
     const conn = rawConn as ReachableConnection;
     if (conn.accountId !== args.accountId) continue;
     if (conn.connId !== targetConnId) continue;
-    if (args.now - conn.lastSeenAt > args.connectTtlMs) continue;
+    const lastSeenAt = finiteNumberOr(conn.lastSeenAt, 0);
+    if (!lastSeenAt) continue;
+    if (nowMs - lastSeenAt > connectTtlMs) continue;
     if (conn.inboundOnly === true) continue;
 
-    const preferredForOutboundUntil = Number(conn.preferredForOutboundUntil || 0);
-    const outboundReadyUntil = Number(conn.outboundReadyUntil || 0);
-    const lastAckOkAt = Number(conn.lastAckOkAt || 0);
-    const lastPushTimeoutAt = Number(conn.lastPushTimeoutAt || 0);
+    const preferredForOutboundUntil = finiteNumberOr(conn.preferredForOutboundUntil, 0);
+    const outboundReadyUntil = finiteNumberOr(conn.outboundReadyUntil, 0);
+    const lastAckOkAt = finiteNumberOr(conn.lastAckOkAt, 0);
+    const lastPushTimeoutAt = finiteNumberOr(conn.lastPushTimeoutAt, 0);
 
-    const revalidatedByPreferred = preferredForOutboundUntil > args.now;
-    const revalidatedByReady = outboundReadyUntil > args.now;
+    const revalidatedByPreferred = preferredForOutboundUntil > nowMs;
+    const revalidatedByReady = outboundReadyUntil > nowMs;
     const revalidatedByAck = lastAckOkAt > 0 && lastAckOkAt > lastAttemptAt;
     const revalidatedByFreshReachability =
       args.recentInboundReachable &&
       lastPushTimeoutAt > 0 &&
       lastPushTimeoutAt <= lastAttemptAt &&
-      conn.lastSeenAt > lastPushTimeoutAt;
+      lastSeenAt > lastPushTimeoutAt;
 
     if (!revalidatedByPreferred && !revalidatedByReady && !revalidatedByAck && !revalidatedByFreshReachability) {
       return null;
@@ -132,7 +159,7 @@ export function getRevalidatedAttemptReason(args: {
       lastPushTimeoutAt: lastPushTimeoutAt || null,
       outboundReadyUntil: outboundReadyUntil || null,
       preferredForOutboundUntil: preferredForOutboundUntil || null,
-      lastSeenAt: conn.lastSeenAt,
+      lastSeenAt,
       recentInboundReachable: args.recentInboundReachable,
     };
   }

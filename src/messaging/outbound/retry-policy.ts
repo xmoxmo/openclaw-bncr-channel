@@ -1,5 +1,11 @@
 import type { BncrRoute } from '../../channel.ts';
 
+function finiteNonNegativeIntegerOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.floor(n);
+}
+
 export type RetryRerouteDecisionInput = {
   nowMs: number;
   maxRetry: number;
@@ -51,7 +57,9 @@ export function computeRetryRerouteDecision(
   const hasUntriedAlternative = availableConnIds.some((connId) => !attemptedConnIds.includes(connId));
   const shouldFastReroute = input.requireAck && input.currentFastReroutePending !== true && hasUntriedAlternative;
 
-  const nextRetryCount = Number(input.currentRetryCount || 0) + 1;
+  const currentRetryCount = finiteNonNegativeIntegerOr(input.currentRetryCount, 0);
+  const currentRouteAttemptRound = finiteNonNegativeIntegerOr(input.currentRouteAttemptRound, 0);
+  const nextRetryCount = currentRetryCount + 1;
   const lastAttemptAt = input.nowMs;
   const terminalReason =
     input.lastError || (input.requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed');
@@ -67,7 +75,7 @@ export function computeRetryRerouteDecision(
 
   const nextAttemptAt = shouldFastReroute ? input.nowMs + 1_000 : input.nowMs + deps.backoffMs(nextRetryCount);
   const lastError = input.requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed';
-  const routeAttemptRound = hasUntriedAlternative ? Number(input.currentRouteAttemptRound || 0) : Number(input.currentRouteAttemptRound || 0) + 1;
+  const routeAttemptRound = hasUntriedAlternative ? currentRouteAttemptRound : currentRouteAttemptRound + 1;
   const fastReroutePending = hasUntriedAlternative ? shouldFastReroute || input.currentFastReroutePending === true : false;
 
   return {
@@ -111,7 +119,8 @@ export function computePushFailureDecision(
   input: PushFailureDecisionInput,
   deps: { backoffMs: (retryCount: number) => number },
 ): PushFailureDecision {
-  const nextRetryCount = Number(input.currentRetryCount || 0) + 1;
+  const currentRetryCount = finiteNonNegativeIntegerOr(input.currentRetryCount, 0);
+  const nextRetryCount = currentRetryCount + 1;
   const lastAttemptAt = input.nowMs;
 
   if (nextRetryCount > input.maxRetry) {

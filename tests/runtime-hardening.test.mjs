@@ -527,6 +527,99 @@ test('stale file chunk and complete from owner should continue transfer without 
   assert.equal(bridge.connections.get('Primary::client-a').connId, 'conn-new');
 });
 
+test('file complete aborts transfer when inbound media save fails', async () => {
+  resetBncrGlobals();
+  const mod = await import('../index.ts');
+  const api = createApi();
+  api.runtime.channel.media.saveMediaBuffer = async () => {
+    throw new Error('save failed from test');
+  };
+  mod.default.register(api);
+
+  const connect = getMethod(api, 'bncr.connect');
+  const fileInit = getMethod(api, 'bncr.file.init');
+  const fileChunk = getMethod(api, 'bncr.file.chunk');
+  const fileComplete = getMethod(api, 'bncr.file.complete');
+
+  const c1 = createRespondCapture();
+  await connect({
+    params: { accountId: 'Primary', clientId: 'client-a' },
+    respond: c1.respond,
+    client: { connId: 'conn-a' },
+    context: { broadcastToConnIds() {} },
+  });
+  const leaseId = c1.calls[0][1].leaseId;
+  const connectionEpoch = c1.calls[0][1].connectionEpoch;
+
+  const payload = Buffer.from('fail!');
+  const sessionKey = `agent:main:bncr:direct:${Buffer.from('tgBot:0:u-save-fail').toString('hex')}`;
+  const init = createRespondCapture();
+  await fileInit({
+    params: {
+      accountId: 'Primary',
+      clientId: 'client-a',
+      leaseId,
+      connectionEpoch,
+      transferId: 'tf-save-fail',
+      sessionKey,
+      platform: 'tgBot',
+      groupId: '0',
+      userId: 'u-save-fail',
+      fileName: 'save-fail.txt',
+      mimeType: 'text/plain',
+      fileSize: payload.length,
+      chunkSize: payload.length,
+      totalChunks: 1,
+      fileSha256: 'a661ff22e7a196c46cd4abf296895273a46e0df8c9cf0665ba83cb28e540bc9b',
+    },
+    respond: init.respond,
+    client: { connId: 'conn-a' },
+    context: { broadcastToConnIds() {} },
+  });
+  assert.equal(init.calls[0][0], true);
+
+  const chunk = createRespondCapture();
+  await fileChunk({
+    params: {
+      accountId: 'Primary',
+      clientId: 'client-a',
+      leaseId,
+      connectionEpoch,
+      transferId: 'tf-save-fail',
+      chunkIndex: 0,
+      offset: 0,
+      size: payload.length,
+      chunkSha256: 'a661ff22e7a196c46cd4abf296895273a46e0df8c9cf0665ba83cb28e540bc9b',
+      base64: payload.toString('base64'),
+    },
+    respond: chunk.respond,
+    client: { connId: 'conn-a' },
+    context: { broadcastToConnIds() {} },
+  });
+  assert.equal(chunk.calls[0][0], true);
+
+  const complete = createRespondCapture();
+  await fileComplete({
+    params: {
+      accountId: 'Primary',
+      clientId: 'client-a',
+      leaseId,
+      connectionEpoch,
+      transferId: 'tf-save-fail',
+    },
+    respond: complete.respond,
+    client: { connId: 'conn-a' },
+    context: { broadcastToConnIds() {} },
+  });
+
+  assert.equal(complete.calls[0][0], false);
+  assert.match(complete.calls[0][1].error, /save failed from test/);
+  const st = globalThis.__bncrBridge.fileRecvTransfers.get('tf-save-fail');
+  assert.equal(st.status, 'aborted');
+  assert.match(st.error, /save failed from test/);
+  assert.equal(typeof st.terminalAt, 'number');
+});
+
 test('stale file chunk from non-owner should stay ignored', async () => {
   resetBncrGlobals();
   const mod = await import('../index.ts');
@@ -635,7 +728,7 @@ test('status worker marks linked from recent inbound reachability when no live c
       clientId: 'client-a',
       platform: 'tgBot',
       groupId: '-1001',
-      userId: '6278285192',
+      userId: '10001',
       type: 'text',
       msg: 'hello inbound',
       msgId: 'status-inbound-1',
@@ -671,4 +764,134 @@ test('status worker marks linked from recent inbound reachability when no live c
   assert.equal(status.connected, true);
   assert.equal(status.mode, 'linked');
   assert.ok(status.meta, 'expected status meta');
+});
+
+test('gcTransientState keeps the only live active connection even after push failures', async () => {
+  resetBncrGlobals();
+  const mod = await import('../index.ts');
+  const api = createApi();
+  mod.default.register(api);
+
+  const connect = getMethod(api, 'bncr.connect');
+  const originalNow = Date.now;
+  const nowTs = originalNow() + 1_000_000;
+  Date.now = () => nowTs;
+
+  try {
+    await connect({
+      params: { accountId: 'Primary', clientId: 'client-a' },
+      respond() {},
+      client: { connId: 'conn-a' },
+      context: { broadcastToConnIds() {} },
+    });
+
+    const bridge = globalThis.__bncrBridge;
+    const key = 'Primary::client-a';
+    const conn = bridge.connections.get(key);
+    conn.lastSeenAt = nowTs - 1_000;
+    conn.lastPushTimeoutAt = nowTs - 500;
+    conn.pushFailureScore = 5;
+    bridge.connections.set(key, conn);
+    bridge.activeConnectionByAccount.set('Primary', key);
+
+    bridge.gcTransientState();
+
+    assert.ok(bridge.connections.has(key), 'live but degraded connection must stay registered');
+    assert.equal(
+      bridge.activeConnectionByAccount.get('Primary'),
+      key,
+      'live active connection must not be cleared just because it has push failures',
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('gcTransientState clears active connection pointer only after that connection is stale-deleted', async () => {
+  resetBncrGlobals();
+  const mod = await import('../index.ts');
+  const api = createApi();
+  mod.default.register(api);
+
+  const connect = getMethod(api, 'bncr.connect');
+  const originalNow = Date.now;
+  const nowTs = originalNow() + 1_000_000;
+  Date.now = () => nowTs;
+
+  try {
+    await connect({
+      params: { accountId: 'Primary', clientId: 'client-a' },
+      respond() {},
+      client: { connId: 'conn-a' },
+      context: { broadcastToConnIds() {} },
+    });
+
+    const bridge = globalThis.__bncrBridge;
+    const key = 'Primary::client-a';
+    const conn = bridge.connections.get(key);
+    conn.lastSeenAt = nowTs - 300_000;
+    bridge.connections.set(key, conn);
+    bridge.activeConnectionByAccount.set('Primary', key);
+
+    bridge.gcTransientState();
+
+    assert.equal(bridge.connections.has(key), false, 'stale connection should be deleted by existing GC');
+    assert.equal(
+      bridge.activeConnectionByAccount.has('Primary'),
+      false,
+      'active pointer should be cleared only because it pointed at the deleted connection',
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('resolveOutboxPushOwner can recover to a live connection after gc removes stale active owner', async () => {
+  resetBncrGlobals();
+  const mod = await import('../index.ts');
+  const api = createApi();
+  mod.default.register(api);
+
+  const connect = getMethod(api, 'bncr.connect');
+  const originalNow = Date.now;
+  const nowTs = originalNow() + 1_000_000;
+  Date.now = () => nowTs;
+
+  try {
+    await connect({
+      params: { accountId: 'Primary', clientId: 'client-a' },
+      respond() {},
+      client: { connId: 'conn-a' },
+      context: { broadcastToConnIds() {} },
+    });
+    await connect({
+      params: { accountId: 'Primary', clientId: 'client-b' },
+      respond() {},
+      client: { connId: 'conn-b' },
+      context: { broadcastToConnIds() {} },
+    });
+
+    const bridge = globalThis.__bncrBridge;
+    const staleKey = 'Primary::client-a';
+    const liveKey = 'Primary::client-b';
+    const staleConn = bridge.connections.get(staleKey);
+    staleConn.lastSeenAt = nowTs - 300_000;
+    bridge.connections.set(staleKey, staleConn);
+    const liveConn = bridge.connections.get(liveKey);
+    liveConn.lastSeenAt = nowTs - 1_000;
+    liveConn.outboundReadyUntil = nowTs + 30_000;
+    bridge.connections.set(liveKey, liveConn);
+    bridge.activeConnectionByAccount.set('Primary', staleKey);
+
+    bridge.gcTransientState();
+    assert.equal(bridge.connections.has(staleKey), false, 'stale active owner should be deleted by GC');
+    assert.equal(bridge.activeConnectionByAccount.has('Primary'), false, 'stale active pointer should be cleared');
+
+    const owner = bridge.resolveOutboxPushOwner('Primary');
+    assert.ok(owner, 'expected live owner after stale active pointer cleanup');
+    assert.equal(owner.clientId, 'client-b');
+    assert.equal(bridge.activeConnectionByAccount.get('Primary'), liveKey);
+  } finally {
+    Date.now = originalNow;
+  }
 });

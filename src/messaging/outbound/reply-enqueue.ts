@@ -1,6 +1,6 @@
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
 import { buildReplyMediaFallbackDebugInfo } from './diagnostics.ts';
-import { normalizeReplyToId } from './media-dedupe.ts';
+import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
 
 export type ReplyPayloadInput = {
   text?: string;
@@ -324,6 +324,6 @@ export function normalizeReplyPayload(
     asVoice: payload?.asVoice === true,
     audioAsVoice: payload?.audioAsVoice === true,
     kind: payload?.kind,
-    replyToId: normalizeReplyToId(payload?.replyToId),
+    replyToId: normalizeOutboundReplyToId({ kind: payload?.kind, replyToId: payload?.replyToId }),
   };
 }

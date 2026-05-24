@@ -38,6 +38,10 @@ export const OUTBOUND_SCHEDULE_SOURCE = {
   RETRY_REROUTE_WAIT: 'retry-reroute-wait',
   // Direct push failure kept entry in outbox and scheduled backoff.
   PUSH_FAIL_WAIT: 'push-fail-wait',
+  // Per-account flush processed its single-run item budget and yielded to the next drain.
+  ACCOUNT_BUDGET_YIELD: 'account-budget-yield',
+  // Per-account flush spent its single-run time budget and yielded to the next drain.
+  ACCOUNT_TIME_BUDGET_YIELD: 'account-time-budget-yield',
   // Account-local next delay was merged into bridge-global next delay.
   ACCOUNT_NEXT_DELAY_MERGE: 'account-next-delay-merge',
   // flushPushQueue(...) finished and armed the next bridge-level drain.

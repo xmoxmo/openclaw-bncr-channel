@@ -77,7 +77,7 @@ import { buildDownlinkHealth as buildDownlinkHealthFromRuntime } from './core/do
 import { buildExtendedDiagnostics as buildExtendedDiagnosticsFromRuntime } from './core/extended-diagnostics.ts';
 import { observeLeaseState, matchesTransferOwner as matchesTransferOwnerFromRuntime } from './core/lease-state.ts';
 import { emitBncrLog, emitBncrLogLine } from './core/logging.ts';
-import { resolveBncrChannelPolicy } from './core/policy.ts';
+import { resolveBncrChannelPolicy, resolveBncrConfigWarnings } from './core/policy.ts';
 import {
   buildRegisterTraceSummary as buildRegisterTraceSummaryFromEntries,
   classifyRegisterTrace as classifyRegisterTraceFromStack,
@@ -323,17 +323,35 @@ const BNCR_FILE_ABORT_EVENT = 'plugin.bncr.file.abort';
 const CONNECT_TTL_MS = 120_000;
 const RECENT_INBOUND_SEND_WINDOW_MS = 60_000;
 const MAX_RETRY = 10;
+const MAX_DEAD_LETTER_ENTRIES = 1000;
+const MAX_SESSION_ROUTE_ENTRIES = 1000;
+const MAX_ACCOUNT_ACTIVITY_ENTRIES = 1000;
 const PUSH_DRAIN_INTERVAL_MS = 500;
+const PUSH_DRAIN_ACCOUNT_BUDGET = 5;
+const PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS = 2_000;
 const PUSH_ACK_TIMEOUT_MS = 30_000;
+const ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED = true;
+const RECOMMENDED_ACK_TIMEOUT_MIN_MS = PUSH_ACK_TIMEOUT_MS;
+const RECOMMENDED_ACK_TIMEOUT_MAX_MS = 90_000;
+const ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS = 60 * 60 * 1000;
+const ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD = 3;
+const ADAPTIVE_ACK_TIMEOUT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 const OUTBOUND_READY_TTL_MS = 30_000;
 const PREFERRED_OUTBOUND_TTL_MS = 12_000;
 const FILE_FORCE_CHUNK = true; // 统一走 WS 分块，保留 base64 仅作兜底
+const LOG_DEDUPE_STATE_TTL_MS = 10 * 60 * 1000;
+const LOG_DEDUPE_STATE_MAX_ENTRIES = 1_000;
 const FILE_INLINE_THRESHOLD = 5 * 1024 * 1024; // fallback 阈值（仅 FILE_FORCE_CHUNK=false 时生效）
 const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
+const INBOUND_FILE_TRANSFER_MAX_BYTES = 50 * 1024 * 1024;
+const INBOUND_FILE_TRANSFER_MAX_CHUNKS = Math.ceil(INBOUND_FILE_TRANSFER_MAX_BYTES / FILE_CHUNK_SIZE) + 1;
 const FILE_CHUNK_RETRY = 3;
 const FILE_ACK_TIMEOUT_MS = 30_000;
 const FILE_TRANSFER_ACK_TTL_MS = 30_000;
+const MAX_EARLY_FILE_ACKS = 1000;
+const INTERNAL_SLEEP_MAX_MS = 120_000;
 const FILE_TRANSFER_KEEP_MS = 6 * 60 * 60 * 1000;
+const FILE_TRANSFER_TERMINAL_KEEP_MS = 10 * 60 * 1000;
 const REGISTER_WARMUP_WINDOW_MS = 30_000;
 let BNCR_DEBUG_VERBOSE = false; // 全局调试日志开关（默认关闭）
 
@@ -355,7 +373,14 @@ type FileSendTransferState = {
   ownerConnId?: string;
   ownerClientId?: string;
   completedPath?: string;
+  terminalAt?: number;
   error?: string;
+};
+
+type ChannelAccountWorkerHandle = {
+  timer: NodeJS.Timeout;
+  finish: (reason: string) => void;
+  cleanupAbortListener?: () => void;
 };
 
 type FileRecvTransferState = {
@@ -376,6 +401,7 @@ type FileRecvTransferState = {
   ownerConnId?: string;
   ownerClientId?: string;
   completedPath?: string;
+  terminalAt?: number;
   error?: string;
 };
 
@@ -499,6 +525,28 @@ function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
   if (v == null) return fallback;
   return String(v);
+}
+
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function finiteNonNegativeNumberOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function clampFiniteNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  const finite = Number.isFinite(n) ? n : fallback;
+  return Math.max(min, Math.min(finite, max));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -658,7 +706,15 @@ class BncrBridgeRuntime {
   private lastAckOkByAccount = new Map<string, number>();
   private lastAckTimeoutByAccount = new Map<string, number>();
   private ackTimeoutCountByAccount = new Map<string, number>();
-  private channelAccountTimers = new Map<string, NodeJS.Timeout>();
+  private lateAckOkCountByAccount = new Map<string, number>();
+  private lastLateAckOkByAccount = new Map<string, number>();
+  private lastAckQueueLatencyMsByAccount = new Map<string, number>();
+  private lastAckPushLatencyMsByAccount = new Map<string, number>();
+  private lastLateAckQueueLatencyMsByAccount = new Map<string, number>();
+  private lastLateAckPushLatencyMsByAccount = new Map<string, number>();
+  private adaptiveAckRecoveryOkCountByAccount = new Map<string, number>();
+  private adaptiveAckTimeoutLogStateByAccount = new Map<string, { at: number; timeoutMs: number; reason: string }>();
+  private channelAccountWorkers = new Map<string, ChannelAccountWorkerHandle>();
   private logDedupeState = new Map<string, { at: number; sig: string }>();
   private canonicalAgentId: string | null = null;
   private canonicalAgentSource: 'startup' | 'runtime' | 'fallback-main' | null = null;
@@ -666,6 +722,7 @@ class BncrBridgeRuntime {
 
   // 内置健康/回归计数（替代独立脚本）
   private startedAt = now();
+  private stopped = false;
   private connectEventsByAccount = new Map<string, number>();
   private inboundEventsByAccount = new Map<string, number>();
   private activityEventsByAccount = new Map<string, number>();
@@ -682,6 +739,7 @@ class BncrBridgeRuntime {
     // then move storage + resolver/wait APIs together rather than partially splitting the map only.
     string,
     {
+      promise: Promise<'acked' | 'timeout'>;
       resolve: (result: 'acked' | 'timeout') => void;
       timer: NodeJS.Timeout;
     }
@@ -694,12 +752,22 @@ class BncrBridgeRuntime {
   private fileAckWaiters = new Map<
     string,
     {
+      promise: Promise<Record<string, unknown>>;
       resolve: (payload: Record<string, unknown>) => void;
       reject: (err: Error) => void;
       timer: NodeJS.Timeout;
     }
   >();
   private earlyFileAcks = new Map<string, FileAckPayloadState>();
+
+  private rememberEarlyFileAck(key: string, state: FileAckPayloadState) {
+    this.earlyFileAcks.set(key, state);
+    while (this.earlyFileAcks.size > MAX_EARLY_FILE_ACKS) {
+      const oldestKey = this.earlyFileAcks.keys().next().value;
+      if (!oldestKey) break;
+      this.earlyFileAcks.delete(oldestKey);
+    }
+  }
 
   constructor(api: OpenClawPluginApi) {
     this.api = api;
@@ -756,11 +824,27 @@ class BncrBridgeRuntime {
     this.logError(scope, this.buildDebugJsonMessage(event, payload), options);
   }
 
+  private pruneLogDedupeState(currentTime = now()) {
+    for (const [key, entry] of this.logDedupeState.entries()) {
+      if (currentTime - entry.at > LOG_DEDUPE_STATE_TTL_MS) {
+        this.logDedupeState.delete(key);
+      }
+    }
+
+    while (this.logDedupeState.size > LOG_DEDUPE_STATE_MAX_ENTRIES) {
+      const oldestKey = this.logDedupeState.keys().next().value;
+      if (!oldestKey) break;
+      this.logDedupeState.delete(oldestKey);
+    }
+  }
+
   private shouldEmitDedupLog(key: string, sig: string, windowMs = 5 * 60 * 1000) {
     const t = now();
+    this.pruneLogDedupeState(t);
     const prev = this.logDedupeState.get(key) || null;
     if (prev && prev.sig === sig && t - prev.at < windowMs) return false;
     this.logDedupeState.set(key, { at: t, sig });
+    this.pruneLogDedupeState(t);
     return true;
   }
 
@@ -859,16 +943,21 @@ class BncrBridgeRuntime {
   }
 
   private clearChannelAccountWorker(accountId: string, reason: string) {
-    const timer = this.channelAccountTimers.get(accountId);
-    if (!timer) return false;
-    clearInterval(timer);
-    this.channelAccountTimers.delete(accountId);
+    const worker = this.channelAccountWorkers.get(accountId);
+    if (!worker) return false;
+    worker.finish(reason);
     this.logInfo(
       'health',
       `status-worker cleared ${JSON.stringify({ bridge: this.bridgeId, accountId, reason })}`,
       { debugOnly: true },
     );
     return true;
+  }
+
+  private clearAllChannelAccountWorkers(reason: string) {
+    for (const accountId of Array.from(this.channelAccountWorkers.keys())) {
+      this.clearChannelAccountWorker(accountId, reason);
+    }
   }
 
   private captureDriftSnapshot(
@@ -1106,14 +1195,18 @@ class BncrBridgeRuntime {
   }
 
   startService = async (ctx: OpenClawPluginServiceContext, debug?: boolean) => {
+    this.stopped = false;
     this.statePath = path.join(ctx.stateDir, 'bncr-bridge-state.json');
-    await this.loadState();
     try {
       const cfg = this.api.runtime.config.current();
       this.initializeCanonicalAgentId(cfg);
+      for (const warning of resolveBncrConfigWarnings(cfg?.channels?.[CHANNEL_ID] || {})) {
+        this.logWarn('config', warning);
+      }
     } catch {
       // ignore startup canonical agent initialization errors
     }
+    await this.loadState();
     if (typeof debug === 'boolean') BNCR_DEBUG_VERBOSE = debug;
     await this.refreshDebugFlagFromConfig({ forceLog: true });
     const bootDiag = this.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
@@ -1129,15 +1222,34 @@ class BncrBridgeRuntime {
   };
 
   stopService = async () => {
-    if (this.pushTimer) {
-      clearTimeout(this.pushTimer);
-      this.pushTimer = null;
-    }
+    this.cleanupRuntimeWaitersAndTimers('service stopped');
     await this.flushState();
     this.logInfo('debug', 'service stopped', { debugOnly: true });
   };
 
   shutdown() {
+    this.cleanupRuntimeWaitersAndTimers('shutdown');
+  }
+
+  private cleanupRuntimeWaitersAndTimers(reason: string) {
+    this.logInfo(
+      'lifecycle',
+      `cleanup ${JSON.stringify({
+        bridge: this.bridgeId,
+        reason,
+        messageAckWaiters: this.messageAckWaiters.size,
+        fileAckWaiters: this.fileAckWaiters.size,
+        earlyFileAcks: this.earlyFileAcks.size,
+        outbox: this.outbox.size,
+        runningDrainAccounts: this.pushDrainRunningAccounts.size,
+        channelAccountWorkers: this.channelAccountWorkers.size,
+        hasSaveTimer: !!this.saveTimer,
+        hasPushTimer: !!this.pushTimer,
+      })}`,
+      { debugOnly: true },
+    );
+    this.stopped = true;
+    this.clearAllChannelAccountWorkers(reason);
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -1148,19 +1260,23 @@ class BncrBridgeRuntime {
     }
     for (const waiter of this.messageAckWaiters.values()) {
       clearTimeout(waiter.timer);
+      waiter.resolve('timeout');
     }
     this.messageAckWaiters.clear();
     for (const waiter of this.fileAckWaiters.values()) {
       clearTimeout(waiter.timer);
+      waiter.reject(new Error(reason));
     }
     this.fileAckWaiters.clear();
     this.earlyFileAcks.clear();
   }
 
   private scheduleSave() {
+    if (this.stopped) return;
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
+      if (this.stopped) return;
       void this.flushState();
     }, 300);
   }
@@ -1297,7 +1413,13 @@ class BncrBridgeRuntime {
   }
 
   private buildIntegratedDiagnostics(accountId: string) {
-    return buildIntegratedDiagnosticsFromRuntime(this.buildRuntimeStatusInput(accountId));
+    const ackObservability = this.buildRuntimeAckObservability(accountId);
+    const ackStrategy = this.buildRuntimeAckStrategy(ackObservability);
+    return {
+      ...buildIntegratedDiagnosticsFromRuntime(this.buildRuntimeStatusInput(accountId)),
+      ackObservability,
+      ackStrategy,
+    };
   }
 
   private buildDownlinkHealth(accountId: string) {
@@ -1347,10 +1469,10 @@ class BncrBridgeRuntime {
         sessionKey: normalized.sessionKey,
         route,
         payload,
-        createdAt: Number(entry.createdAt || now()),
-        retryCount: Number(entry.retryCount || 0),
-        nextAttemptAt: Number(entry.nextAttemptAt || now()),
-        lastAttemptAt: entry.lastAttemptAt ? Number(entry.lastAttemptAt) : undefined,
+        createdAt: finiteNumberOr(entry.createdAt, now()),
+        retryCount: finiteNumberOr(entry.retryCount, 0),
+        nextAttemptAt: finiteNumberOr(entry.nextAttemptAt, now()),
+        lastAttemptAt: optionalFiniteNumber(entry.lastAttemptAt),
         lastError: entry.lastError ? asString(entry.lastError) : undefined,
       };
 
@@ -1358,7 +1480,10 @@ class BncrBridgeRuntime {
     }
 
     this.deadLetter = [];
-    for (const entry of Array.isArray(data.deadLetter) ? data.deadLetter : []) {
+    const persistedDeadLetter = Array.isArray(data.deadLetter)
+      ? data.deadLetter.slice(-MAX_DEAD_LETTER_ENTRIES)
+      : [];
+    for (const entry of persistedDeadLetter) {
       if (!entry?.messageId) continue;
       const accountId = normalizeAccountId(entry.accountId);
       const sessionKey = asString(entry.sessionKey || '').trim();
@@ -1379,17 +1504,20 @@ class BncrBridgeRuntime {
         sessionKey: normalized.sessionKey,
         route,
         payload,
-        createdAt: Number(entry.createdAt || now()),
-        retryCount: Number(entry.retryCount || 0),
-        nextAttemptAt: Number(entry.nextAttemptAt || now()),
-        lastAttemptAt: entry.lastAttemptAt ? Number(entry.lastAttemptAt) : undefined,
+        createdAt: finiteNumberOr(entry.createdAt, now()),
+        retryCount: finiteNumberOr(entry.retryCount, 0),
+        nextAttemptAt: finiteNumberOr(entry.nextAttemptAt, now()),
+        lastAttemptAt: optionalFiniteNumber(entry.lastAttemptAt),
         lastError: entry.lastError ? asString(entry.lastError) : undefined,
       });
     }
 
     this.sessionRoutes.clear();
     this.routeAliases.clear();
-    for (const item of data.sessionRoutes || []) {
+    const persistedSessionRoutes = Array.isArray(data.sessionRoutes)
+      ? data.sessionRoutes.slice(-MAX_SESSION_ROUTE_ENTRIES)
+      : [];
+    for (const item of persistedSessionRoutes) {
       const normalized = normalizeStoredSessionKey(
         asString(item?.sessionKey || ''),
         this.canonicalAgentId,
@@ -1398,7 +1526,7 @@ class BncrBridgeRuntime {
 
       const route = parseRouteLike(item?.route) || normalized.route;
       const accountId = normalizeAccountId(item?.accountId);
-      const updatedAt = Number(item?.updatedAt || now());
+      const updatedAt = finiteNumberOr(item?.updatedAt, now());
 
       const info = {
         accountId,
@@ -1411,14 +1539,17 @@ class BncrBridgeRuntime {
     }
 
     this.lastSessionByAccount.clear();
-    for (const item of data.lastSessionByAccount || []) {
+    const persistedLastSessionByAccount = Array.isArray(data.lastSessionByAccount)
+      ? data.lastSessionByAccount.slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES)
+      : [];
+    for (const item of persistedLastSessionByAccount) {
       const accountId = normalizeAccountId(item?.accountId);
       const normalized = normalizeStoredSessionKey(
         asString(item?.sessionKey || ''),
         this.canonicalAgentId,
       );
-      const updatedAt = Number(item?.updatedAt || 0);
-      if (!normalized || !Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+      const updatedAt = finiteNumberOr(item?.updatedAt, 0);
+      if (!normalized || updatedAt <= 0) continue;
 
       this.lastSessionByAccount.set(accountId, {
         sessionKey: normalized.sessionKey,
@@ -1429,33 +1560,42 @@ class BncrBridgeRuntime {
     }
 
     this.lastActivityByAccount.clear();
-    for (const item of data.lastActivityByAccount || []) {
+    const persistedLastActivityByAccount = Array.isArray(data.lastActivityByAccount)
+      ? data.lastActivityByAccount.slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES)
+      : [];
+    for (const item of persistedLastActivityByAccount) {
       const accountId = normalizeAccountId(item?.accountId);
-      const updatedAt = Number(item?.updatedAt || 0);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+      const updatedAt = finiteNumberOr(item?.updatedAt, 0);
+      if (updatedAt <= 0) continue;
       this.lastActivityByAccount.set(accountId, updatedAt);
     }
 
     this.lastInboundByAccount.clear();
-    for (const item of data.lastInboundByAccount || []) {
+    const persistedLastInboundByAccount = Array.isArray(data.lastInboundByAccount)
+      ? data.lastInboundByAccount.slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES)
+      : [];
+    for (const item of persistedLastInboundByAccount) {
       const accountId = normalizeAccountId(item?.accountId);
-      const updatedAt = Number(item?.updatedAt || 0);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+      const updatedAt = finiteNumberOr(item?.updatedAt, 0);
+      if (updatedAt <= 0) continue;
       this.lastInboundByAccount.set(accountId, updatedAt);
     }
 
     this.lastOutboundByAccount.clear();
-    for (const item of data.lastOutboundByAccount || []) {
+    const persistedLastOutboundByAccount = Array.isArray(data.lastOutboundByAccount)
+      ? data.lastOutboundByAccount.slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES)
+      : [];
+    for (const item of persistedLastOutboundByAccount) {
       const accountId = normalizeAccountId(item?.accountId);
-      const updatedAt = Number(item?.updatedAt || 0);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+      const updatedAt = finiteNumberOr(item?.updatedAt, 0);
+      if (updatedAt <= 0) continue;
       this.lastOutboundByAccount.set(accountId, updatedAt);
     }
 
     this.lastDriftSnapshot =
       data.lastDriftSnapshot && typeof data.lastDriftSnapshot === 'object'
         ? {
-            capturedAt: Number((data.lastDriftSnapshot as any).capturedAt || 0),
+            capturedAt: finiteNumberOr((data.lastDriftSnapshot as any).capturedAt, 0),
             registerCount: Number.isFinite(Number((data.lastDriftSnapshot as any).registerCount))
               ? Number((data.lastDriftSnapshot as any).registerCount)
               : null,
@@ -1478,7 +1618,7 @@ class BncrBridgeRuntime {
               typeof (data.lastDriftSnapshot as any).sourceBuckets === 'object'
                 ? { ...((data.lastDriftSnapshot as any).sourceBuckets as Record<string, number>) }
                 : {},
-            traceWindowSize: Number((data.lastDriftSnapshot as any).traceWindowSize || 0),
+            traceWindowSize: finiteNumberOr((data.lastDriftSnapshot as any).traceWindowSize, 0),
             traceRecent: Array.isArray((data.lastDriftSnapshot as any).traceRecent)
               ? [...((data.lastDriftSnapshot as any).traceRecent as Array<Record<string, unknown>>)]
               : [],
@@ -1489,8 +1629,8 @@ class BncrBridgeRuntime {
     if (this.lastSessionByAccount.size === 0 && this.sessionRoutes.size > 0) {
       for (const [sessionKey, info] of this.sessionRoutes.entries()) {
         const acc = normalizeAccountId(info.accountId);
-        const updatedAt = Number(info.updatedAt || 0);
-        if (!Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+        const updatedAt = finiteNumberOr(info.updatedAt, 0);
+        if (updatedAt <= 0) continue;
 
         const current = this.lastSessionByAccount.get(acc);
         if (!current || updatedAt >= current.updatedAt) {
@@ -1521,38 +1661,38 @@ class BncrBridgeRuntime {
         route: v.route,
         updatedAt: v.updatedAt,
       }))
-      .slice(-1000);
+      .slice(-MAX_SESSION_ROUTE_ENTRIES);
 
     const data: PersistedState = {
       outbox: Array.from(this.outbox.values()),
-      deadLetter: this.deadLetter.slice(-1000),
+      deadLetter: this.deadLetter.slice(-MAX_DEAD_LETTER_ENTRIES),
       sessionRoutes,
-      lastSessionByAccount: Array.from(this.lastSessionByAccount.entries()).map(
-        ([accountId, v]) => ({
+      lastSessionByAccount: Array.from(this.lastSessionByAccount.entries())
+        .map(([accountId, v]) => ({
           accountId,
           sessionKey: v.sessionKey,
           scope: v.scope,
           updatedAt: v.updatedAt,
-        }),
-      ),
-      lastActivityByAccount: Array.from(this.lastActivityByAccount.entries()).map(
-        ([accountId, updatedAt]) => ({
+        }))
+        .slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES),
+      lastActivityByAccount: Array.from(this.lastActivityByAccount.entries())
+        .map(([accountId, updatedAt]) => ({
           accountId,
           updatedAt,
-        }),
-      ),
-      lastInboundByAccount: Array.from(this.lastInboundByAccount.entries()).map(
-        ([accountId, updatedAt]) => ({
+        }))
+        .slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES),
+      lastInboundByAccount: Array.from(this.lastInboundByAccount.entries())
+        .map(([accountId, updatedAt]) => ({
           accountId,
           updatedAt,
-        }),
-      ),
-      lastOutboundByAccount: Array.from(this.lastOutboundByAccount.entries()).map(
-        ([accountId, updatedAt]) => ({
+        }))
+        .slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES),
+      lastOutboundByAccount: Array.from(this.lastOutboundByAccount.entries())
+        .map(([accountId, updatedAt]) => ({
           accountId,
           updatedAt,
-        }),
-      ),
+        }))
+        .slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES),
       lastDriftSnapshot: this.lastDriftSnapshot
         ? {
             capturedAt: this.lastDriftSnapshot.capturedAt,
@@ -1606,11 +1746,11 @@ class BncrBridgeRuntime {
 
     const recentInboundConnIds = this.resolveRecentInboundConnIds(acc);
     const candidateScore = (conn: BncrConnection) => {
-      const preferredForOutboundUntil = Number((conn as any).preferredForOutboundUntil || 0);
-      const outboundReadyUntil = Number((conn as any).outboundReadyUntil || 0);
-      const lastPushTimeoutAt = Number((conn as any).lastPushTimeoutAt || 0);
-      const lastAckOkAt = Number((conn as any).lastAckOkAt || 0);
-      const pushFailureScore = Number((conn as any).pushFailureScore || 0);
+      const preferredForOutboundUntil = finiteNumberOr((conn as any).preferredForOutboundUntil, 0);
+      const outboundReadyUntil = finiteNumberOr((conn as any).outboundReadyUntil, 0);
+      const lastPushTimeoutAt = finiteNumberOr((conn as any).lastPushTimeoutAt, 0);
+      const lastAckOkAt = finiteNumberOr((conn as any).lastAckOkAt, 0);
+      const pushFailureScore = finiteNumberOr((conn as any).pushFailureScore, 0);
       const recentTimeoutPenalty = lastPushTimeoutAt > 0 && t - lastPushTimeoutAt <= 30_000 ? 1 : 0;
       return {
         preferred: preferredForOutboundUntil > t ? 1 : 0,
@@ -1702,11 +1842,11 @@ class BncrBridgeRuntime {
 
     const recentInboundConnIds = this.resolveRecentInboundConnIds(acc);
     const candidateScore = (conn: BncrConnection) => {
-      const preferredForOutboundUntil = Number((conn as any).preferredForOutboundUntil || 0);
-      const outboundReadyUntil = Number((conn as any).outboundReadyUntil || 0);
-      const lastPushTimeoutAt = Number((conn as any).lastPushTimeoutAt || 0);
-      const lastAckOkAt = Number((conn as any).lastAckOkAt || 0);
-      const pushFailureScore = Number((conn as any).pushFailureScore || 0);
+      const preferredForOutboundUntil = finiteNumberOr((conn as any).preferredForOutboundUntil, 0);
+      const outboundReadyUntil = finiteNumberOr((conn as any).outboundReadyUntil, 0);
+      const lastPushTimeoutAt = finiteNumberOr((conn as any).lastPushTimeoutAt, 0);
+      const lastAckOkAt = finiteNumberOr((conn as any).lastAckOkAt, 0);
+      const pushFailureScore = finiteNumberOr((conn as any).pushFailureScore, 0);
       const recentTimeoutPenalty = lastPushTimeoutAt > 0 && t - lastPushTimeoutAt <= 30_000 ? 1 : 0;
       return {
         preferred: preferredForOutboundUntil > t ? 1 : 0,
@@ -2356,17 +2496,26 @@ class BncrBridgeRuntime {
   }
 
   private logOutboxAckSummary(
-    scope: 'outbox ack ok' | 'outbox ack retry' | 'outbox ack timeout' | 'outbox ack fatal',
+    scope:
+      | 'outbox ack ok'
+      | 'outbox ack ok late'
+      | 'outbox ack retry'
+      | 'outbox ack timeout'
+      | 'outbox ack fatal',
     args: {
       messageId: string;
       connId?: string;
       clientId?: string;
       err?: string;
+      queueMs?: number | null;
+      pushMs?: number | null;
+      waitMs?: number | null;
     },
   ) {
     const parts = [`mid=${args.messageId}`, `q=${this.outbox.size}`];
-    if (args.connId) parts.push(`conn=${args.connId}`);
-    if (args.clientId) parts.push(`client=${args.clientId}`);
+    if (typeof args.queueMs === 'number') parts.push(`queueMs=${args.queueMs}`);
+    if (typeof args.pushMs === 'number') parts.push(`pushMs=${args.pushMs}`);
+    if (typeof args.waitMs === 'number') parts.push(`waitMs=${args.waitMs}`);
     if (args.err) parts.push(`err=${args.err}`);
     this.logInfo(scope, parts.join('|'));
   }
@@ -2377,6 +2526,7 @@ class BncrBridgeRuntime {
     ackResult: 'acked' | 'timeout';
     onlineNow: boolean;
     recentInboundReachable: boolean;
+    ackTimeoutMs?: number | null;
   }) {
     this.logInfo(
       'outbox',
@@ -2384,12 +2534,19 @@ class BncrBridgeRuntime {
         buildOutboxAckDebugInfo({
           messageId: args.entry.messageId,
           accountId: args.entry.accountId,
+          sessionKey: args.entry.sessionKey,
+          to: formatDisplayScope(args.entry.route),
           kind:
             isPlainObject(args.entry.payload?._meta) && args.entry.payload?._meta?.kind === 'file-transfer'
               ? 'file-transfer'
               : undefined,
           requireAck: args.requireAck,
           ackResult: args.ackResult,
+          ackStage: 'message',
+          ackOutcome: args.ackResult,
+          reason: args.ackResult === 'timeout' ? OUTBOUND_TERMINAL_REASON.PUSH_ACK_TIMEOUT : 'message-acked',
+          ackTimeoutMs: typeof args.ackTimeoutMs === 'number' ? args.ackTimeoutMs : undefined,
+          adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
           onlineNow: args.onlineNow,
           recentInboundReachable: args.recentInboundReachable,
           connIds: args.entry.lastPushConnId ? [args.entry.lastPushConnId] : [],
@@ -2410,6 +2567,7 @@ class BncrBridgeRuntime {
     availableConnIds: string[];
     decision: ReturnType<typeof computeRetryRerouteDecision>;
     localNextDelay: number | null;
+    ackTimeoutMs?: number | null;
   }) {
     this.logOutboxAckSummary(
       args.requireAck ? 'outbox ack timeout' : 'outbox ack retry',
@@ -2418,6 +2576,7 @@ class BncrBridgeRuntime {
         connId: args.entry.lastPushConnId,
         clientId: args.entry.lastPushClientId,
         err: args.requireAck ? undefined : args.entry.lastError,
+        waitMs: args.requireAck ? args.ackTimeoutMs : undefined,
       },
     );
     this.logInfo(
@@ -2500,6 +2659,11 @@ class BncrBridgeRuntime {
       return null;
     }
 
+    if (this.stopped) {
+      respond(true, { ok: true, ignored: true, reason: 'service-stopped' });
+      return null;
+    }
+
     const entry = this.outbox.get(messageId);
     if (!entry) {
       respond(true, { ok: true, message: 'already-acked-or-missing', stale: staleObserved.stale });
@@ -2548,6 +2712,7 @@ class BncrBridgeRuntime {
     connId: string;
     clientId?: string;
     stale: boolean;
+    entry: OutboxEntry;
   }) {
     this.markOutboundCapability({
       accountId: args.accountId,
@@ -2556,14 +2721,47 @@ class BncrBridgeRuntime {
       outboundReady: true,
       preferredForOutbound: true,
     });
-    this.lastAckOkByAccount.set(args.accountId, now());
+    const ackAt = now();
+    this.lastAckOkByAccount.set(args.accountId, ackAt);
+    const ackQueueLatencyMs = Math.max(0, ackAt - finiteNumberOr(args.entry.createdAt, ackAt));
+    const ackPushLatencyMs =
+      typeof args.entry.lastPushAt === 'number'
+        ? Math.max(0, ackAt - args.entry.lastPushAt)
+        : null;
+    this.lastAckQueueLatencyMsByAccount.set(args.accountId, ackQueueLatencyMs);
+    if (typeof ackPushLatencyMs === 'number') {
+      this.lastAckPushLatencyMsByAccount.set(args.accountId, ackPushLatencyMs);
+    }
+    const lateAccepted = args.entry.awaitingRetryPush === true;
+    if (lateAccepted) {
+      this.adaptiveAckRecoveryOkCountByAccount.set(args.accountId, 0);
+      this.lateAckOkCountByAccount.set(
+        args.accountId,
+        this.getCounter(this.lateAckOkCountByAccount, args.accountId) + 1,
+      );
+      this.lastLateAckOkByAccount.set(args.accountId, ackAt);
+      this.lastLateAckQueueLatencyMsByAccount.set(args.accountId, ackQueueLatencyMs);
+      if (typeof ackPushLatencyMs === 'number') {
+        this.lastLateAckPushLatencyMsByAccount.set(args.accountId, ackPushLatencyMs);
+      }
+      args.entry.awaitingRetryPush = false;
+      args.entry.lastError = undefined;
+    } else if (typeof ackPushLatencyMs === 'number' && ackPushLatencyMs <= PUSH_ACK_TIMEOUT_MS) {
+      this.adaptiveAckRecoveryOkCountByAccount.set(
+        args.accountId,
+        this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, args.accountId) + 1,
+      );
+    }
     this.outbox.delete(args.messageId);
     this.scheduleSave();
     this.resolveMessageAck(args.messageId, 'acked');
-    this.logOutboxAckSummary('outbox ack ok', {
+    this.logOutboxAckSummary(lateAccepted ? 'outbox ack ok late' : 'outbox ack ok', {
       messageId: args.messageId,
       connId: args.connId,
       clientId: args.clientId,
+      queueMs: ackQueueLatencyMs,
+      pushMs: ackPushLatencyMs,
+      err: lateAccepted ? 'accepted-after-timeout' : undefined,
     });
   }
 
@@ -2592,6 +2790,7 @@ class BncrBridgeRuntime {
   }) {
     args.entry.nextAttemptAt = now() + 1_000;
     args.entry.lastError = args.error;
+    args.entry.awaitingRetryPush = true;
     this.outbox.set(args.messageId, args.entry);
     this.scheduleSave();
     this.logOutboxAckSummary('outbox ack retry', {
@@ -2623,6 +2822,7 @@ class BncrBridgeRuntime {
         connId,
         clientId,
         stale: staleObserved.stale,
+        entry,
       });
       this.respondAckResult(respond, staleObserved.stale, { ok: true });
       this.flushPushQueue({
@@ -2842,6 +3042,7 @@ class BncrBridgeRuntime {
     args.entry.lastPushConnId =
       args.ownerConnId || (connIds.length === 1 ? connIds[0] : undefined);
     args.entry.lastPushClientId = args.ownerClientId;
+    args.entry.awaitingRetryPush = false;
     if (!Array.isArray(args.entry.routeAttemptConnIds)) args.entry.routeAttemptConnIds = [];
     if (
       args.entry.lastPushConnId &&
@@ -2857,6 +3058,7 @@ class BncrBridgeRuntime {
   }
 
   private schedulePushDrain(delayMs = 0) {
+    if (this.stopped) return;
     // Structure note (drain scheduler):
     // This is the single-timer gate for outbound retry scheduling. It intentionally coalesces
     // multiple nudges into one pending timer and delegates all actual decision-making to
@@ -2877,6 +3079,7 @@ class BncrBridgeRuntime {
     );
     this.pushTimer = setTimeout(() => {
       this.pushTimer = null;
+      if (this.stopped) return;
       void this.flushPushQueue({
         trigger: OUTBOUND_FLUSH_TRIGGER.TIMER,
         reason: OUTBOUND_FLUSH_REASON.SCHEDULED_DRAIN,
@@ -2914,7 +3117,9 @@ class BncrBridgeRuntime {
     return {
       outboundRequireAck: this.isOutboundAckRequired(accountId),
       ackPolicySource,
-      messageAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+      messageAckTimeoutMs: this.resolveMessageAckTimeoutMs(accountId),
+      adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+      defaultMessageAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
       fileAckTimeoutMs: FILE_ACK_TIMEOUT_MS,
       debugVerbose: BNCR_DEBUG_VERBOSE,
     };
@@ -2925,6 +3130,7 @@ class BncrBridgeRuntime {
     trigger?: string;
     reason?: string;
   }): Promise<void> {
+    if (this.stopped) return;
     // Structure guide for future safe extraction:
     // - pre-check: choose target accounts, skip accounts already draining, emit flush context logs
     // - tryPush: pick one due entry per account and attempt actual outbound delivery
@@ -2995,8 +3201,45 @@ class BncrBridgeRuntime {
       this.pushDrainRunningAccounts.add(acc);
       try {
         let localNextDelay: number | null = null;
+        let processedThisRun = 0;
+        const accountDrainStartedAt = now();
 
         while (true) {
+          if (this.stopped) break;
+          if (processedThisRun > 0 && now() - accountDrainStartedAt >= PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS) {
+            localNextDelay = updateMinOutboxDelay(localNextDelay, 0);
+            this.logInfo(
+              'outbox',
+              `schedule ${JSON.stringify(
+                buildOutboxScheduleDebugInfo({
+                  bridgeId: this.bridgeId,
+                  accountId: acc,
+                  source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_TIME_BUDGET_YIELD,
+                  wait: 0,
+                  localNextDelay,
+                }),
+              )}`,
+              { debugOnly: true },
+            );
+            break;
+          }
+          if (processedThisRun >= PUSH_DRAIN_ACCOUNT_BUDGET) {
+            localNextDelay = updateMinOutboxDelay(localNextDelay, 0);
+            this.logInfo(
+              'outbox',
+              `schedule ${JSON.stringify(
+                buildOutboxScheduleDebugInfo({
+                  bridgeId: this.bridgeId,
+                  accountId: acc,
+                  source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_BUDGET_YIELD,
+                  wait: 0,
+                  localNextDelay,
+                }),
+              )}`,
+              { debugOnly: true },
+            );
+            break;
+          }
           const t = now();
           const entries = listAccountOutboxEntries({
             accountId: acc,
@@ -3031,11 +3274,13 @@ class BncrBridgeRuntime {
           const onlineNow = this.isOnline(acc);
           const recentInboundReachable = this.hasRecentInboundReachability(acc);
           const pushed = await this.tryPushEntry(entry);
+          processedThisRun += 1;
           if (pushed) {
             const requireAck = this.isOutboundAckRequired(acc);
+            const ackTimeoutMs = requireAck ? this.resolveMessageAckTimeoutMs(acc) : null;
             let ackResult: 'acked' | 'timeout' = requireAck ? 'timeout' : 'acked';
             if (onlineNow && requireAck) {
-              ackResult = await this.waitForMessageAck(entry.messageId, PUSH_ACK_TIMEOUT_MS);
+              ackResult = await this.waitForMessageAck(entry.messageId, ackTimeoutMs || PUSH_ACK_TIMEOUT_MS);
             }
 
             this.logOutboxAckWait({
@@ -3044,6 +3289,7 @@ class BncrBridgeRuntime {
               ackResult,
               onlineNow,
               recentInboundReachable,
+              ackTimeoutMs,
             });
 
             if (!this.outbox.has(entry.messageId)) {
@@ -3112,6 +3358,7 @@ class BncrBridgeRuntime {
                 acc,
                 this.getCounter(this.ackTimeoutCountByAccount, acc) + 1,
               );
+              this.adaptiveAckRecoveryOkCountByAccount.set(acc, 0);
             }
             const wait = computeOutboxRetryWait(decision.nextAttemptAt, now());
             localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
@@ -3123,6 +3370,7 @@ class BncrBridgeRuntime {
               availableConnIds,
               decision,
               localNextDelay,
+              ackTimeoutMs,
             });
             await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
             break;
@@ -3213,17 +3461,36 @@ class BncrBridgeRuntime {
 
   private async waitForMessageAck(messageId: string, waitMs: number): Promise<'acked' | 'timeout'> {
     const key = asString(messageId).trim();
-    const timeoutMs = Math.max(0, Math.min(waitMs, 25_000));
+    const timeoutMs = clampFiniteNumber(
+      waitMs,
+      0,
+      0,
+      RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+    );
     if (!key || !timeoutMs) return 'timeout';
 
-    return await new Promise<'acked' | 'timeout'>((resolve) => {
-      const timer = setTimeout(() => {
+    const existing = this.messageAckWaiters.get(key);
+    if (existing) {
+      this.logWarn(
+        'outbox',
+        `message-ack-waiter-reuse ${JSON.stringify({ bridge: this.bridgeId, messageId: key })}`,
+        { debugOnly: true },
+      );
+      return await existing.promise;
+    }
+
+    let timer: NodeJS.Timeout;
+    let resolveWaiter!: (result: 'acked' | 'timeout') => void;
+    const promise = new Promise<'acked' | 'timeout'>((resolve) => {
+      resolveWaiter = resolve;
+      timer = setTimeout(() => {
         this.messageAckWaiters.delete(key);
         resolve('timeout');
       }, timeoutMs);
-
-      this.messageAckWaiters.set(key, { resolve, timer });
     });
+
+    this.messageAckWaiters.set(key, { promise, resolve: resolveWaiter, timer: timer! });
+    return await promise;
   }
 
   private connectionKey(accountId: string, clientId?: string): string {
@@ -3253,6 +3520,9 @@ class BncrBridgeRuntime {
           { debugOnly: true },
         );
         this.connections.delete(key);
+        if (this.activeConnectionByAccount.get(c.accountId) === key) {
+          this.activeConnectionByAccount.delete(c.accountId);
+        }
       }
     }
 
@@ -3267,11 +3537,23 @@ class BncrBridgeRuntime {
 
   private cleanupFileTransfers() {
     const t = now();
+    const keepMsForTransfer = (st: { status: string; startedAt: number; terminalAt?: number }) => {
+      const startedAt = finiteNumberOr(st.startedAt, t);
+      if (st.status === 'completed' || st.status === 'aborted') {
+        return {
+          since: finiteNumberOr(st.terminalAt, startedAt),
+          keepMs: FILE_TRANSFER_TERMINAL_KEEP_MS,
+        };
+      }
+      return { since: startedAt, keepMs: FILE_TRANSFER_KEEP_MS };
+    };
     for (const [id, st] of this.fileSendTransfers.entries()) {
-      if (t - st.startedAt > FILE_TRANSFER_KEEP_MS) this.fileSendTransfers.delete(id);
+      const keep = keepMsForTransfer(st);
+      if (t - keep.since > keep.keepMs) this.fileSendTransfers.delete(id);
     }
     for (const [id, st] of this.fileRecvTransfers.entries()) {
-      if (t - st.startedAt > FILE_TRANSFER_KEEP_MS) this.fileRecvTransfers.delete(id);
+      const keep = keepMsForTransfer(st);
+      if (t - keep.since > keep.keepMs) this.fileRecvTransfers.delete(id);
     }
     for (const [key, ack] of this.earlyFileAcks.entries()) {
       if (t - ack.at > FILE_TRANSFER_ACK_TTL_MS) this.earlyFileAcks.delete(key);
@@ -3671,8 +3953,17 @@ class BncrBridgeRuntime {
   }
 
   private fileAckKey(transferId: string, stage: string, chunkIndex?: number): string {
-    const idx = Number.isFinite(Number(chunkIndex)) ? String(Number(chunkIndex)) : '-';
+    const n = Number(chunkIndex);
+    const idx = Number.isInteger(n) && n >= 0 ? String(n) : '-';
     return `${transferId}|${stage}|${idx}`;
+  }
+
+  private fileAckOwnerInfo(transferId: string) {
+    const st = this.fileSendTransfers.get(transferId);
+    return {
+      ...(st?.ownerConnId ? { ownerConnId: st.ownerConnId } : {}),
+      ...(st?.ownerClientId ? { ownerClientId: st.ownerClientId } : {}),
+    };
   }
 
   private waitForFileAck(params: {
@@ -3684,10 +3975,8 @@ class BncrBridgeRuntime {
     const transferId = asString(params.transferId).trim();
     const stage = asString(params.stage).trim();
     const key = this.fileAckKey(transferId, stage, params.chunkIndex);
-    const timeoutMs = Math.max(
-      1_000,
-      Math.min(Number(params.timeoutMs || FILE_ACK_TIMEOUT_MS), 120_000),
-    );
+    const timeoutMs = clampFiniteNumber(params.timeoutMs, FILE_ACK_TIMEOUT_MS, 1_000, 120_000);
+    const ownerInfo = this.fileAckOwnerInfo(transferId);
 
     const cached = this.earlyFileAcks.get(key);
     if (cached) {
@@ -3698,9 +3987,13 @@ class BncrBridgeRuntime {
           bridge: this.bridgeId,
           transferId,
           stage,
+          ackStage: stage,
+          ackOutcome: cached.ok ? 'acked' : 'failed',
+          waiterReused: false,
           chunkIndex:
             Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
           key,
+          ...ownerInfo,
           ok: cached.ok,
           payload: cached.payload,
         }),
@@ -3714,22 +4007,52 @@ class BncrBridgeRuntime {
       );
     }
 
+    const existing = this.fileAckWaiters.get(key);
+    if (existing) {
+      this.logWarn(
+        'file-ack-waiter-reuse',
+        JSON.stringify({
+          bridge: this.bridgeId,
+          transferId,
+          stage,
+          ackStage: stage,
+          ackOutcome: 'waiter-reused',
+          waiterReused: true,
+          chunkIndex:
+            Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
+          key,
+          ...ownerInfo,
+        }),
+        { debugOnly: true },
+      );
+      return existing.promise;
+    }
+
     this.logInfo(
       'file-ack-wait',
       JSON.stringify({
         bridge: this.bridgeId,
         transferId,
         stage,
+        ackStage: stage,
+        ackOutcome: 'waiting',
+        waiterReused: false,
         chunkIndex:
           Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
         key,
+        ...ownerInfo,
         timeoutMs,
       }),
       { debugOnly: true },
     );
 
-    return new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
+    let timer: NodeJS.Timeout;
+    let resolveWaiter!: (payload: Record<string, unknown>) => void;
+    let rejectWaiter!: (err: Error) => void;
+    const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
+      resolveWaiter = resolve;
+      rejectWaiter = reject;
+      timer = setTimeout(() => {
         this.fileAckWaiters.delete(key);
         this.logWarn(
           OUTBOUND_TERMINAL_REASON.FILE_ACK_TIMEOUT,
@@ -3737,17 +4060,27 @@ class BncrBridgeRuntime {
             bridge: this.bridgeId,
             transferId,
             stage,
+            ackStage: stage,
+            ackOutcome: 'timeout',
+            waiterReused: false,
             chunkIndex:
               Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
             key,
+            ...ownerInfo,
             timeoutMs,
           }),
           { debugOnly: true },
         );
         reject(new Error(`file ack timeout: ${key}`));
       }, timeoutMs);
-      this.fileAckWaiters.set(key, { resolve, reject, timer });
     });
+    this.fileAckWaiters.set(key, {
+      promise,
+      resolve: resolveWaiter,
+      reject: rejectWaiter,
+      timer: timer!,
+    });
+    return promise;
   }
 
   private resolveFileAck(params: {
@@ -3760,9 +4093,10 @@ class BncrBridgeRuntime {
     const transferId = asString(params.transferId).trim();
     const stage = asString(params.stage).trim();
     const key = this.fileAckKey(transferId, stage, params.chunkIndex);
+    const ownerInfo = this.fileAckOwnerInfo(transferId);
     const waiter = this.fileAckWaiters.get(key);
     if (!waiter) {
-      this.earlyFileAcks.set(key, {
+      this.rememberEarlyFileAck(key, {
         payload: params.payload,
         ok: params.ok,
         at: now(),
@@ -3773,9 +4107,13 @@ class BncrBridgeRuntime {
           bridge: this.bridgeId,
           transferId,
           stage,
+          ackStage: stage,
+          ackOutcome: params.ok ? 'early-acked' : 'early-failed',
+          waiterReused: false,
           chunkIndex:
             Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
           key,
+          ...ownerInfo,
           ok: params.ok,
           payload: params.payload,
           cached: true,
@@ -3792,9 +4130,13 @@ class BncrBridgeRuntime {
         bridge: this.bridgeId,
         transferId,
         stage,
+        ackStage: stage,
+        ackOutcome: params.ok ? 'acked' : 'failed',
+        waiterReused: false,
         chunkIndex:
           Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
         key,
+        ...ownerInfo,
         ok: params.ok,
         payload: params.payload,
       }),
@@ -3841,38 +4183,6 @@ class BncrBridgeRuntime {
     return mt || 'file';
   }
 
-  private resolveInboundFilesDir(): string {
-    const dir = path.join(process.cwd(), '.openclaw', 'media', 'inbound', 'bncr');
-    fs.mkdirSync(dir, { recursive: true });
-    return dir;
-  }
-
-  private async materializeRecvTransfer(
-    st: FileRecvTransferState,
-  ): Promise<{ path: string; fileSha256: string }> {
-    const dir = this.resolveInboundFilesDir();
-    const safeName = asString(st.fileName).trim() || `${st.transferId}.bin`;
-    const finalPath = path.join(dir, safeName);
-
-    const ordered: Buffer[] = [];
-    for (let i = 0; i < st.totalChunks; i++) {
-      const chunk = st.bufferByChunk.get(i);
-      if (!chunk) throw new Error(`missing chunk ${i}`);
-      ordered.push(chunk);
-    }
-    const merged = Buffer.concat(ordered);
-    if (Number(st.fileSize || 0) > 0 && merged.length !== Number(st.fileSize || 0)) {
-      throw new Error(`size mismatch expected=${st.fileSize} got=${merged.length}`);
-    }
-
-    const sha = createHash('sha256').update(merged).digest('hex');
-    if (st.fileSha256 && sha !== st.fileSha256) {
-      throw new Error(`sha256 mismatch expected=${st.fileSha256} got=${sha}`);
-    }
-
-    fs.writeFileSync(finalPath, merged);
-    return { path: finalPath, fileSha256: sha };
-  }
 
   private buildRuntimeQueueSnapshot(accountId: string) {
     const pending = Array.from(this.outbox.values()).filter((v) => v.accountId === accountId).length;
@@ -3895,6 +4205,213 @@ class BncrBridgeRuntime {
       inboundEvents: this.getCounter(this.inboundEventsByAccount, accountId),
       activityEvents: this.getCounter(this.activityEventsByAccount, accountId),
       ackEvents: this.getCounter(this.ackEventsByAccount, accountId),
+    };
+  }
+
+  private computeRecommendedAckTimeoutReason(args: {
+    lateAckOkCount: number;
+    recentAckTimeoutCount: number;
+    lastLateAckPushLatencyMs: number | null;
+    lastLateAckOkAt?: number | null;
+    adaptiveAckRecoveryOkCount?: number;
+    recommendedAckTimeoutMs?: number;
+    nowMs?: number;
+  }) {
+    if (args.recentAckTimeoutCount <= 0) return 'no-timeout-evidence';
+    if (args.lateAckOkCount <= 0) return 'no-late-ack-evidence';
+    if (typeof args.lastLateAckPushLatencyMs !== 'number') return 'missing-latency';
+    const lastLateAckOkAt = typeof args.lastLateAckOkAt === 'number' ? args.lastLateAckOkAt : null;
+    const nowMs = typeof args.nowMs === 'number' ? args.nowMs : now();
+    if (
+      typeof lastLateAckOkAt === 'number' &&
+      lastLateAckOkAt > 0 &&
+      nowMs - lastLateAckOkAt > ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS
+    ) {
+      return 'late-ack-expired';
+    }
+    if (
+      typeof args.adaptiveAckRecoveryOkCount === 'number' &&
+      args.adaptiveAckRecoveryOkCount >= ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD
+    ) {
+      return 'recovered';
+    }
+    if (args.recommendedAckTimeoutMs === RECOMMENDED_ACK_TIMEOUT_MAX_MS) return 'capped-max';
+    return 'late-ack-observed';
+  }
+
+  private computeRecommendedAckTimeoutMs(args: {
+    lateAckOkCount: number;
+    recentAckTimeoutCount: number;
+    lastLateAckPushLatencyMs: number | null;
+    lastLateAckOkAt?: number | null;
+    adaptiveAckRecoveryOkCount?: number;
+    nowMs?: number;
+  }) {
+    const lastLateAckOkAt = typeof args.lastLateAckOkAt === 'number' ? args.lastLateAckOkAt : null;
+    const nowMs = typeof args.nowMs === 'number' ? args.nowMs : now();
+    const lateAckExpired =
+      typeof lastLateAckOkAt === 'number' &&
+      lastLateAckOkAt > 0 &&
+      nowMs - lastLateAckOkAt > ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS;
+    const recovered =
+      typeof args.adaptiveAckRecoveryOkCount === 'number' &&
+      args.adaptiveAckRecoveryOkCount >= ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD;
+    if (
+      args.lateAckOkCount <= 0 ||
+      args.recentAckTimeoutCount <= 0 ||
+      typeof args.lastLateAckPushLatencyMs !== 'number' ||
+      lateAckExpired ||
+      recovered
+    ) {
+      return PUSH_ACK_TIMEOUT_MS;
+    }
+    const recommended = Math.ceil(args.lastLateAckPushLatencyMs * 1.25);
+    return Math.min(
+      RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+      Math.max(RECOMMENDED_ACK_TIMEOUT_MIN_MS, recommended),
+    );
+  }
+
+  private maybeLogAdaptiveAckTimeout(args: {
+    accountId: string;
+    timeoutMs: number;
+    reason: string;
+    lastLateAckPushLatencyMs: number | null;
+    nowMs?: number;
+  }) {
+    if (args.timeoutMs <= PUSH_ACK_TIMEOUT_MS) return;
+    const t = typeof args.nowMs === 'number' ? args.nowMs : now();
+    const previous = this.adaptiveAckTimeoutLogStateByAccount.get(args.accountId);
+    if (
+      previous &&
+      previous.timeoutMs === args.timeoutMs &&
+      previous.reason === args.reason &&
+      t - previous.at < ADAPTIVE_ACK_TIMEOUT_LOG_THROTTLE_MS
+    ) {
+      return;
+    }
+    this.adaptiveAckTimeoutLogStateByAccount.set(args.accountId, {
+      at: t,
+      timeoutMs: args.timeoutMs,
+      reason: args.reason,
+    });
+    const parts = [
+      args.accountId,
+      `current=${args.timeoutMs}`,
+      `default=${PUSH_ACK_TIMEOUT_MS}`,
+      `reason=${args.reason}`,
+    ];
+    if (typeof args.lastLateAckPushLatencyMs === 'number') {
+      parts.push(`latePushMs=${args.lastLateAckPushLatencyMs}`);
+    }
+    this.logInfo('outbox ack timeout-adaptive', parts.join('|'));
+  }
+
+  private resolveMessageAckTimeoutMs(accountId?: string) {
+    if (!ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED) return PUSH_ACK_TIMEOUT_MS;
+    const acc = normalizeAccountId(accountId || BNCR_DEFAULT_ACCOUNT_ID);
+    const lateAckOkCount = this.getCounter(this.lateAckOkCountByAccount, acc);
+    const recentAckTimeoutCount = this.getCounter(this.ackTimeoutCountByAccount, acc);
+    const lastLateAckPushLatencyMs = this.lastLateAckPushLatencyMsByAccount.get(acc) || null;
+    const lastLateAckOkAt = this.lastLateAckOkByAccount.get(acc) || null;
+    const adaptiveAckRecoveryOkCount = this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, acc);
+    const nowMs = now();
+    const timeoutMs = this.computeRecommendedAckTimeoutMs({
+      lateAckOkCount,
+      recentAckTimeoutCount,
+      lastLateAckPushLatencyMs,
+      lastLateAckOkAt,
+      adaptiveAckRecoveryOkCount,
+      nowMs,
+    });
+    const reason = this.computeRecommendedAckTimeoutReason({
+      lateAckOkCount,
+      recentAckTimeoutCount,
+      lastLateAckPushLatencyMs,
+      lastLateAckOkAt,
+      adaptiveAckRecoveryOkCount,
+      recommendedAckTimeoutMs: timeoutMs,
+      nowMs,
+    });
+    this.maybeLogAdaptiveAckTimeout({
+      accountId: acc,
+      timeoutMs,
+      reason,
+      lastLateAckPushLatencyMs,
+      nowMs,
+    });
+    return timeoutMs;
+  }
+
+  private buildRuntimeAckObservability(accountId: string) {
+    const acc = normalizeAccountId(accountId);
+    const recentAckTimeoutCount = this.getCounter(this.ackTimeoutCountByAccount, acc);
+    const lateAckOkCount = this.getCounter(this.lateAckOkCountByAccount, acc);
+    const lastLateAckPushLatencyMs = this.lastLateAckPushLatencyMsByAccount.get(acc) || null;
+    const lastLateAckOkAt = this.lastLateAckOkByAccount.get(acc) || null;
+    const nowMs = now();
+    const lastLateAckAgeMs =
+      typeof lastLateAckOkAt === 'number' && lastLateAckOkAt > 0 ? Math.max(0, nowMs - lastLateAckOkAt) : null;
+    const lateAckObservationTtlMs = ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS;
+    const lateAckObservationExpired =
+      typeof lastLateAckAgeMs === 'number' && lastLateAckAgeMs > lateAckObservationTtlMs;
+    const adaptiveAckRecoveryOkCount = this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, acc);
+    const adaptiveAckRecovered = adaptiveAckRecoveryOkCount >= ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD;
+    const recommendedAckTimeoutMs = this.computeRecommendedAckTimeoutMs({
+      lateAckOkCount,
+      recentAckTimeoutCount,
+      lastLateAckPushLatencyMs,
+      lastLateAckOkAt,
+      adaptiveAckRecoveryOkCount,
+      nowMs,
+    });
+    const currentAckTimeoutMs = this.resolveMessageAckTimeoutMs(acc);
+    return {
+      lastAckOkAt: this.lastAckOkByAccount.get(acc) || null,
+      lastAckTimeoutAt: this.lastAckTimeoutByAccount.get(acc) || null,
+      recentAckTimeoutCount,
+      lateAckOkCount,
+      lastLateAckOkAt,
+      lastLateAckAgeMs,
+      lateAckObservationTtlMs,
+      lateAckObservationExpired,
+      adaptiveAckRecoveryOkCount,
+      adaptiveAckRecoveryOkThreshold: ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
+      adaptiveAckRecovered,
+      lastAckQueueLatencyMs: this.lastAckQueueLatencyMsByAccount.get(acc) || null,
+      lastAckPushLatencyMs: this.lastAckPushLatencyMsByAccount.get(acc) || null,
+      lastLateAckQueueLatencyMs: this.lastLateAckQueueLatencyMsByAccount.get(acc) || null,
+      lastLateAckPushLatencyMs,
+      adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+      currentAckTimeoutMs,
+      recommendedAckTimeoutMs,
+      recommendedAckTimeoutReason: this.computeRecommendedAckTimeoutReason({
+        lateAckOkCount,
+        recentAckTimeoutCount,
+        lastLateAckPushLatencyMs,
+        lastLateAckOkAt,
+        adaptiveAckRecoveryOkCount,
+        recommendedAckTimeoutMs,
+        nowMs,
+      }),
+    };
+  }
+
+  private buildRuntimeAckStrategy(ackObservability: Record<string, any>) {
+    const currentMs = finiteNumberOr(ackObservability.currentAckTimeoutMs, PUSH_ACK_TIMEOUT_MS);
+    const defaultMs = finiteNumberOr(ackObservability.defaultAckTimeoutMs, PUSH_ACK_TIMEOUT_MS);
+    const reason = asString(ackObservability.recommendedAckTimeoutReason || 'unknown') || 'unknown';
+    return {
+      mode: ackObservability.adaptiveAckTimeoutEnabled === true ? 'adaptive' : 'fixed',
+      currentMs,
+      defaultMs,
+      maxMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+      reason,
+      active: currentMs > defaultMs,
+      lastLateAckAgeMs: ackObservability.lastLateAckAgeMs ?? null,
+      lateAckObservationTtlMs: ackObservability.lateAckObservationTtlMs ?? null,
+      recovered: ackObservability.adaptiveAckRecovered === true,
     };
   }
 
@@ -3927,7 +4444,29 @@ class BncrBridgeRuntime {
   }
 
   getAccountRuntimeSnapshot(accountId: string) {
-    return buildAccountRuntimeSnapshot(this.buildRuntimeStatusInput(accountId, { running: true }));
+    const snapshot = buildAccountRuntimeSnapshot(this.buildRuntimeStatusInput(accountId, { running: true }));
+    const ackObservability = this.buildRuntimeAckObservability(accountId);
+    const ackStrategy = this.buildRuntimeAckStrategy(ackObservability);
+    return {
+      ...snapshot,
+      ackObservability,
+      ackStrategy,
+      diagnostics: {
+        ...(snapshot.diagnostics || {}),
+        ackObservability,
+        ackStrategy,
+      },
+      meta: {
+        ...(snapshot.meta || {}),
+        ackObservability,
+        ackStrategy,
+        diagnostics: {
+          ...(snapshot.meta?.diagnostics || {}),
+          ackObservability,
+          ackStrategy,
+        },
+      },
+    };
   }
 
   private buildStatusHeadline(accountId: string): string {
@@ -3996,7 +4535,7 @@ class BncrBridgeRuntime {
     this.deadLetter = appendDeadLetter({
       deadLetter: this.deadLetter,
       entry: dead,
-      maxEntries: 1000,
+      maxEntries: MAX_DEAD_LETTER_ENTRIES,
     });
     this.outbox.delete(entry.messageId);
     this.resolveMessageAck(entry.messageId, 'timeout');
@@ -4336,52 +4875,37 @@ class BncrBridgeRuntime {
   }
 
   private async sleepMs(ms: number): Promise<void> {
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, clampFiniteNumber(ms, 0, 0, INTERNAL_SLEEP_MAX_MS)),
+    );
   }
 
-  private waitChunkAck(params: {
+  private async waitChunkAck(params: {
     transferId: string;
     chunkIndex: number;
     timeoutMs?: number;
   }): Promise<void> {
     // Refactor boundary note (file-transfer / ACK coupling):
     // Chunk-level ACK waiting is part of the file-transfer sub-protocol, but it depends directly on
-    // mutable transfer runtime state in fileSendTransfers. If this is extracted later, preserve the
-    // current state ownership and timeout semantics before moving polling/wait logic out to another file.
+    // mutable transfer runtime state in fileSendTransfers. Keep state prechecks here, while ACK wakeup
+    // uses the shared event-style fileAckWaiters path instead of polling transfer state.
     const { transferId, chunkIndex } = params;
-    const timeoutMs = Math.max(
-      1_000,
-      Math.min(Number(params.timeoutMs || FILE_TRANSFER_ACK_TTL_MS), 60_000),
-    );
-    const started = now();
+    const st = this.fileSendTransfers.get(transferId);
+    if (!st) throw new Error('transfer state missing');
+    if (st.failedChunks.has(chunkIndex)) {
+      throw new Error(st.failedChunks.get(chunkIndex) || `chunk ${chunkIndex} failed`);
+    }
+    if (st.ackedChunks.has(chunkIndex)) return;
 
-    return new Promise<void>((resolve, reject) => {
-      const tick = async () => {
-        const st = this.fileSendTransfers.get(transferId);
-        if (!st) {
-          reject(new Error('transfer state missing'));
-          return;
-        }
-        if (st.failedChunks.has(chunkIndex)) {
-          reject(new Error(st.failedChunks.get(chunkIndex) || `chunk ${chunkIndex} failed`));
-          return;
-        }
-        if (st.ackedChunks.has(chunkIndex)) {
-          resolve();
-          return;
-        }
-        if (now() - started >= timeoutMs) {
-          reject(new Error(`chunk ack timeout index=${chunkIndex}`));
-          return;
-        }
-        await this.sleepMs(120);
-        void tick();
-      };
-      void tick();
+    await this.waitForFileAck({
+      transferId,
+      stage: 'chunk',
+      chunkIndex,
+      timeoutMs: clampFiniteNumber(params.timeoutMs, FILE_TRANSFER_ACK_TTL_MS, 1_000, 60_000),
     });
   }
 
-  private waitCompleteAck(params: {
+  private async waitCompleteAck(params: {
     transferId: string;
     timeoutMs?: number;
   }): Promise<{ path: string }> {
@@ -4390,33 +4914,20 @@ class BncrBridgeRuntime {
     // transfer status transitions performed elsewhere in channel.ts. Keep completion wait behavior and
     // transfer-state mutation boundaries aligned if/when file-transfer pieces are moved out.
     const { transferId } = params;
-    const timeoutMs = Math.max(2_000, Math.min(Number(params.timeoutMs || 60_000), 120_000));
-    const started = now();
+    const st = this.fileSendTransfers.get(transferId);
+    if (!st) throw new Error('transfer state missing');
+    if (st.status === 'aborted') throw new Error(st.error || 'transfer aborted');
+    if (st.status === 'completed' && st.completedPath) return { path: st.completedPath };
 
-    return new Promise<{ path: string }>((resolve, reject) => {
-      const tick = async () => {
-        const st = this.fileSendTransfers.get(transferId);
-        if (!st) {
-          reject(new Error('transfer state missing'));
-          return;
-        }
-        if (st.status === 'aborted') {
-          reject(new Error(st.error || 'transfer aborted'));
-          return;
-        }
-        if (st.status === 'completed' && st.completedPath) {
-          resolve({ path: st.completedPath });
-          return;
-        }
-        if (now() - started >= timeoutMs) {
-          reject(new Error('complete ack timeout'));
-          return;
-        }
-        await this.sleepMs(150);
-        void tick();
-      };
-      void tick();
+    const payload = await this.waitForFileAck({
+      transferId,
+      stage: 'complete',
+      timeoutMs: clampFiniteNumber(params.timeoutMs, 60_000, 2_000, 120_000),
     });
+    const updated = this.fileSendTransfers.get(transferId);
+    const path = asString(payload?.path || updated?.completedPath || '').trim();
+    if (!path) throw new Error('complete ack missing path');
+    return { path };
   }
 
   private async transferMediaToBncrClient(params: {
@@ -4596,6 +5107,7 @@ class BncrBridgeRuntime {
 
       if (!ok) {
         st.status = 'aborted';
+        st.terminalAt = now();
         st.error = String((lastErr as any)?.message || lastErr || `chunk-${idx}-failed`);
         this.fileSendTransfers.set(transferId, st);
         ctx.broadcastToConnIds(
@@ -4949,13 +5461,32 @@ class BncrBridgeRuntime {
     const sessionKey = asString(params?.sessionKey || '').trim();
     const fileName = asString(params?.fileName || '').trim() || 'file.bin';
     const mimeType = asString(params?.mimeType || '').trim() || 'application/octet-stream';
-    const fileSize = Number(params?.fileSize || 0);
-    const chunkSize = Number(params?.chunkSize || 256 * 1024);
-    const totalChunks = Number(params?.totalChunks || 0);
+    const fileSize = finiteNonNegativeNumberOrNull(params?.fileSize);
+    const chunkSize = finiteNonNegativeNumberOrNull(params?.chunkSize ?? 256 * 1024);
+    const totalChunks = finiteNonNegativeNumberOrNull(params?.totalChunks);
     const fileSha256 = asString(params?.fileSha256 || '').trim();
 
     if (!transferId || !sessionKey || !fileSize || !chunkSize || !totalChunks) {
       respond(false, { error: 'transferId/sessionKey/fileSize/chunkSize/totalChunks required' });
+      return;
+    }
+    if (fileSize > INBOUND_FILE_TRANSFER_MAX_BYTES) {
+      respond(false, {
+        error: `fileSize too large size=${fileSize} max=${INBOUND_FILE_TRANSFER_MAX_BYTES}`,
+      });
+      return;
+    }
+    if (totalChunks > INBOUND_FILE_TRANSFER_MAX_CHUNKS) {
+      respond(false, {
+        error: `totalChunks too large total=${totalChunks} max=${INBOUND_FILE_TRANSFER_MAX_CHUNKS}`,
+      });
+      return;
+    }
+    const expectedTotalChunks = Math.ceil(fileSize / chunkSize);
+    if (totalChunks !== expectedTotalChunks) {
+      respond(false, {
+        error: `totalChunks mismatch total=${totalChunks} expected=${expectedTotalChunks}`,
+      });
       return;
     }
 
@@ -5015,13 +5546,13 @@ class BncrBridgeRuntime {
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
 
     const transferId = asString(params?.transferId || '').trim();
-    const chunkIndex = Number(params?.chunkIndex ?? -1);
-    const offset = Number(params?.offset ?? 0);
-    const size = Number(params?.size ?? 0);
+    const chunkIndex = finiteNonNegativeNumberOrNull(params?.chunkIndex);
+    const offset = finiteNonNegativeNumberOrNull(params?.offset ?? 0);
+    const size = finiteNonNegativeNumberOrNull(params?.size ?? 0);
     const chunkSha256 = asString(params?.chunkSha256 || '').trim();
     const base64 = asString(params?.base64 || '');
 
-    if (!transferId || chunkIndex < 0 || !base64) {
+    if (!transferId || chunkIndex == null || !base64) {
       respond(false, { error: 'transferId/chunkIndex/base64 required' });
       return;
     }
@@ -5029,6 +5560,10 @@ class BncrBridgeRuntime {
     const st = this.fileRecvTransfers.get(transferId);
     if (!st) {
       respond(false, { error: 'transfer not found' });
+      return;
+    }
+    if (chunkIndex >= st.totalChunks) {
+      respond(false, { error: `chunkIndex out of range index=${chunkIndex} total=${st.totalChunks}` });
       return;
     }
 
@@ -5061,7 +5596,7 @@ class BncrBridgeRuntime {
 
     try {
       const buf = Buffer.from(base64, 'base64');
-      if (size > 0 && buf.length !== size) {
+      if (size != null && size > 0 && buf.length !== size) {
         throw new Error(`chunk size mismatch expected=${size} got=${buf.length}`);
       }
       if (chunkSha256) {
@@ -5177,6 +5712,7 @@ class BncrBridgeRuntime {
       );
       st.completedPath = saved.path;
       st.status = 'completed';
+      st.terminalAt = now();
       this.fileRecvTransfers.set(transferId, st);
 
       respond(
@@ -5205,6 +5741,7 @@ class BncrBridgeRuntime {
       );
     } catch (error) {
       st.status = 'aborted';
+      st.terminalAt = now();
       st.error = String((error as any)?.message || error || 'complete failed');
       this.fileRecvTransfers.set(transferId, st);
       respond(false, { error: st.error });
@@ -5256,6 +5793,7 @@ class BncrBridgeRuntime {
     }
 
     st.status = 'aborted';
+    st.terminalAt = now();
     st.error = asString(params?.reason || 'aborted');
     this.fileRecvTransfers.set(transferId, st);
 
@@ -5285,7 +5823,7 @@ class BncrBridgeRuntime {
     const transferId = asString(params?.transferId || '').trim();
     const stage = asString(params?.stage || '').trim();
     const ok = params?.ok !== false;
-    const chunkIndex = Number(params?.chunkIndex ?? -1);
+    const chunkIndex = finiteNonNegativeNumberOrNull(params?.chunkIndex);
 
     this.logInfo(
       'file-ack-inbound',
@@ -5296,8 +5834,10 @@ class BncrBridgeRuntime {
         clientId: clientId || null,
         transferId,
         stage,
+        ackStage: stage,
+        ackOutcome: ok ? 'acked' : 'failed',
         ok,
-        chunkIndex: chunkIndex >= 0 ? chunkIndex : undefined,
+        chunkIndex: chunkIndex != null ? chunkIndex : undefined,
         errorCode: asString(params?.errorCode || ''),
         errorMessage: asString(params?.errorMessage || ''),
         path: asString(params?.path || '').trim(),
@@ -5355,15 +5895,19 @@ class BncrBridgeRuntime {
         const code = asString(params?.errorCode || 'ACK_FAILED');
         const msg = asString(params?.errorMessage || 'ack failed');
         st.error = `${code}:${msg}`;
-        if (stage === 'chunk' && chunkIndex >= 0) st.failedChunks.set(chunkIndex, st.error);
-        if (stage === 'complete') st.status = 'aborted';
+        if (stage === 'chunk' && chunkIndex != null) st.failedChunks.set(chunkIndex, st.error);
+        if (stage === 'complete') {
+          st.status = 'aborted';
+          st.terminalAt = now();
+        }
       } else {
-        if (stage === 'chunk' && chunkIndex >= 0) {
+        if (stage === 'chunk' && chunkIndex != null) {
           st.ackedChunks.add(chunkIndex);
           st.status = 'transferring';
         }
         if (stage === 'complete') {
           st.status = 'completed';
+          st.terminalAt = now();
           st.completedPath = asString(params?.path || '').trim() || st.completedPath;
         }
       }
@@ -5374,7 +5918,7 @@ class BncrBridgeRuntime {
     this.resolveFileAck({
       transferId,
       stage,
-      chunkIndex: chunkIndex >= 0 ? chunkIndex : undefined,
+      chunkIndex: chunkIndex != null ? chunkIndex : undefined,
       payload: {
         ok,
         transferId,
@@ -5633,20 +6177,19 @@ class BncrBridgeRuntime {
 
     tick();
     const timer = setInterval(tick, 5_000);
-    this.channelAccountTimers.set(accountId, timer);
-
-    await new Promise<void>((resolve) => {
+    let worker!: ChannelAccountWorkerHandle;
+    const done = new Promise<void>((resolve) => {
       let settled = false;
       const finish = (reason: string) => {
         if (settled) return;
         settled = true;
-        const activeTimer = this.channelAccountTimers.get(accountId);
-        if (activeTimer === timer) {
-          clearInterval(timer);
-          this.channelAccountTimers.delete(accountId);
-        } else {
-          clearInterval(timer);
+        const activeWorker = this.channelAccountWorkers.get(accountId);
+        if (activeWorker === worker) {
+          this.channelAccountWorkers.delete(accountId);
         }
+        clearInterval(timer);
+        worker.cleanupAbortListener?.();
+        worker.cleanupAbortListener = undefined;
         this.logInfo(
           'health',
           `status-worker finished ${JSON.stringify({ bridge: this.bridgeId, accountId, reason })}`,
@@ -5656,15 +6199,23 @@ class BncrBridgeRuntime {
         resolve();
       };
 
-      const onAbort = () => finish('abort');
+      worker = { timer, finish };
+      this.channelAccountWorkers.set(accountId, worker);
 
-      if (ctx.abortSignal?.aborted) {
+      const onAbort = () => finish('abort');
+      const abortSignal = ctx.abortSignal;
+
+      if (abortSignal?.aborted) {
         onAbort();
         return;
       }
 
-      ctx.abortSignal?.addEventListener?.('abort', onAbort, { once: true });
+      abortSignal?.addEventListener?.('abort', onAbort, { once: true });
+      if (abortSignal?.removeEventListener) {
+        worker.cleanupAbortListener = () => abortSignal.removeEventListener('abort', onAbort);
+      }
     });
+    await done;
   };
 
   channelStopAccount = async (ctx: any) => {
@@ -5749,6 +6300,7 @@ class BncrBridgeRuntime {
       accountId,
       to,
       text: asString(ctx.text || ''),
+      kind: ctx?.kind,
       replyToId,
       mediaLocalRoots: ctx.mediaLocalRoots,
       resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
@@ -5790,6 +6342,7 @@ class BncrBridgeRuntime {
       mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
       asVoice,
       audioAsVoice,
+      kind: ctx?.kind,
       replyToId,
       mediaLocalRoots: ctx.mediaLocalRoots,
       resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),

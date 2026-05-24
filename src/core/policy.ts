@@ -25,3 +25,12 @@ export function resolveBncrChannelPolicy(channelCfg: any) {
     requireMention: asBoolean(channelCfg?.requireMention, false),
   };
 }
+
+export function resolveBncrConfigWarnings(channelCfg: any): string[] {
+  const policy = resolveBncrChannelPolicy(channelCfg || {});
+  const warnings: string[] = [];
+  if (policy.requireMention) {
+    warnings.push('requireMention configured but not enforced yet');
+  }
+  return warnings;
+}

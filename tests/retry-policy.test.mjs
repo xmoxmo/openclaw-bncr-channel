@@ -118,3 +118,65 @@ test('computePushFailureDecision returns dead-letter after retry limit', () => {
   assert.equal(result.nextRetryCount, 2);
   assert.equal(result.lastAttemptAt, 50_000);
 });
+
+test('computeRetryRerouteDecision sanitizes invalid retry and route round counters', () => {
+  const result = computeRetryRerouteDecision(
+    {
+      nowMs: 60_000,
+      maxRetry: 5,
+      requireAck: true,
+      currentRetryCount: Number.NaN,
+      currentRouteAttemptRound: Number.POSITIVE_INFINITY,
+      currentFastReroutePending: true,
+      currentConnId: 'conn-a',
+      attemptedConnIds: ['conn-a'],
+      availableConnIds: ['conn-a'],
+    },
+    { backoffMs: (retryCount) => retryCount * 1_000 },
+  );
+
+  assert.equal(result.kind, 'retry');
+  if (result.kind !== 'retry') return;
+  assert.equal(result.nextRetryCount, 1);
+  assert.equal(result.routeAttemptRound, 1);
+  assert.equal(result.nextAttemptAt, 61_000);
+});
+
+test('computeRetryRerouteDecision floors decimal counters before retry math', () => {
+  const result = computeRetryRerouteDecision(
+    {
+      nowMs: 70_000,
+      maxRetry: 5,
+      requireAck: true,
+      currentRetryCount: 1.9,
+      currentRouteAttemptRound: 2.7,
+      currentFastReroutePending: true,
+      currentConnId: 'conn-a',
+      attemptedConnIds: ['conn-a'],
+      availableConnIds: ['conn-a'],
+    },
+    { backoffMs: (retryCount) => retryCount * 1_000 },
+  );
+
+  assert.equal(result.kind, 'retry');
+  if (result.kind !== 'retry') return;
+  assert.equal(result.nextRetryCount, 2);
+  assert.equal(result.routeAttemptRound, 3);
+});
+
+test('computePushFailureDecision sanitizes invalid retry counters', () => {
+  const result = computePushFailureDecision(
+    {
+      nowMs: 80_000,
+      maxRetry: 5,
+      currentRetryCount: Number.POSITIVE_INFINITY,
+      lastError: 'push-retry',
+    },
+    { backoffMs: (retryCount) => retryCount * 2_000 },
+  );
+
+  assert.equal(result.kind, 'retry');
+  if (result.kind !== 'retry') return;
+  assert.equal(result.nextRetryCount, 1);
+  assert.equal(result.nextAttemptAt, 82_000);
+});

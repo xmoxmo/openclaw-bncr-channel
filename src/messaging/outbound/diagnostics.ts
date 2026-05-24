@@ -119,15 +119,31 @@ export function buildOutboxAckDebugInfo(args: {
   connIds?: Iterable<string>;
   ownerConnId?: string;
   ownerClientId?: string;
+  sessionKey?: string;
+  to?: string;
+  ackStage?: string;
+  ackOutcome?: string;
+  reason?: string;
   kind?: string;
   event?: string;
+  ackTimeoutMs?: number;
+  adaptiveAckTimeoutEnabled?: boolean;
 }) {
   return {
     messageId: args.messageId,
     accountId: args.accountId,
+    ...(args.sessionKey ? { sessionKey: args.sessionKey } : {}),
+    ...(args.to ? { to: args.to } : {}),
     ...(args.kind ? { kind: args.kind } : {}),
     requireAck: args.requireAck,
     ackResult: args.ackResult,
+    ackStage: args.ackStage || 'message',
+    ackOutcome: args.ackOutcome || args.ackResult,
+    ...(args.reason ? { reason: args.reason } : {}),
+    ...(typeof args.ackTimeoutMs === 'number' ? { ackTimeoutMs: args.ackTimeoutMs } : {}),
+    ...(typeof args.adaptiveAckTimeoutEnabled === 'boolean'
+      ? { adaptiveAckTimeoutEnabled: args.adaptiveAckTimeoutEnabled }
+      : {}),
     onlineNow: args.onlineNow,
     recentInboundReachable: args.recentInboundReachable,
     ...(args.connIds ? { connIds: Array.from(args.connIds) } : {}),

@@ -25,8 +25,13 @@ export type OutboxFileTransferRouteSelection = {
   ownerConnId?: string;
 };
 
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function computeOutboxRetryWait(nextAttemptAt: number, nowMs: number): number {
-  return Math.max(0, Number(nextAttemptAt || 0) - nowMs);
+  return Math.max(0, finiteNumberOr(nextAttemptAt, 0) - finiteNumberOr(nowMs, 0));
 }
 
 export function updateMinOutboxDelay(currentDelay: number | null, candidateDelay: number | null): number | null {
@@ -35,7 +40,7 @@ export function updateMinOutboxDelay(currentDelay: number | null, candidateDelay
 }
 
 export function clampOutboxDrainDelay(delayMs: number): number {
-  return Math.max(0, Math.min(Number(delayMs || 0), 30_000));
+  return Math.max(0, Math.min(finiteNumberOr(delayMs, 0), 30_000));
 }
 
 export function selectOutboxTargetAccounts(args: {

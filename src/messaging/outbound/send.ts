@@ -3,6 +3,7 @@ export async function sendBncrText(params: {
   accountId: string;
   to: string;
   text: string;
+  kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   mediaLocalRoots?: readonly string[];
   resolveVerifiedTarget: (
@@ -18,6 +19,7 @@ export async function sendBncrText(params: {
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
     };
     mediaLocalRoots?: readonly string[];
@@ -33,6 +35,7 @@ export async function sendBncrText(params: {
     route: verified.route,
     payload: {
       text: params.text,
+      kind: params.kind,
       replyToId: params.replyToId,
     },
     mediaLocalRoots: params.mediaLocalRoots,
@@ -54,6 +57,7 @@ export async function sendBncrMedia(params: {
   mediaUrls?: string[];
   asVoice?: boolean;
   audioAsVoice?: boolean;
+  kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   mediaLocalRoots?: readonly string[];
   resolveVerifiedTarget: (
@@ -71,6 +75,7 @@ export async function sendBncrMedia(params: {
       mediaUrls?: string[];
       asVoice?: boolean;
       audioAsVoice?: boolean;
+      kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
     };
     mediaLocalRoots?: readonly string[];
@@ -90,6 +95,7 @@ export async function sendBncrMedia(params: {
       mediaUrls: params.mediaUrls?.length ? params.mediaUrls : undefined,
       asVoice: params.asVoice === true ? true : undefined,
       audioAsVoice: params.audioAsVoice === true ? true : undefined,
+      kind: params.kind,
       replyToId: params.replyToId,
     },
     mediaLocalRoots: params.mediaLocalRoots,

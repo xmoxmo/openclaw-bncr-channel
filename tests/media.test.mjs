@@ -104,7 +104,7 @@ test('buildBncrMediaOutboundFrame writes resolved type and path', () => {
   const frame = buildBncrMediaOutboundFrame({
     messageId: 'm1',
     sessionKey: 'agent:main:bncr:direct:abc',
-    route: { platform: 'tgBot', groupId: '0', userId: '6278285192' },
+    route: { platform: 'tgBot', groupId: '0', userId: '10001' },
     media: { mode: 'chunk', mimeType: 'audio/mpeg', path: '/tmp/a.mp3' },
     mediaUrl: '',
     mediaMsg: 'hi',
@@ -121,18 +121,18 @@ test('channelSendMedia enqueues file-transfer outbox entry with voice metadata',
   const bridge = createBncrBridge(createApiStub());
   bridge.canonicalAgentId = 'orion';
 
-  const route = { platform: 'tgBot', groupId: '-1001', userId: '6278285192' };
+  const route = { platform: 'tgBot', groupId: '-1001', userId: '10001' };
   bridge.resolveVerifiedTarget = () => ({
     accountId: 'Primary',
     route,
     sessionKey: 'agent:orion:bncr:direct:demo',
-    displayScope: 'Bncr:tgBot:-1001:6278285192',
+    displayScope: 'Bncr:tgBot:-1001:10001',
   });
 
   try {
     await bridge.channelSendMedia({
       accountId: 'Primary',
-      to: 'Bncr:tgBot:-1001:6278285192',
+      to: 'Bncr:tgBot:-1001:10001',
       text: 'voice test',
       mediaUrl: '/tmp/voice.ogg',
       asVoice: true,
@@ -158,15 +158,15 @@ test('channelSendMedia stores replyToId on file-transfer metadata', async () => 
 
   bridge.resolveVerifiedTarget = () => ({
     accountId: 'Primary',
-    route: { platform: 'tgBot', groupId: '-1001', userId: '6278285192' },
+    route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
     sessionKey: 'agent:orion:bncr:direct:demo',
-    displayScope: 'Bncr:tgBot:-1001:6278285192',
+    displayScope: 'Bncr:tgBot:-1001:10001',
   });
 
   try {
     await bridge.channelSendMedia({
       accountId: 'Primary',
-      to: 'Bncr:tgBot:-1001:6278285192',
+      to: 'Bncr:tgBot:-1001:10001',
       text: 'image reply',
       mediaUrl: '/tmp/a.png',
       replyToId: 'reply-123',
@@ -177,6 +177,36 @@ test('channelSendMedia stores replyToId on file-transfer metadata', async () => 
     assert.equal(entry.payload._meta?.kind, 'file-transfer');
     assert.equal(entry.payload._meta?.mediaUrl, '/tmp/a.png');
     assert.equal(entry.payload._meta?.text, 'image reply');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('channelSendMedia strips replyToId for tool file-transfer metadata', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  bridge.canonicalAgentId = 'orion';
+
+  bridge.resolveVerifiedTarget = () => ({
+    accountId: 'Primary',
+    route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+    sessionKey: 'agent:orion:bncr:direct:demo',
+    displayScope: 'Bncr:tgBot:-1001:10001',
+  });
+
+  try {
+    await bridge.channelSendMedia({
+      accountId: 'Primary',
+      to: 'Bncr:tgBot:-1001:10001',
+      text: 'tool image reply',
+      mediaUrl: '/tmp/tool.png',
+      kind: 'tool',
+      replyToId: 'reply-tool-123',
+    });
+
+    const [entry] = bridge.outbox.values();
+    assert.equal(entry.payload._meta?.replyToId, undefined);
+    assert.equal(entry.payload._meta?.messageKind, 'tool');
+    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/tool.png');
   } finally {
     cleanupBridge(bridge);
   }
@@ -215,7 +245,7 @@ test('file-transfer waits until final push is emitted before waiting for message
     messageId: 'file-msg-1',
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:direct:demo',
-    route: { platform: 'tgBot', groupId: '-1001', userId: '6278285192' },
+    route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
     payload: {
       type: 'message.outbound',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -267,7 +297,7 @@ test('file-transfer failure does not start message ack wait or rewrite error to 
     messageId: 'file-msg-2',
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:direct:demo',
-    route: { platform: 'tgBot', groupId: '-1001', userId: '6278285192' },
+    route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
     payload: {
       type: 'message.outbound',
       sessionKey: 'agent:orion:bncr:direct:demo',

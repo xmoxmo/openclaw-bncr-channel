@@ -34,6 +34,11 @@ test('parseBncrNativeCommand treats all slash commands as tool-chain candidates,
     raw: '/model xmo/gpt-5.4',
     body: '/model xmo/gpt-5.4',
   });
+  assert.deepEqual(parseBncrNativeCommand('/verbose on'), {
+    command: 'verbose',
+    raw: '/verbose on',
+    body: '/verbose on',
+  });
 });
 
 test('parseBncrNativeCommand ignores non-slash text', () => {

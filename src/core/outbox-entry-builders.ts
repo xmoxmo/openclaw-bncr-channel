@@ -1,3 +1,4 @@
+import { normalizeOutboundReplyToId } from '../messaging/outbound/reply-target-policy.ts';
 import type { BncrRoute, OutboxEntry } from './types.ts';
 
 export function buildFileTransferOutboxEntry(args: {
@@ -34,7 +35,7 @@ export function buildFileTransferOutboxEntry(args: {
         asVoice: args.asVoice === true,
         audioAsVoice: args.audioAsVoice === true,
         finalEvent: args.pushEvent,
-        replyToId: args.replyToId,
+        replyToId: normalizeOutboundReplyToId({ kind: args.kind, replyToId: args.replyToId }) || undefined,
         messageKind: args.kind,
       },
     },
@@ -63,7 +64,7 @@ export function buildTextOutboxEntry(args: {
     messageId,
     idempotencyKey: messageId,
     sessionKey: args.sessionKey,
-    replyToId: args.normalizeReplyToId(args.replyToId) || undefined,
+    replyToId: normalizeOutboundReplyToId({ kind: args.kind, replyToId: args.replyToId }) || undefined,
     message: {
       platform: args.route.platform,
       groupId: args.route.groupId,

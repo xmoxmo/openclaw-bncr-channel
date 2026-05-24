@@ -22,7 +22,7 @@ function makeCfg(overrides = {}) {
 
 test('allows DM when dmPolicy=open', () => {
   const result = checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '6278285192' }),
+    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
     cfg: makeCfg({ dmPolicy: 'open' }),
     account: { accountId: 'Primary', enabled: true },
   });
@@ -31,7 +31,7 @@ test('allows DM when dmPolicy=open', () => {
 
 test('blocks DM when dmPolicy=disabled', () => {
   const result = checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '6278285192' }),
+    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
     cfg: makeCfg({ dmPolicy: 'disabled' }),
     account: { accountId: 'Primary', enabled: true },
   });
@@ -40,8 +40,8 @@ test('blocks DM when dmPolicy=disabled', () => {
 
 test('allows DM allowlist by standard display scope', () => {
   const result = checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '6278285192' }),
-    cfg: makeCfg({ dmPolicy: 'allowlist', allowFrom: ['Bncr:tgBot:6278285192'] }),
+    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
+    cfg: makeCfg({ dmPolicy: 'allowlist', allowFrom: ['Bncr:tgBot:10001'] }),
     account: { accountId: 'Primary', enabled: true },
   });
   assert.deepEqual(result, { allowed: true });
@@ -49,7 +49,7 @@ test('allows DM allowlist by standard display scope', () => {
 
 test('blocks DM when allowlist misses', () => {
   const result = checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '6278285192' }),
+    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
     cfg: makeCfg({ dmPolicy: 'allowlist', allowFrom: ['tgBot:other'] }),
     account: { accountId: 'Primary', enabled: true },
   });
@@ -58,7 +58,7 @@ test('blocks DM when allowlist misses', () => {
 
 test('blocks group when groupPolicy=disabled', () => {
   const result = checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '6278285192' }),
+    parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
     cfg: makeCfg({ groupPolicy: 'disabled' }),
     account: { accountId: 'Primary', enabled: true },
   });
@@ -67,8 +67,17 @@ test('blocks group when groupPolicy=disabled', () => {
 
 test('allows group allowlist by standard display scope', () => {
   const result = checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '6278285192' }),
-    cfg: makeCfg({ groupPolicy: 'allowlist', groupAllowFrom: ['Bncr:tgBot:-1001:6278285192'] }),
+    parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
+    cfg: makeCfg({ groupPolicy: 'allowlist', groupAllowFrom: ['Bncr:tgBot:-1001:10001'] }),
+    account: { accountId: 'Primary', enabled: true },
+  });
+  assert.deepEqual(result, { allowed: true });
+});
+
+test('does not enforce reserved requireMention gate yet', () => {
+  const result = checkBncrMessageGate({
+    parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
+    cfg: makeCfg({ requireMention: true, groupPolicy: 'open' }),
     account: { accountId: 'Primary', enabled: true },
   });
   assert.deepEqual(result, { allowed: true });

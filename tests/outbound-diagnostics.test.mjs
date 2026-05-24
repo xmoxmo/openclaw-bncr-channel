@@ -231,8 +231,52 @@ test('buildOutboxAckDebugInfo returns stable ack observability payload', () => {
     accountId: 'Primary',
     requireAck: true,
     ackResult: 'timeout',
+    ackStage: 'message',
+    ackOutcome: 'timeout',
     onlineNow: true,
     recentInboundReachable: false,
+  });
+});
+
+test('buildOutboxAckDebugInfo includes causal route and ack outcome fields when provided', () => {
+  const result = buildOutboxAckDebugInfo({
+    messageId: 'mid-ack-rich',
+    accountId: 'Primary',
+    sessionKey: 'agent:orion:bncr:direct:demo',
+    to: 'Bncr:tgBot:-1001:10001',
+    requireAck: true,
+    ackResult: 'timeout',
+    ackStage: 'message',
+    ackOutcome: 'timeout',
+    reason: 'push-ack-timeout',
+    ackTimeoutMs: 60000,
+    adaptiveAckTimeoutEnabled: true,
+    onlineNow: true,
+    recentInboundReachable: false,
+    connIds: ['conn-a'],
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    event: 'message.outbound',
+  });
+
+  assert.deepEqual(result, {
+    messageId: 'mid-ack-rich',
+    accountId: 'Primary',
+    sessionKey: 'agent:orion:bncr:direct:demo',
+    to: 'Bncr:tgBot:-1001:10001',
+    requireAck: true,
+    ackResult: 'timeout',
+    ackStage: 'message',
+    ackOutcome: 'timeout',
+    reason: 'push-ack-timeout',
+    ackTimeoutMs: 60000,
+    adaptiveAckTimeoutEnabled: true,
+    onlineNow: true,
+    recentInboundReachable: false,
+    connIds: ['conn-a'],
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    event: 'message.outbound',
   });
 });
 

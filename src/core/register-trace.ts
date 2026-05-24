@@ -1,5 +1,10 @@
 const DEFAULT_REGISTER_WARMUP_WINDOW_MS = 30_000;
 
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export type RegisterTraceEntry = {
   ts: number;
   bridgeId: string;
@@ -70,7 +75,7 @@ export function buildRegisterTraceSummary(args: {
 }): RegisterTraceSummary {
   const warmupWindowMs = Math.max(
     0,
-    Number(args.warmupWindowMs ?? DEFAULT_REGISTER_WARMUP_WINDOW_MS) || 0,
+    finiteNumberOr(args.warmupWindowMs, DEFAULT_REGISTER_WARMUP_WINDOW_MS),
   );
   const buckets: Record<string, number> = {};
   let warmupCount = 0;

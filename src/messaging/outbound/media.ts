@@ -1,3 +1,5 @@
+import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
+
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
   if (v == null) return fallback;
@@ -64,7 +66,7 @@ export function buildBncrMediaOutboundFrame(params: {
     messageId: params.messageId,
     idempotencyKey: params.messageId,
     sessionKey: params.sessionKey,
-    replyToId: asString(params.replyToId || '').trim() || undefined,
+    replyToId: normalizeOutboundReplyToId({ kind: params.kind, replyToId: params.replyToId }) || undefined,
     message: {
       platform: params.route.platform,
       groupId: params.route.groupId,

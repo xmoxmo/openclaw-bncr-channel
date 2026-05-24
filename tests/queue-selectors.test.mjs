@@ -23,7 +23,7 @@ function makeEntry(messageId, accountId, createdAt, nextAttemptAt) {
     messageId,
     accountId,
     sessionKey: 'agent:orion:bncr:direct:demo',
-    route: { platform: 'tgBot', groupId: '-1001', userId: '6278285192' },
+    route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
     payload: {},
     createdAt,
     retryCount: 0,
@@ -100,10 +100,12 @@ test('computeNextOutboxDelay returns zero when a due entry already exists', () =
   assert.equal(computeNextOutboxDelay(entries, 250), 0);
 });
 
-test('computeOutboxRetryWait returns non-negative wait until next attempt', () => {
+test('computeOutboxRetryWait returns non-negative finite wait until next attempt', () => {
   assert.equal(computeOutboxRetryWait(5000, 4500), 500);
   assert.equal(computeOutboxRetryWait(4500, 5000), 0);
   assert.equal(computeOutboxRetryWait(Number.NaN, 5000), 0);
+  assert.equal(computeOutboxRetryWait(Number.POSITIVE_INFINITY, 5000), 0);
+  assert.equal(computeOutboxRetryWait(5000, Number.POSITIVE_INFINITY), 5000);
 });
 
 test('updateMinOutboxDelay keeps the smallest non-null delay', () => {
@@ -112,6 +114,13 @@ test('updateMinOutboxDelay keeps the smallest non-null delay', () => {
   assert.equal(updateMinOutboxDelay(1200, null), 1200);
   assert.equal(updateMinOutboxDelay(1200, 800), 800);
   assert.equal(updateMinOutboxDelay(800, 1200), 800);
+});
+
+test('clampOutboxDrainDelay clamps invalid timer inputs to finite delay', () => {
+  assert.equal(clampOutboxDrainDelay(-1), 0);
+  assert.equal(clampOutboxDrainDelay(45_000), 30_000);
+  assert.equal(clampOutboxDrainDelay(Number.NaN), 0);
+  assert.equal(clampOutboxDrainDelay(Number.POSITIVE_INFINITY), 0);
 });
 
 test('buildOutboxOnlineDebugInfo formats connection diagnostics payload without mutating source', () => {

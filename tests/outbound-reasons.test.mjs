@@ -49,6 +49,8 @@ test('outbound reasons exposes stable scheduling source values', () => {
     ACCOUNT_NO_DUE_ENTRY: 'account-no-due-entry',
     RETRY_REROUTE_WAIT: 'retry-reroute-wait',
     PUSH_FAIL_WAIT: 'push-fail-wait',
+    ACCOUNT_BUDGET_YIELD: 'account-budget-yield',
+    ACCOUNT_TIME_BUDGET_YIELD: 'account-time-budget-yield',
     ACCOUNT_NEXT_DELAY_MERGE: 'account-next-delay-merge',
     FLUSH_NEXT_DRAIN: 'flush-next-drain',
   });

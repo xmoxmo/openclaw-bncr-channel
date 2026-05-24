@@ -36,6 +36,10 @@ export function inboundDedupKey(params: {
 }
 
 export function resolveChatType(_route: BncrRoute): 'direct' | 'group' {
+  // Compatibility boundary: bncr currently records and dispatches all conversations as direct
+  // sessions even when the display scope contains a group id. Do not change this to true
+  // group semantics without updating session routing, reply target policy, and requireMention
+  // behavior together.
   return 'direct';
 }
 
@@ -45,6 +49,9 @@ export function parseBncrInboundParams(params: any) {
   const groupId = asString(params?.groupId || '0').trim() || '0';
   const userId = asString(params?.userId || '').trim();
   const sessionKeyfromroute = asString(params?.sessionKey || '').trim();
+  const providedOriginatingTo = asString(
+    params?.originatingTo || params?.providedOriginatingTo || params?.to || '',
+  ).trim() || undefined;
   const clientId = asString(params?.clientId || '').trim() || undefined;
 
   const route: BncrRoute = {
@@ -84,6 +91,7 @@ export function parseBncrInboundParams(params: any) {
     groupId,
     userId,
     sessionKeyfromroute,
+    providedOriginatingTo,
     clientId,
     route,
     text,

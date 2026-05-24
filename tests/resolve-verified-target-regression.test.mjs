@@ -20,17 +20,17 @@ test('resolveVerifiedTarget ignores legacy stored route keys and always returns 
   const bridge = createBncrBridge(createApiStub());
   bridge.canonicalAgentId = 'orion';
 
-  const legacyGroupKey = 'agent:orion:bncr:group:tgbot:-5158699347:6278285192';
+  const legacyGroupKey = 'agent:orion:bncr:group:tgbot:-5158699347:10001';
   bridge.sessionRoutes.set(legacyGroupKey, {
     accountId: 'Primary',
-    route: { platform: 'tgBot', groupId: '-5158699347', userId: '6278285192' },
+    route: { platform: 'tgBot', groupId: '-5158699347', userId: '10001' },
     updatedAt: Date.now(),
   });
 
-  const verified = bridge.resolveVerifiedTarget('Bncr:tgBot:-5158699347:6278285192', 'Primary');
+  const verified = bridge.resolveVerifiedTarget('Bncr:tgBot:-5158699347:10001', 'Primary');
   assert.equal(
     verified.sessionKey,
-    'agent:orion:bncr:direct:7467426f743a2d353135383639393334373a36323738323835313932',
+    'agent:orion:bncr:direct:7467426f743a2d353135383639393334373a3130303031',
   );
-  assert.equal(verified.displayScope, 'Bncr:tgBot:-5158699347:6278285192');
+  assert.equal(verified.displayScope, 'Bncr:tgBot:-5158699347:10001');
 });

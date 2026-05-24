@@ -52,6 +52,7 @@ export type OutboxEntry = {
   routeAttemptConnIds?: string[];
   routeAttemptRound?: number;
   fastReroutePending?: boolean;
+  awaitingRetryPush?: boolean;
 };
 
 export type BncrDiagnosticsSummary = {

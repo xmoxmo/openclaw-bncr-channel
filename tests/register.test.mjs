@@ -95,18 +95,18 @@ test('bncr messaging exposes parse/display/session target helpers on the owning 
   assert.equal(typeof channel.messaging?.formatTargetDisplay, 'function');
   assert.equal(typeof channel.messaging?.resolveSessionTarget, 'function');
 
-  const direct = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:6278285192' });
+  const direct = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:10001' });
   assert.ok(direct);
-  assert.equal(direct.displayScope, 'Bncr:tgBot:6278285192');
+  assert.equal(direct.displayScope, 'Bncr:tgBot:10001');
 
   const group = channel.messaging.parseExplicitTarget({
-    raw: 'Bncr:tgBot:-1003776014601:6278285192',
+    raw: 'Bncr:tgBot:-1001:10001',
   });
   assert.ok(group);
-  assert.equal(group.displayScope, 'Bncr:tgBot:-1003776014601:6278285192');
+  assert.equal(group.displayScope, 'Bncr:tgBot:-1001:10001');
   assert.equal(channel.messaging.formatTargetDisplay({ target: group }), group.displayScope);
   assert.equal(
-    channel.messaging.resolveSessionTarget({ id: 'Bncr:tgBot:6278285192' }),
-    'Bncr:tgBot:6278285192',
+    channel.messaging.resolveSessionTarget({ id: 'Bncr:tgBot:10001' }),
+    'Bncr:tgBot:10001',
   );
 });

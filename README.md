@@ -39,7 +39,7 @@ openclaw gateway restart
 > 如果你是从精确版本升级，或本地安装记录仍钉在旧版本，也可以显式执行：
 >
 > ```bash
-> openclaw plugins install @xmoxmo/bncr@0.1.1
+> openclaw plugins install @xmoxmo/bncr@latest
 > openclaw gateway restart
 > ```
 
@@ -167,7 +167,7 @@ openclaw gateway call message.action --params '{
   "accountId": "Primary",
   "idempotencyKey": "bncr-media-demo-1",
   "params": {
-    "to": "Bncr:tgBot:-1003776014601:6278285192",
+    "to": "Bncr:tgBot:-1001:10001",
     "caption": "图片发送测试",
     "path": "/root/.openclaw/workspace/tmp/demo.png"
   }

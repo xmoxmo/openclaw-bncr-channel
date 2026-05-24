@@ -30,6 +30,11 @@ function now() {
   return Date.now();
 }
 
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function fmtAgo(ts?: number | null): string {
   if (!ts || !Number.isFinite(ts) || ts <= 0) return '-';
   const diff = Math.max(0, now() - ts);
@@ -151,8 +156,8 @@ export function buildAccountStatusSnapshot(input: {
   const rt = input.runtime || {};
   const meta = rt?.meta || {};
 
-  const pending = Number(rt?.pending ?? meta.pending ?? 0);
-  const deadLetter = Number(rt?.deadLetter ?? meta.deadLetter ?? 0);
+  const pending = finiteNumberOr(rt?.pending ?? meta.pending, 0);
+  const deadLetter = finiteNumberOr(rt?.deadLetter ?? meta.deadLetter, 0);
   const lastSessionKey = rt?.lastSessionKey ?? meta.lastSessionKey ?? null;
   const lastSessionScope = rt?.lastSessionScope ?? meta.lastSessionScope ?? null;
   const lastSessionAt = rt?.lastSessionAt ?? meta.lastSessionAt ?? null;

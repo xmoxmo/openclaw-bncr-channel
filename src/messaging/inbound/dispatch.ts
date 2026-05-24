@@ -1,4 +1,8 @@
+import fs from 'node:fs';
+import { resolvePinnedMainDmOwnerFromAllowlist } from 'openclaw/plugin-sdk/conversation-runtime';
+import { resolveInboundLastRouteSessionKey } from 'openclaw/plugin-sdk/routing';
 import { emitBncrLogLine } from '../../core/logging.ts';
+import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import {
   formatDisplayScope,
   normalizeInboundSessionKey,
@@ -6,34 +10,88 @@ import {
 } from '../../core/targets.ts';
 import { handleBncrNativeCommand } from './commands.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
+import { wrapBncrInboundRecordSessionLabelCorrection } from './session-label.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
-async function prepareBncrInboundSessionContext(args: {
+type BncrInboundConversationResolution = {
+  accountId: string;
+  chatType: 'direct' | 'group';
+  route: ParsedInbound['route'];
+  resolvedRoute: {
+    sessionKey: string;
+    agentId: string;
+    mainSessionKey?: string;
+  };
+  canonicalTo: string;
+  rawTo: string;
+  originatingTo: string;
+  baseSessionKey: string;
+  taskSessionKey?: string;
+  dispatchSessionKey: string;
+};
+
+type BncrInboundReplyRouteFact = {
+  accountId: string;
+  sessionKey: string;
+  route: ParsedInbound['route'];
+  canonicalTo: string;
+  originatingTo: string;
+  chatType: 'direct' | 'group';
+};
+
+const INBOUND_MEDIA_MAX_BYTES = 30 * 1024 * 1024;
+
+export function estimateBase64DecodedBytes(value: string): number {
+  const normalized = String(value || '').replace(/\s+/g, '');
+  if (!normalized) return 0;
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+}
+
+export function assertInboundMediaBase64Size(
+  value: string,
+  maxBytes = INBOUND_MEDIA_MAX_BYTES,
+) {
+  const estimatedBytes = estimateBase64DecodedBytes(value);
+  if (estimatedBytes > maxBytes) {
+    throw new Error(
+      `inbound media too large: estimated ${estimatedBytes} bytes exceeds ${maxBytes} bytes`,
+    );
+  }
+}
+
+export function decodeInboundMediaBase64(
+  value: string,
+  maxBytes = INBOUND_MEDIA_MAX_BYTES,
+): Buffer {
+  assertInboundMediaBase64Size(value, maxBytes);
+  const normalized = String(value || '').replace(/\s+/g, '');
+  const mediaBuf = Buffer.from(normalized, 'base64');
+  if (!mediaBuf.length) {
+    throw new Error('inbound media base64 decoded to empty buffer');
+  }
+  if (mediaBuf.length > maxBytes) {
+    throw new Error(
+      `inbound media too large: decoded ${mediaBuf.length} bytes exceeds ${maxBytes} bytes`,
+    );
+  }
+  return mediaBuf;
+}
+
+function formatRawBncrInboundTarget(route: ParsedInbound['route']): string {
+  return `Bncr:${String(route.platform || '').trim()}:${String(route.groupId || '').trim()}:${String(route.userId || '').trim()}`;
+}
+
+export function resolveBncrInboundConversation(args: {
   api: any;
   cfg: any;
   channelId: string;
   parsed: ParsedInbound;
   canonicalAgentId: string;
-  rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
 }) {
-  const { api, cfg, channelId, parsed, canonicalAgentId, rememberSessionRoute } = args;
-  const {
-    accountId,
-    route,
-    peer,
-    sessionKeyfromroute,
-    text,
-    msgType,
-    mediaBase64,
-    mediaPathFromTransfer,
-    mimeType,
-    fileName,
-    extracted,
-    platform,
-    groupId,
-    userId,
-  } = parsed;
+  const { api, cfg, channelId, parsed, canonicalAgentId } = args;
+  const { accountId, route, peer, sessionKeyfromroute, providedOriginatingTo, extracted } = parsed;
 
   const resolvedRoute = api.runtime.channel.routing.resolveAgentRoute({
     cfg,
@@ -45,9 +103,46 @@ async function prepareBncrInboundSessionContext(args: {
   const baseSessionKey =
     normalizeInboundSessionKey(sessionKeyfromroute, route, canonicalAgentId) ||
     resolvedRoute.sessionKey;
-  const agentText = extracted.text;
   const taskSessionKey = withTaskSessionKey(baseSessionKey, extracted.taskKey);
-  const sessionKey = taskSessionKey || baseSessionKey;
+  const dispatchSessionKey = taskSessionKey || baseSessionKey;
+  const rawTo = formatRawBncrInboundTarget(route);
+  const canonicalTo = formatDisplayScope(route);
+  const originatingTo = providedOriginatingTo || rawTo;
+
+  return {
+    accountId,
+    chatType: peer.kind,
+    route,
+    resolvedRoute,
+    canonicalTo,
+    rawTo,
+    originatingTo,
+    baseSessionKey,
+    ...(taskSessionKey ? { taskSessionKey } : {}),
+    dispatchSessionKey,
+  } satisfies BncrInboundConversationResolution;
+}
+
+async function prepareBncrInboundSessionContext(args: {
+  api: any;
+  cfg: any;
+  parsed: ParsedInbound;
+  resolution: BncrInboundConversationResolution;
+  rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
+}) {
+  const { api, cfg, parsed, resolution, rememberSessionRoute } = args;
+  const {
+    msgType,
+    mediaBase64,
+    mediaPathFromTransfer,
+    mimeType,
+    fileName,
+    extracted,
+    platform,
+    groupId,
+    userId,
+  } = parsed;
+  const { accountId, route, resolvedRoute, baseSessionKey, taskSessionKey, dispatchSessionKey } = resolution;
 
   rememberSessionRoute(baseSessionKey, accountId, route);
   if (taskSessionKey && taskSessionKey !== baseSessionKey) {
@@ -60,7 +155,7 @@ async function prepareBncrInboundSessionContext(args: {
 
   let mediaPath: string | undefined;
   if (mediaBase64) {
-    const mediaBuf = Buffer.from(mediaBase64, 'base64');
+    const mediaBuf = decodeInboundMediaBase64(mediaBase64);
     const saved = await api.runtime.channel.media.saveMediaBuffer(
       mediaBuf,
       mimeType,
@@ -73,30 +168,159 @@ async function prepareBncrInboundSessionContext(args: {
     mediaPath = mediaPathFromTransfer;
   }
 
-  const rawBody = agentText || (msgType === 'text' ? '' : `[${msgType}]`);
+  const rawBody = extracted.text || (msgType === 'text' ? '' : `[${msgType}]`);
   const body = api.runtime.channel.reply.formatAgentEnvelope({
     channel: 'Bncr',
     from: `${platform}:${groupId}:${userId}`,
     timestamp: Date.now(),
     previousTimestamp: api.runtime.channel.session.readSessionUpdatedAt({
       storePath,
-      sessionKey,
+      sessionKey: dispatchSessionKey,
     }),
     envelope: api.runtime.channel.reply.resolveEnvelopeFormatOptions(cfg),
     body: rawBody,
   });
 
-  const displayTo = formatDisplayScope(route);
   return {
-    resolvedRoute,
-    baseSessionKey,
-    taskSessionKey,
-    sessionKey,
     storePath,
     mediaPath,
     rawBody,
     body,
-    displayTo,
+  };
+}
+
+function buildBncrInboundTurnContext(args: {
+  api: any;
+  channelId: string;
+  msgId?: string | null;
+  mimeType?: string;
+  mediaPath?: string;
+  peer: ParsedInbound['peer'];
+  senderIdForContext: string;
+  senderDisplayName: string;
+  resolution: BncrInboundConversationResolution;
+  prepared: {
+    rawBody: string;
+    body: string;
+  };
+}) {
+  const {
+    api,
+    channelId,
+    msgId,
+    mimeType,
+    mediaPath,
+    peer,
+    senderIdForContext,
+    senderDisplayName,
+    resolution,
+    prepared,
+  } = args;
+
+  return api.runtime.channel.turn.buildContext({
+    channel: channelId,
+    provider: channelId,
+    surface: channelId,
+    accountId: resolution.accountId,
+    messageId: msgId,
+    timestamp: Date.now(),
+    from: senderIdForContext,
+    sender: {
+      id: senderIdForContext,
+      name: senderDisplayName,
+      username: senderDisplayName,
+    },
+    conversation: {
+      kind: resolution.chatType,
+      id: peer.id,
+      label: resolution.canonicalTo,
+      routePeer: {
+        kind: peer.kind,
+        id: peer.id,
+      },
+    },
+    route: {
+      agentId: resolution.resolvedRoute.agentId,
+      accountId: resolution.accountId,
+      routeSessionKey: resolution.resolvedRoute.sessionKey,
+      dispatchSessionKey: resolution.dispatchSessionKey,
+      mainSessionKey: resolution.resolvedRoute.mainSessionKey,
+    },
+    reply: {
+      to: resolution.canonicalTo,
+      originatingTo: resolution.originatingTo,
+    },
+    message: {
+      inboundEventKind: 'user_request',
+      body: prepared.body,
+      rawBody: prepared.rawBody,
+      bodyForAgent: prepared.rawBody,
+      commandBody: prepared.rawBody,
+      envelopeFrom: resolution.originatingTo,
+      senderLabel: senderDisplayName,
+    },
+    media: mediaPath
+      ? [
+          {
+            path: mediaPath,
+            contentType: mimeType,
+            kind: mimeType?.startsWith('image/')
+              ? 'image'
+              : mimeType?.startsWith('video/')
+                ? 'video'
+                : mimeType?.startsWith('audio/')
+                  ? 'audio'
+                  : 'document',
+            messageId: msgId ?? undefined,
+          },
+        ]
+      : [],
+    extra: {
+      OriginatingChannel: channelId,
+    },
+  });
+}
+
+function buildBncrInboundRecordUpdateLastRoute(args: {
+  channelId: string;
+  peer: ParsedInbound['peer'];
+  senderIdForContext: string;
+  resolution: BncrInboundConversationResolution;
+  pinnedMainDmOwner: string | null;
+}) {
+  const { channelId, peer, senderIdForContext, resolution, pinnedMainDmOwner } = args;
+  if (peer.kind !== 'direct') return undefined;
+
+  const sessionKey = resolveInboundLastRouteSessionKey({
+    route: resolution.resolvedRoute,
+    sessionKey: resolution.dispatchSessionKey,
+  });
+
+  return {
+    sessionKey,
+    channel: channelId,
+    to: resolution.canonicalTo,
+    accountId: resolution.accountId,
+    mainDmOwnerPin:
+      sessionKey === resolution.resolvedRoute.mainSessionKey && pinnedMainDmOwner
+        ? {
+            ownerRecipient: pinnedMainDmOwner,
+            senderRecipient: senderIdForContext,
+          }
+        : undefined,
+  };
+}
+
+function buildBncrInboundReplyRouteFact(
+  resolution: BncrInboundConversationResolution,
+): BncrInboundReplyRouteFact {
+  return {
+    accountId: resolution.accountId,
+    sessionKey: resolution.dispatchSessionKey,
+    route: resolution.route,
+    canonicalTo: resolution.canonicalTo,
+    originatingTo: resolution.originatingTo,
+    chatType: resolution.chatType,
   };
 }
 
@@ -130,7 +354,7 @@ export async function dispatchBncrInbound(params: {
     scheduleSave,
     logger,
   } = params;
-  const { accountId, route, clientId, msgId, extracted, mimeType, peer } = parsed;
+  const { accountId, clientId, msgId, extracted, mimeType, peer } = parsed;
 
   const nativeCommand = await handleBncrNativeCommand({
     api,
@@ -142,7 +366,7 @@ export async function dispatchBncrInbound(params: {
     enqueueFromReply,
     logger,
   });
-  if (nativeCommand.handled) {
+  if (nativeCommand.handled && !nativeCommand.fallbackToAgent) {
     const inboundAt = Date.now();
     setInboundActivity(accountId, inboundAt);
     scheduleSave();
@@ -154,104 +378,138 @@ export async function dispatchBncrInbound(params: {
     };
   }
 
-  const {
-    resolvedRoute,
-    sessionKey,
-    storePath,
-    mediaPath,
-    rawBody,
-    body,
-    displayTo,
-  } = await prepareBncrInboundSessionContext({
+  const resolution = resolveBncrInboundConversation({
     api,
     cfg,
     channelId,
     parsed,
     canonicalAgentId,
+  });
+  const { resolvedRoute, canonicalTo, dispatchSessionKey: sessionKey } = resolution;
+  const prepared = await prepareBncrInboundSessionContext({
+    api,
+    cfg,
+    parsed,
+    resolution,
     rememberSessionRoute,
   });
+  const { storePath, mediaPath, rawBody, body } = prepared;
+  const replyRouteFact = buildBncrInboundReplyRouteFact(resolution);
   if (!clientId) {
-    emitBncrLogLine('warn', '[bncr] inbound missing clientId for chat identity');
-    return {
-      accountId,
-      sessionKey,
-      taskKey: extracted.taskKey ?? null,
-      msgId: msgId ?? null,
-    };
+    emitBncrLogLine(
+      'warn',
+      '[bncr] inbound missing clientId for chat identity; using route identity fallback',
+    );
   }
-  const senderIdForContext = clientId;
-  const senderDisplayName = 'bncr-client';
-  const ctxPayload = api.runtime.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    MediaPath: mediaPath,
-    MediaType: mimeType,
-    From: senderIdForContext,
-    To: displayTo,
-    SessionKey: sessionKey,
-    AccountId: accountId,
-    ChatType: peer.kind,
-    ConversationLabel: displayTo,
-    SenderId: senderIdForContext,
-    SenderName: senderDisplayName,
-    SenderUsername: senderDisplayName,
-    Provider: channelId,
-    Surface: channelId,
-    MessageSid: msgId,
-    Timestamp: Date.now(),
-    OriginatingChannel: channelId,
-    OriginatingTo: displayTo,
+  const senderIdForContext = clientId || canonicalTo;
+  const senderDisplayName = clientId ? 'bncr-client' : canonicalTo;
+  const ctxPayload = buildBncrInboundTurnContext({
+    api,
+    channelId,
+    msgId,
+    mimeType,
+    mediaPath,
+    peer,
+    senderIdForContext,
+    senderDisplayName,
+    resolution,
+    prepared,
   });
-
-  await api.runtime.channel.session.recordInboundSession({
-    storePath,
-    sessionKey,
-    ctx: ctxPayload,
-    onRecordError: (err: unknown) => {
-      emitBncrLogLine('warn', `[bncr] inbound record session failed: ${String(err)}`);
-    },
-  });
-
-  const inboundAt = Date.now();
-  setInboundActivity(accountId, inboundAt);
-  scheduleSave();
 
   const effectiveReply = buildBncrReplyConfig(cfg);
+  const channelPolicy = resolveBncrChannelPolicy(cfg?.channels?.bncr || {});
+  const pinnedMainDmOwner =
+    peer.kind === 'direct'
+      ? resolvePinnedMainDmOwnerFromAllowlist({
+          dmScope: cfg?.session?.dmScope,
+          allowFrom: channelPolicy.allowFrom,
+          normalizeEntry: (entry: string) => String(entry || '').trim(),
+        })
+      : null;
+  const updateLastRoute = buildBncrInboundRecordUpdateLastRoute({
+    channelId,
+    peer,
+    senderIdForContext,
+    resolution,
+    pinnedMainDmOwner,
+  });
 
-  await api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: effectiveReply.replyCfg,
-    dispatcherOptions: {
-      deliver: async (
-        payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
-        info?: { kind?: 'tool' | 'block' | 'final' },
-      ) => {
-        const kind = info?.kind;
-        const shouldForwardTool = effectiveReply.blockStreaming && effectiveReply.allowTool;
-
-        if (kind === 'tool' && !shouldForwardTool) {
-          return;
-        }
-
-        await enqueueFromReply({
-          accountId,
-          sessionKey,
-          route,
-          payload: {
-            ...payload,
-            kind: kind as 'tool' | 'block' | 'final' | undefined,
+  await api.runtime.channel.turn.run({
+    channel: channelId,
+    accountId,
+    raw: parsed,
+    adapter: {
+      ingest: () => ({
+        id: msgId ?? `${canonicalTo}:${Date.now()}`,
+        timestamp: Date.now(),
+        rawText: rawBody,
+        textForAgent: ctxPayload.BodyForAgent,
+        textForCommands: ctxPayload.CommandBody,
+        raw: parsed,
+      }),
+      resolveTurn: () => ({
+        channel: channelId,
+        accountId,
+        routeSessionKey: resolvedRoute.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
+          recordInboundSession: api.runtime.channel.session.recordInboundSession,
+          expectedLabel: canonicalTo,
+        }),
+        record: {
+          updateLastRoute,
+          onRecordError: (err: unknown) => {
+            emitBncrLogLine('warn', `[bncr] inbound record session failed: ${String(err)}`);
           },
-        });
+        },
+        runDispatch: () =>
+          api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+            ctx: ctxPayload,
+            cfg: effectiveReply.replyCfg,
+            dispatcherOptions: {
+              deliver: async (
+                payload: {
+                  text?: string;
+                  mediaUrl?: string;
+                  mediaUrls?: string[];
+                  audioAsVoice?: boolean;
+                },
+                info?: { kind?: 'tool' | 'block' | 'final' },
+              ) => {
+                const kind = info?.kind;
+                const shouldForwardTool = effectiveReply.blockStreaming && effectiveReply.allowTool;
+
+                if (kind === 'tool' && !shouldForwardTool) {
+                  return;
+                }
+
+                await enqueueFromReply({
+                  accountId: replyRouteFact.accountId,
+                  sessionKey: replyRouteFact.sessionKey,
+                  route: replyRouteFact.route,
+                  payload: {
+                    ...payload,
+                    kind: kind as 'tool' | 'block' | 'final' | undefined,
+                    replyToId: msgId || undefined,
+                  },
+                });
+              },
+              onError: (err: unknown) => {
+                emitBncrLogLine('error', `[bncr] outbound reply failed: ${String(err)}`);
+              },
+            },
+            replyOptions: {
+              disableBlockStreaming: !effectiveReply.blockStreaming,
+              shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
+            },
+          }),
+      }),
+      onFinalize: () => {
+        const inboundAt = Date.now();
+        setInboundActivity(accountId, inboundAt);
+        scheduleSave();
       },
-      onError: (err: unknown) => {
-        emitBncrLogLine('error', `[bncr] outbound reply failed: ${String(err)}`);
-      },
-    },
-    replyOptions: {
-      disableBlockStreaming: !effectiveReply.blockStreaming,
-      shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
     },
   });
 
