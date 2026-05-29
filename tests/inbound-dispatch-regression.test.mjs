@@ -13,12 +13,14 @@ import {
   resolveBncrInboundConversation,
 } from '../src/messaging/inbound/dispatch.ts';
 import { parseBncrInboundParams, resolveChatType } from '../src/messaging/inbound/parse.ts';
+import { setBncrInboundSessionRuntimeForTest } from '../src/openclaw/inbound-session-runtime.ts';
 
 function createInboundApiStub(options = {}) {
   const currentConfig = {};
   const storePath = options.storePath || path.join(os.tmpdir(), `bncr-test-store-${Date.now()}-${Math.random()}.json`);
   const nativeCommandProducesReply = options.nativeCommandProducesReply ?? true;
   const calls = {
+    builtContextArgs: [],
     builtContexts: [],
     recorded: [],
     delivered: [],
@@ -26,6 +28,42 @@ function createInboundApiStub(options = {}) {
     sessionPatches: [],
     savedMediaBuffers: [],
   };
+
+  const restoreSessionRuntime = setBncrInboundSessionRuntimeForTest({
+    resolveStorePath() {
+      return storePath;
+    },
+    async recordInboundSession(args) {
+      calls.recorded.push(args);
+    },
+    readSessionUpdatedAt() {
+      return 0;
+    },
+    async recordSessionMetaFromInbound(args) {
+      const existing = fs.existsSync(args.storePath)
+        ? JSON.parse(fs.readFileSync(args.storePath, 'utf8'))
+        : {};
+      existing[args.sessionKey] = {
+        ...(existing[args.sessionKey] || {}),
+        label: args.ctx?.ConversationLabel,
+        channel: args.ctx?.OriginatingChannel,
+        chatType: args.ctx?.ChatType,
+      };
+      fs.writeFileSync(args.storePath, JSON.stringify(existing, null, 2));
+    },
+    async updateSessionStoreEntry(args) {
+      calls.sessionPatches.push(args);
+      const existing = fs.existsSync(args.storePath)
+        ? JSON.parse(fs.readFileSync(args.storePath, 'utf8'))
+        : {};
+      const current = existing[args.sessionKey] || {};
+      const patch = args.update(current);
+      if (patch) {
+        existing[args.sessionKey] = { ...current, ...patch };
+        fs.writeFileSync(args.storePath, JSON.stringify(existing, null, 2));
+      }
+    },
+  });
 
   const api = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -88,6 +126,7 @@ function createInboundApiStub(options = {}) {
         },
         turn: {
           buildContext(args) {
+            calls.builtContextArgs.push(args);
             const ctx = {
               ...args.extra,
               Body: args.message.body,
@@ -109,6 +148,7 @@ function createInboundApiStub(options = {}) {
               DispatchSessionKey: args.route.dispatchSessionKey,
               MainSessionKey: args.route.mainSessionKey,
               CommandTurn: args.commandTurn,
+              UntrustedStructuredContext: args.supplemental?.untrustedContext,
             };
             calls.builtContexts.push(ctx);
             return ctx;
@@ -131,7 +171,7 @@ function createInboundApiStub(options = {}) {
     },
   };
 
-  return { api, calls, storePath };
+  return { api, calls, storePath, restoreSessionRuntime };
 }
 
 function cleanupBridge(bridge) {
@@ -203,7 +243,41 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
   assert.equal(calls.savedMediaBuffers.length, 1);
   assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'ok');
   assert.equal(calls.savedMediaBuffers[0].mimeType, 'image/png');
+  assert.equal(calls.builtContexts[0].Body, 'ENV:image inbound');
+  assert.equal(calls.builtContexts[0].BodyForAgent, 'image inbound');
+  assert.equal(calls.builtContexts[0].RawBody, 'image inbound');
+  assert.equal(calls.builtContexts[0].CommandBody, 'image inbound');
+  assert.equal(calls.builtContexts[0].BodyForCommands, 'image inbound');
   assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media.bin');
+  assert.equal(calls.builtContexts[0].MediaType, 'image/png');
+  assert.deepEqual(
+    calls.builtContexts[0].BncrStructuredContextFacts,
+    calls.builtContexts[0].StructuredContextFacts,
+  );
+  assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
+    {
+      path: '/tmp/bncr-inbound-media.bin',
+      contentType: 'image/png',
+      kind: 'image',
+      messageId: 'inbound-media-small',
+    },
+  ]);
+  assert.deepEqual(calls.builtContextArgs[0].supplemental.untrustedContext, [
+    {
+      label: 'Bncr inbound context',
+      source: 'bncr',
+      type: 'bncr.inbound_context',
+      payload: {
+        media: [
+          {
+            contentType: 'image/png',
+            kind: 'image',
+            messageId: 'inbound-media-small',
+          },
+        ],
+      },
+    },
+  ]);
 });
 
 test('resolveChatType keeps inbound bncr conversations locked to direct compatibility mode', () => {
@@ -290,11 +364,93 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
 
   assert.equal(result.accountId, 'Primary');
   assert.equal(calls.builtContexts.length, 1);
+  assert.equal(calls.builtContextArgs.length, 1);
   assert.equal(calls.recorded.length, 1);
   assert.equal(calls.builtContexts[0].MediaType, undefined);
   assert.equal(calls.builtContexts[0].ChatType, 'direct');
   assert.equal(calls.builtContexts[0].SenderId, 'client-1');
   assert.equal(calls.builtContexts[0].MessageSid, 'inbound-1');
+  assert.equal(calls.builtContexts[0].Body, 'ENV:hello inbound');
+  assert.equal(calls.builtContexts[0].BodyForAgent, 'hello inbound');
+  assert.equal(calls.builtContexts[0].RawBody, 'hello inbound');
+  assert.equal(calls.builtContexts[0].CommandBody, 'hello inbound');
+  assert.equal(calls.builtContexts[0].BodyForCommands, 'hello inbound');
+  assert.deepEqual(calls.builtContextArgs[0].sender, {
+    id: 'client-1',
+    name: 'bncr-client',
+    username: 'bncr-client',
+  });
+  assert.deepEqual(calls.builtContextArgs[0].conversation, {
+    kind: 'direct',
+    id: '-1001',
+    label: 'Bncr:tgBot:-1001:10001',
+    routePeer: {
+      kind: 'direct',
+      id: '-1001',
+    },
+  });
+  assert.deepEqual(calls.builtContextArgs[0].route, {
+    agentId: 'orion',
+    accountId: 'Primary',
+    routeSessionKey: 'agent:orion:bncr:direct:demo',
+    dispatchSessionKey: 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+    mainSessionKey: undefined,
+  });
+  assert.deepEqual(calls.builtContextArgs[0].reply, {
+    to: 'Bncr:tgBot:-1001:10001',
+    originatingTo: 'Bncr:tgBot:-1001:10001',
+  });
+  assert.deepEqual(calls.builtContextArgs[0].message, {
+    inboundEventKind: 'user_request',
+    body: 'ENV:hello inbound',
+    rawBody: 'hello inbound',
+    bodyForAgent: 'hello inbound',
+    commandBody: 'hello inbound',
+    envelopeFrom: 'Bncr:tgBot:-1001:10001',
+    senderLabel: 'bncr-client',
+  });
+  assert.equal(calls.builtContextArgs[0].supplemental.untrustedContext.length, 0);
+  assert.deepEqual(
+    calls.builtContexts[0].UntrustedStructuredContext,
+    calls.builtContextArgs[0].supplemental.untrustedContext,
+  );
+  assert.deepEqual(
+    calls.builtContexts[0].BncrStructuredContextFacts,
+    calls.builtContexts[0].StructuredContextFacts,
+  );
+  assert.deepEqual(calls.builtContexts[0].StructuredContextFacts, {
+    channel: {
+      id: 'bncr',
+      accountId: 'Primary',
+    },
+    route: {
+      agentId: 'orion',
+      routeSessionKey: 'agent:orion:bncr:direct:demo',
+      dispatchSessionKey: 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+      mainSessionKey: undefined,
+    },
+    conversation: {
+      kind: 'direct',
+      id: '-1001',
+      label: 'Bncr:tgBot:-1001:10001',
+    },
+    reply: {
+      to: 'Bncr:tgBot:-1001:10001',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+    },
+    sender: {
+      id: 'client-1',
+      displayName: 'bncr-client',
+    },
+    message: {
+      id: 'inbound-1',
+      rawBody: 'hello inbound',
+      bodyForAgent: 'hello inbound',
+      commandBody: 'hello inbound',
+      envelopeBody: 'ENV:hello inbound',
+    },
+    media: [],
+  });
   assert.equal(calls.builtContexts[0].To, 'Bncr:tgBot:-1001:10001');
   assert.equal(calls.builtContexts[0].OriginatingTo, 'Bncr:tgBot:-1001:10001');
   assert.equal(calls.builtContexts[0].EnvelopeFrom, 'Bncr:tgBot:-1001:10001');
@@ -378,6 +534,19 @@ test('dispatchBncrInbound carries provided originating target into built inbound
   assert.equal(calls.builtContexts[0].OriginatingTo, 'BncrRaw:tgBot:-1001:10001');
   assert.equal(calls.builtContexts[0].EnvelopeFrom, 'BncrRaw:tgBot:-1001:10001');
   assert.equal(calls.builtContexts[0].ConversationLabel, 'Bncr:tgBot:-1001:10001');
+  assert.deepEqual(calls.builtContextArgs[0].supplemental.untrustedContext, [
+    {
+      label: 'Bncr inbound context',
+      source: 'bncr',
+      type: 'bncr.inbound_context',
+      payload: {
+        reply: {
+          to: 'Bncr:tgBot:-1001:10001',
+          originatingTo: 'BncrRaw:tgBot:-1001:10001',
+        },
+      },
+    },
+  ]);
 });
 
 test('dispatchBncrInbound keeps canonical to/session identity locked while preserving provided originating target', async () => {
@@ -521,7 +690,11 @@ test('slash command with native reply is handled on bncr route without normal ag
   assert.equal(result.accountId, 'Primary');
   assert.equal(calls.turnRuns.length, 1);
   assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn.kind, 'native');
+  assert.equal(calls.turnRuns[0].ctxPayload.Body, '/commands');
+  assert.equal(calls.turnRuns[0].ctxPayload.BodyForAgent, '/commands');
+  assert.equal(calls.turnRuns[0].ctxPayload.RawBody, '/commands');
   assert.equal(calls.turnRuns[0].ctxPayload.CommandBody, '/commands');
+  assert.equal(calls.turnRuns[0].ctxPayload.BodyForCommands, '/commands');
   assert.equal(enqueueCalls.length, 1);
   assert.equal(enqueueCalls[0].payload.text, 'reply from agent');
   assert.equal(enqueueCalls[0].payload.replyToId, 'slash-native-reply');
@@ -579,7 +752,28 @@ test('slash command with no native reply falls back to normal bncr agent inbound
   );
   assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.kind, undefined);
   assert.equal(calls.turnRuns[1].ctxPayload.Body, 'ENV:/unknown-native-command');
+  assert.equal(calls.turnRuns[1].ctxPayload.BodyForAgent, '/unknown-native-command');
   assert.equal(calls.turnRuns[1].ctxPayload.RawBody, '/unknown-native-command');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandBody, '/unknown-native-command');
+  assert.equal(calls.turnRuns[1].ctxPayload.BodyForCommands, '/unknown-native-command');
+  assert.deepEqual(
+    calls.turnRuns[1].ctxPayload.BncrStructuredContextFacts,
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts,
+  );
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.message.envelopeBody,
+    'ENV:/unknown-native-command',
+  );
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.message.bodyForAgent,
+    '/unknown-native-command',
+  );
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.message.commandBody,
+    '/unknown-native-command',
+  );
+  assert.equal(calls.turnRuns[1].ctxPayload.StructuredContextFacts.reply.to, 'Bncr:tgBot:-1001:10001');
+  assert.deepEqual(calls.turnRuns[1].ctxPayload.UntrustedStructuredContext, []);
   assert.equal(calls.turnRuns[1].ctxPayload.To, 'Bncr:tgBot:-1001:10001');
   assert.equal(calls.turnRuns[1].ctxPayload.OriginatingTo, 'Bncr:tgBot:-1001:10001');
   assert.equal(calls.turnRuns[1].ctxPayload.ConversationLabel, 'Bncr:tgBot:-1001:10001');
@@ -651,7 +845,29 @@ test('slash command without clientId still falls back to normal bncr agent inbou
   assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn.kind, 'native');
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'Bncr:tgBot:-1001:10001');
   assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.kind, undefined);
+  assert.equal(calls.turnRuns[1].ctxPayload.Body, 'ENV:/unknown-native-command');
+  assert.equal(calls.turnRuns[1].ctxPayload.BodyForAgent, '/unknown-native-command');
+  assert.equal(calls.turnRuns[1].ctxPayload.RawBody, '/unknown-native-command');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandBody, '/unknown-native-command');
+  assert.equal(calls.turnRuns[1].ctxPayload.BodyForCommands, '/unknown-native-command');
+  assert.deepEqual(
+    calls.turnRuns[1].ctxPayload.BncrStructuredContextFacts,
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts,
+  );
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.message.envelopeBody,
+    'ENV:/unknown-native-command',
+  );
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.sender.id,
+    'Bncr:tgBot:-1001:10001',
+  );
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.sender.displayName,
+    'Bncr:tgBot:-1001:10001',
+  );
   assert.equal(calls.turnRuns[1].ctxPayload.SenderId, 'Bncr:tgBot:-1001:10001');
+  assert.deepEqual(calls.turnRuns[1].ctxPayload.UntrustedStructuredContext, []);
   assert.equal(calls.turnRuns[1].ctxPayload.To, 'Bncr:tgBot:-1001:10001');
   assert.equal(
     calls.turnRuns[1].ctxPayload.SessionKey,
@@ -702,6 +918,7 @@ test('handleInbound async dispatch path reaches built inbound context instead of
     assert.equal(calls.recorded.length, 1);
     assert.equal(calls.builtContexts[0].MediaType, undefined);
     assert.equal(calls.builtContexts[0].ChatType, 'direct');
+    assert.deepEqual(calls.builtContexts[0].UntrustedStructuredContext, []);
   } finally {
     cleanupBridge(bridge);
   }

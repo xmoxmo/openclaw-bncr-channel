@@ -24,6 +24,16 @@ const requiredFiles = [
   'src/messaging/outbound/send.ts',
   'src/messaging/outbound/media.ts',
   'src/messaging/outbound/actions.ts',
+  'src/messaging/outbound/durable-message-adapter.ts',
+  'src/messaging/outbound/durable-queue-adapter.ts',
+  'src/openclaw/config-runtime.ts',
+  'src/openclaw/inbound-session-runtime.ts',
+  'src/openclaw/ingress-runtime.ts',
+  'src/openclaw/media-runtime.ts',
+  'src/openclaw/reply-runtime.ts',
+  'src/openclaw/routing-runtime.ts',
+  'src/openclaw/sdk-helpers.ts',
+  'src/openclaw/session-route-runtime.ts',
 ];
 
 const readPackageVersion = () => {

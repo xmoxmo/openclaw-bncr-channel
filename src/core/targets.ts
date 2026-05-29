@@ -51,8 +51,17 @@ function parseRouteFromStandardDisplayScope(scope: string): BncrRoute | null {
   return null;
 }
 
-export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
+function normalizeDisplayScopePrefix(scope: string): string {
   const raw = asString(scope).trim();
+  if (!raw) return '';
+  if (raw.startsWith('Bncr:')) return raw;
+  if (/^bncr[:-]/i.test(raw)) return raw;
+  if (!parseRouteFromStandardDisplayScope(raw)) return raw;
+  return `Bncr:${raw}`;
+}
+
+export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
+  const raw = normalizeDisplayScopePrefix(scope);
   if (!raw) return null;
 
   const payload = raw.match(/^Bncr:(.+)$/)?.[1];

@@ -1,6 +1,4 @@
 import fs from 'node:fs';
-import { resolvePinnedMainDmOwnerFromAllowlist } from 'openclaw/plugin-sdk/conversation-runtime';
-import { resolveInboundLastRouteSessionKey } from 'openclaw/plugin-sdk/routing';
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import {
@@ -9,8 +7,29 @@ import {
   withTaskSessionKey,
 } from '../../core/targets.ts';
 import { handleBncrNativeCommand } from './commands.ts';
+import {
+  buildBncrPromptVisibleContextFacts,
+  buildBncrStructuredContextFactsFromInboundParts,
+} from './context-facts.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
+import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import { wrapBncrInboundRecordSessionLabelCorrection } from './session-label.ts';
+import { saveOpenClawChannelMediaBuffer } from '../../openclaw/media-runtime.ts';
+import {
+  dispatchOpenClawReplyWithBufferedBlockDispatcher,
+  formatOpenClawAgentEnvelope,
+  resolveOpenClawEnvelopeFormatOptions,
+} from '../../openclaw/reply-runtime.ts';
+import {
+  resolveOpenClawAgentRoute,
+  resolveOpenClawInboundLastRouteSessionKey,
+} from '../../openclaw/routing-runtime.ts';
+import {
+  readBncrSessionUpdatedAt,
+  recordBncrInboundSession,
+  resolveBncrInboundSessionStorePath,
+  resolveBncrPinnedMainDmOwnerFromAllowlist,
+} from '../../openclaw/inbound-session-runtime.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
@@ -93,7 +112,7 @@ export function resolveBncrInboundConversation(args: {
   const { api, cfg, channelId, parsed, canonicalAgentId } = args;
   const { accountId, route, peer, sessionKeyfromroute, providedOriginatingTo, extracted } = parsed;
 
-  const resolvedRoute = api.runtime.channel.routing.resolveAgentRoute({
+  const resolvedRoute = resolveOpenClawAgentRoute(api, {
     cfg,
     channel: channelId,
     accountId,
@@ -149,14 +168,16 @@ async function prepareBncrInboundSessionContext(args: {
     rememberSessionRoute(taskSessionKey, accountId, route);
   }
 
-  const storePath = api.runtime.channel.session.resolveStorePath(cfg?.session?.store, {
+  const storePath = resolveBncrInboundSessionStorePath({
+    storeConfig: cfg?.session?.store,
     agentId: resolvedRoute.agentId,
   });
 
   let mediaPath: string | undefined;
   if (mediaBase64) {
     const mediaBuf = decodeInboundMediaBase64(mediaBase64);
-    const saved = await api.runtime.channel.media.saveMediaBuffer(
+    const saved = await saveOpenClawChannelMediaBuffer(
+      api,
       mediaBuf,
       mimeType,
       'inbound',
@@ -169,15 +190,15 @@ async function prepareBncrInboundSessionContext(args: {
   }
 
   const rawBody = extracted.text || (msgType === 'text' ? '' : `[${msgType}]`);
-  const body = api.runtime.channel.reply.formatAgentEnvelope({
+  const body = formatOpenClawAgentEnvelope(api, {
     channel: 'Bncr',
     from: `${platform}:${groupId}:${userId}`,
     timestamp: Date.now(),
-    previousTimestamp: api.runtime.channel.session.readSessionUpdatedAt({
+    previousTimestamp: readBncrSessionUpdatedAt(api, {
       storePath,
       sessionKey: dispatchSessionKey,
     }),
-    envelope: api.runtime.channel.reply.resolveEnvelopeFormatOptions(cfg),
+    envelope: resolveOpenClawEnvelopeFormatOptions(api, cfg),
     body: rawBody,
   });
 
@@ -192,6 +213,7 @@ async function prepareBncrInboundSessionContext(args: {
 function buildBncrInboundTurnContext(args: {
   api: any;
   channelId: string;
+  parsed: ParsedInbound;
   msgId?: string | null;
   mimeType?: string;
   mediaPath?: string;
@@ -207,6 +229,7 @@ function buildBncrInboundTurnContext(args: {
   const {
     api,
     channelId,
+    parsed,
     msgId,
     mimeType,
     mediaPath,
@@ -216,8 +239,31 @@ function buildBncrInboundTurnContext(args: {
     resolution,
     prepared,
   } = args;
+  const structuredContextFacts = buildBncrStructuredContextFactsFromInboundParts({
+    channelId,
+    parsed,
+    resolution,
+    prepared: {
+      rawBody: prepared.rawBody,
+      body: prepared.body,
+      mediaPath,
+    },
+    senderIdForContext,
+    senderDisplayName,
+  });
+  const promptVisibleContextFacts = buildBncrPromptVisibleContextFacts(structuredContextFacts);
+  const supplementalUntrustedContext = Object.keys(promptVisibleContextFacts).length
+    ? [
+        {
+          label: 'Bncr inbound context',
+          source: channelId,
+          type: 'bncr.inbound_context',
+          payload: promptVisibleContextFacts,
+        },
+      ]
+    : [];
 
-  return api.runtime.channel.turn.buildContext({
+  return resolveBncrChannelInboundRuntime(api).buildContext({
     channel: channelId,
     provider: channelId,
     surface: channelId,
@@ -275,8 +321,13 @@ function buildBncrInboundTurnContext(args: {
           },
         ]
       : [],
+    supplemental: {
+      untrustedContext: supplementalUntrustedContext,
+    },
     extra: {
       OriginatingChannel: channelId,
+      BncrStructuredContextFacts: structuredContextFacts,
+      StructuredContextFacts: structuredContextFacts,
     },
   });
 }
@@ -291,7 +342,7 @@ function buildBncrInboundRecordUpdateLastRoute(args: {
   const { channelId, peer, senderIdForContext, resolution, pinnedMainDmOwner } = args;
   if (peer.kind !== 'direct') return undefined;
 
-  const sessionKey = resolveInboundLastRouteSessionKey({
+  const sessionKey = resolveOpenClawInboundLastRouteSessionKey({
     route: resolution.resolvedRoute,
     sessionKey: resolution.dispatchSessionKey,
   });
@@ -406,6 +457,7 @@ export async function dispatchBncrInbound(params: {
   const ctxPayload = buildBncrInboundTurnContext({
     api,
     channelId,
+    parsed,
     msgId,
     mimeType,
     mediaPath,
@@ -420,7 +472,7 @@ export async function dispatchBncrInbound(params: {
   const channelPolicy = resolveBncrChannelPolicy(cfg?.channels?.bncr || {});
   const pinnedMainDmOwner =
     peer.kind === 'direct'
-      ? resolvePinnedMainDmOwnerFromAllowlist({
+      ? resolveBncrPinnedMainDmOwnerFromAllowlist({
           dmScope: cfg?.session?.dmScope,
           allowFrom: channelPolicy.allowFrom,
           normalizeEntry: (entry: string) => String(entry || '').trim(),
@@ -434,7 +486,7 @@ export async function dispatchBncrInbound(params: {
     pinnedMainDmOwner,
   });
 
-  await api.runtime.channel.turn.run({
+  await resolveBncrChannelInboundRuntime(api).run({
     channel: channelId,
     accountId,
     raw: parsed,
@@ -454,7 +506,7 @@ export async function dispatchBncrInbound(params: {
         storePath,
         ctxPayload,
         recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
-          recordInboundSession: api.runtime.channel.session.recordInboundSession,
+          recordInboundSession: recordBncrInboundSession,
           expectedLabel: canonicalTo,
         }),
         record: {
@@ -464,7 +516,7 @@ export async function dispatchBncrInbound(params: {
           },
         },
         runDispatch: () =>
-          api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+          dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
             ctx: ctxPayload,
             cfg: effectiveReply.replyCfg,
             dispatcherOptions: {

@@ -1,15 +1,27 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 const BNCR_GATEWAY_RUNTIME = Symbol.for('bncr.gateway.runtime');
+const REQUIRED_OPENCLAW_RANGE = '>=2026.5.27';
+const CHANNEL_SDK_HELPER_IMPORTS = [
+  'openclaw/plugin-sdk/boolean-param',
+  'openclaw/plugin-sdk/json-store',
+  'openclaw/plugin-sdk/param-readers',
+  'openclaw/plugin-sdk/status-helpers',
+  'openclaw/plugin-sdk/tool-send',
+];
+const INGRESS_RUNTIME_IMPORT = 'openclaw/plugin-sdk/channel-ingress-runtime';
 
 function resetBncrGlobals() {
   delete globalThis.__bncrBridge;
   delete process[BNCR_GATEWAY_RUNTIME];
 }
 
-function createApi() {
-  const currentConfig = { channels: { bncr: { debug: { verbose: false } } } };
+function createApi(overrides = {}) {
+  const currentConfig = overrides.currentConfig ?? { channels: { bncr: { debug: { verbose: false } } } };
+  const mutateCalls = [];
+  const writeCalls = [];
   return {
     runtime: {
       config: {
@@ -18,6 +30,14 @@ function createApi() {
         },
         async loadConfig() {
           return currentConfig;
+        },
+        async mutateConfigFile(params) {
+          mutateCalls.push(params);
+          return { changed: true, result: await params.mutate(currentConfig, { snapshot: {}, previousHash: null }) };
+        },
+        async writeConfigFile(...args) {
+          writeCalls.push(args);
+          throw new Error('deprecated writeConfigFile should not be used');
         },
       },
     },
@@ -36,8 +56,62 @@ function createApi() {
     registerGatewayMethod(name, handler) {
       this.methods.push({ name, handler });
     },
+    registerCli(register, options) {
+      this.cli = { register, options };
+    },
+    mutateCalls,
+    writeCalls,
+    currentConfig,
   };
 }
+
+test('bncr package and README require the OpenClaw 2026.5.27 runtime baseline', () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+
+  assert.equal(pkg.peerDependencies?.openclaw, REQUIRED_OPENCLAW_RANGE);
+  assert.equal(pkg.devDependencies?.openclaw, REQUIRED_OPENCLAW_RANGE);
+  assert.match(readme, /兼容范围：`openclaw >= 2026\.5\.27`/);
+  assert.equal(readme.includes('openclaw >= 2026.5.3-1'), false);
+});
+
+test('bncr README documents the package dry-run check', () => {
+  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+
+  assert.match(readme, /npm run check-pack/);
+  assert.match(readme, /npm pack --dry-run --json/);
+});
+
+test('bncr README documents channel handoff rather than final platform delivery semantics', () => {
+  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+
+  assert.match(readme, /进入 bncr 自管 outbox，即表示频道 handoff 完成/);
+  assert.match(readme, /不等价于客户端 ACK 或目标平台最终送达/);
+  assert.match(readme, /后续可靠投递由 bncr 自身负责/);
+  assert.match(readme, /已注册生产 `channel\.message` 作为 bncr 的频道专用 handoff adapter/);
+  assert.match(readme, /`text` \/ `media` \/ `payload` 会转换为 bncr outbox entry/);
+  assert.match(readme, /原有通用 `message\.send` \/ `channel\.actions\.send` 发送能力继续保留/);
+  assert.match(readme, /`channel\.message` 是频道专用入口，不替代通用发送入口/);
+  assert.match(readme, /仍不启用 `durableFinal`/);
+});
+
+test('bncr channel routes OpenClaw SDK helper imports through the local adapter', () => {
+  const channelSource = fs.readFileSync(new URL('../src/channel.ts', import.meta.url), 'utf8');
+  const adapterSource = fs.readFileSync(new URL('../src/openclaw/sdk-helpers.ts', import.meta.url), 'utf8');
+
+  for (const specifier of CHANNEL_SDK_HELPER_IMPORTS) {
+    assert.equal(channelSource.includes(specifier), false, specifier);
+    assert.equal(adapterSource.includes(specifier), true, specifier);
+  }
+});
+
+test('bncr gate routes OpenClaw ingress runtime through the local adapter', () => {
+  const gateSource = fs.readFileSync(new URL('../src/messaging/inbound/gate.ts', import.meta.url), 'utf8');
+  const adapterSource = fs.readFileSync(new URL('../src/openclaw/ingress-runtime.ts', import.meta.url), 'utf8');
+
+  assert.equal(gateSource.includes(INGRESS_RUNTIME_IMPORT), false);
+  assert.equal(adapterSource.includes(INGRESS_RUNTIME_IMPORT), true);
+});
 
 test('bncr register is idempotent on the same api instance', async () => {
   const mod = await import('../index.ts');
@@ -83,6 +157,66 @@ test('bncr register reuses bridge but only registers methods on a new api instan
   assert.equal(api2.methods.length, 10);
 });
 
+test('bncr miniconfig uses transactional mutateConfigFile', async () => {
+  resetBncrGlobals();
+  const mod = await import('../index.ts');
+  const api = createApi({ currentConfig: {} });
+  mod.default.register(api);
+
+  let commandAction;
+  const program = {
+    command(name) {
+      assert.equal(name, 'bncr');
+      return {
+        description() {
+          return this;
+        },
+        command(subcommandName) {
+          assert.equal(subcommandName, 'miniconfig');
+          return {
+            description() {
+              return this;
+            },
+            action(fn) {
+              commandAction = fn;
+              return this;
+            },
+          };
+        },
+      };
+    },
+  };
+
+  api.cli.register({ program });
+  assert.equal(typeof commandAction, 'function');
+  await commandAction();
+
+  assert.equal(api.writeCalls.length, 0);
+  assert.equal(api.mutateCalls.length, 1);
+  assert.deepEqual(api.mutateCalls[0].afterWrite, { mode: 'auto' });
+  assert.deepEqual(api.currentConfig.channels.bncr, { enabled: true, allowTool: false });
+});
+
+test('bncr registers channel.message as the channel-owned handoff adapter without durableFinal', async () => {
+  resetBncrGlobals();
+  const mod = await import('../index.ts');
+  const api = createApi();
+  mod.default.register(api);
+  const channel = api.channels[0]?.plugin;
+
+  assert.ok(channel);
+  assert.equal(channel.message?.receive?.defaultAckPolicy, 'manual');
+  assert.deepEqual(channel.message?.receive?.supportedAckPolicies, ['manual']);
+  assert.equal(typeof channel.message?.send?.text, 'function');
+  assert.equal(typeof channel.message?.send?.media, 'function');
+  assert.equal(typeof channel.message?.send?.payload, 'function');
+  assert.equal(typeof channel.actions?.supportsAction, 'function');
+  assert.equal(typeof channel.actions?.handleAction, 'function');
+  assert.equal(channel.message?.durableFinal, undefined);
+  assert.equal(channel.durableFinal, undefined);
+  assert.equal(channel.capabilities?.durableFinal, undefined);
+});
+
 test('bncr messaging exposes parse/display/session target helpers on the owning api channel plugin', async () => {
   resetBncrGlobals();
   const mod = await import('../index.ts');
@@ -94,6 +228,12 @@ test('bncr messaging exposes parse/display/session target helpers on the owning 
   assert.equal(typeof channel.messaging?.parseExplicitTarget, 'function');
   assert.equal(typeof channel.messaging?.formatTargetDisplay, 'function');
   assert.equal(typeof channel.messaging?.resolveSessionTarget, 'function');
+  assert.equal(typeof channel.message?.send?.text, 'function');
+  assert.equal(typeof channel.actions?.supportsAction, 'function');
+  assert.equal(typeof channel.actions?.handleAction, 'function');
+  assert.equal(channel.message?.durableFinal, undefined);
+  assert.equal(channel.durableFinal, undefined);
+  assert.equal(channel.capabilities?.durableFinal, undefined);
 
   const direct = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:10001' });
   assert.ok(direct);

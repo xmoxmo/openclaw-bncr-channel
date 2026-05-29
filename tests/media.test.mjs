@@ -6,6 +6,10 @@ import {
   buildBncrMediaOutboundFrame,
   resolveBncrOutboundMessageType,
 } from '../src/messaging/outbound/media.ts';
+import {
+  isOpenClawRemoteHttpMediaUrl,
+  loadOpenClawWebMedia,
+} from '../src/openclaw/media-runtime.ts';
 
 function createApiStub() {
   const currentConfig = {};
@@ -44,6 +48,81 @@ function cleanupBridge(bridge) {
   bridge.messageAckWaiters?.clear?.();
 }
 
+test('loadOpenClawWebMedia prefers channel readRemoteMediaBuffer for remote http media', async () => {
+  const calls = [];
+  const loaded = await loadOpenClawWebMedia(
+    {
+      runtime: {
+        media: {
+          async loadWebMedia() {
+            calls.push('loadWebMedia');
+            throw new Error('should not use loadWebMedia for remote URL');
+          },
+        },
+        channel: {
+          media: {
+            async readRemoteMediaBuffer(options) {
+              calls.push(['readRemoteMediaBuffer', options]);
+              return {
+                buffer: Buffer.from('remote'),
+                contentType: 'image/png',
+                fileName: 'remote.png',
+              };
+            },
+          },
+        },
+      },
+    },
+    'https://example.com/remote.png',
+    { localRoots: ['/tmp'], maxBytes: 1234 },
+  );
+
+  assert.deepEqual(calls, [['readRemoteMediaBuffer', { url: 'https://example.com/remote.png', maxBytes: 1234 }]]);
+  assert.equal(loaded.buffer.toString(), 'remote');
+  assert.equal(loaded.contentType, 'image/png');
+  assert.equal(loaded.fileName, 'remote.png');
+});
+
+test('isOpenClawRemoteHttpMediaUrl only treats http and https URLs as remote fetch media', () => {
+  assert.equal(isOpenClawRemoteHttpMediaUrl('https://example.com/a.png'), true);
+  assert.equal(isOpenClawRemoteHttpMediaUrl(' HTTP://example.com/a.png '), true);
+  assert.equal(isOpenClawRemoteHttpMediaUrl('/tmp/a.png'), false);
+  assert.equal(isOpenClawRemoteHttpMediaUrl('file:///tmp/a.png'), false);
+  assert.equal(isOpenClawRemoteHttpMediaUrl('data:image/png;base64,abc'), false);
+  assert.equal(isOpenClawRemoteHttpMediaUrl('media://inbound/demo'), false);
+});
+
+test('loadOpenClawWebMedia keeps local media paths on runtime loadWebMedia path', async () => {
+  const calls = [];
+  const loaded = await loadOpenClawWebMedia(
+    {
+      runtime: {
+        media: {
+          async loadWebMedia(mediaUrl, options) {
+            calls.push(['loadWebMedia', mediaUrl, options]);
+            return { buffer: Buffer.from('local'), contentType: 'audio/ogg' };
+          },
+        },
+        channel: {
+          media: {
+            async readRemoteMediaBuffer() {
+              calls.push('readRemoteMediaBuffer');
+              throw new Error('should not use remote reader for local path');
+            },
+          },
+        },
+      },
+    },
+    '/tmp/voice.ogg',
+    { localRoots: ['/tmp'], maxBytes: 5678 },
+  );
+
+  assert.deepEqual(calls, [
+    ['loadWebMedia', '/tmp/voice.ogg', { localRoots: ['/tmp'], maxBytes: 5678 }],
+  ]);
+  assert.equal(loaded.buffer.toString(), 'local');
+  assert.equal(loaded.contentType, 'audio/ogg');
+});
 
 test('keeps standard hinted type when supported', () => {
   assert.equal(

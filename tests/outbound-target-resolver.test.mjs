@@ -9,9 +9,11 @@ import {
 const routeDirect = { platform: 'tgBot', groupId: '0', userId: '10001' };
 const routeGroup = { platform: 'tgBot', groupId: '-1001', userId: '10001' };
 
-test('looksLikeBncrExplicitTarget only accepts standard Bncr target or strict sessionKey', () => {
+test('looksLikeBncrExplicitTarget only accepts standard Bncr target, stripped standard target, or strict sessionKey', () => {
   assert.equal(looksLikeBncrExplicitTarget('Bncr:tgBot:10001'), true);
   assert.equal(looksLikeBncrExplicitTarget('Bncr:tgBot:-1001:10001'), true);
+  assert.equal(looksLikeBncrExplicitTarget('tgBot:10001'), true);
+  assert.equal(looksLikeBncrExplicitTarget('tgBot:-1001:10001'), true);
   assert.equal(
     looksLikeBncrExplicitTarget(
       `agent:orion:bncr:direct:${Buffer.from('tgBot:0:10001', 'utf8').toString('hex')}`,
@@ -47,6 +49,26 @@ test('resolveBncrOutboundTarget resolves standard group target', () => {
   assert.deepEqual(resolved.route, routeGroup);
   assert.equal(resolved.displayScope, 'Bncr:tgBot:-1001:10001');
   assert.equal(resolved.kind, 'group');
+});
+
+test('resolveBncrOutboundTarget restores missing Bncr prefix before validation', () => {
+  const direct = resolveBncrOutboundTarget({
+    target: 'tgBot:10001',
+    accountId: 'Primary',
+  });
+  assert.ok(direct);
+  assert.deepEqual(direct.route, routeDirect);
+  assert.equal(direct.displayScope, 'Bncr:tgBot:10001');
+  assert.equal(direct.kind, 'user');
+
+  const group = resolveBncrOutboundTarget({
+    target: 'tgBot:-1001:10001',
+    accountId: 'Primary',
+  });
+  assert.ok(group);
+  assert.deepEqual(group.route, routeGroup);
+  assert.equal(group.displayScope, 'Bncr:tgBot:-1001:10001');
+  assert.equal(group.kind, 'group');
 });
 
 test('resolveBncrOutboundTarget resolves strict sessionKey into standard display scope', () => {

@@ -28,6 +28,15 @@ test('parseRouteFromDisplayScope supports standard group display scope', () => {
   });
 });
 
+test('parseRouteFromDisplayScope restores missing Bncr prefix before validation', () => {
+  assert.deepEqual(parseRouteFromDisplayScope('tgBot:10001'), route);
+  assert.deepEqual(parseRouteFromDisplayScope('tgBot:-1001:10001'), {
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+  });
+});
+
 test('parseRouteFromDisplayScope rejects old formats', () => {
   const hex = Buffer.from('tgBot:0:10001', 'utf8').toString('hex');
   assert.equal(parseRouteFromDisplayScope('bncr:tgBot:0:10001'), null);

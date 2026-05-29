@@ -34,7 +34,7 @@ openclaw plugins update bncr
 openclaw gateway restart
 ```
 
-> 兼容范围：`openclaw >= 2026.5.3-1`
+> 兼容范围：`openclaw >= 2026.5.27`
 >
 > 如果你是从精确版本升级，或本地安装记录仍钉在旧版本，也可以显式执行：
 >
@@ -94,6 +94,10 @@ bncr 当前采用两层模型：
 2. **OpenClaw 频道插件层**
    - 在 OpenClaw 内部按正式 `channel plugin` 建模
    - 负责入站解析、消息分发、出站适配、状态与治理
+
+出站可靠投递的边界：bncr 后面仍有自己的服务框架和 outbox / ACK / retry / deadLetter 体系。对 OpenClaw 宿主来说，消息成功交给 bncr 插件并进入 bncr 自管 outbox，即表示频道 handoff 完成；这不等价于客户端 ACK 或目标平台最终送达。后续可靠投递由 bncr 自身负责。
+
+当前已注册生产 `channel.message` 作为 bncr 的频道专用 handoff adapter：`text` / `media` / `payload` 会转换为 bncr outbox entry。原有通用 `message.send` / `channel.actions.send` 发送能力继续保留；`channel.message` 是频道专用入口，不替代通用发送入口。该 adapter 仍不启用 `durableFinal`；进入 outbox 后的客户端 ACK、目标平台送达、retry、deadLetter 继续由 bncr 服务框架负责。
 
 当前代码结构：
 
@@ -246,6 +250,7 @@ npm root -g
 cd plugins/bncr
 npm test
 npm run selfcheck
+npm run check-pack
 npm pack
 ```
 
@@ -253,6 +258,7 @@ npm pack
 
 - `npm test`：跑回归测试
 - `npm run selfcheck`：检查插件骨架是否完整
+- `npm run check-pack`：执行 `npm pack --dry-run --json`，确认发布包包含关键入口与 OpenClaw adapter 文件
 - `npm pack`：确认当前版本可正常打包
 - `npm run check-register-drift -- --duration-sec 300 --interval-sec 15`：静置采样 `bncr.diagnostics`，观察 `registerCount / apiGeneration / postWarmupRegisterCount` 是否在 warmup 后继续增长
 

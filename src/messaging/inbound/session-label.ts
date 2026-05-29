@@ -1,8 +1,8 @@
-import {
-  recordSessionMetaFromInbound,
-  updateSessionStoreEntry,
-} from 'openclaw/plugin-sdk/session-store-runtime';
 import { emitBncrLogLine } from '../../core/logging.ts';
+import {
+  recordBncrSessionMetaFromInbound,
+  updateBncrSessionStoreEntry,
+} from '../../openclaw/inbound-session-runtime.ts';
 
 type RecordInboundSessionFn = (args: any) => Promise<unknown> | unknown;
 
@@ -57,7 +57,7 @@ export async function correctBncrInboundSessionLabel(args: {
   if (!storePath || !sessionKey || !expectedLabel) return;
 
   try {
-    await updateSessionStoreEntry({
+    await updateBncrSessionStoreEntry({
       storePath,
       sessionKey,
       update: (entry: any) => {
@@ -82,14 +82,14 @@ export async function recordAndPatchBncrInboundSessionEntry(args: {
 
   try {
     if (args.ctx) {
-      await recordSessionMetaFromInbound({
+      await recordBncrSessionMetaFromInbound({
         storePath,
         sessionKey,
         ctx: args.ctx as any,
         createIfMissing: true,
       });
     }
-    await updateSessionStoreEntry({
+    await updateBncrSessionStoreEntry({
       storePath,
       sessionKey,
       update: () => args.patch,

@@ -1,4 +1,4 @@
-import { buildChannelOutboundSessionRoute } from 'openclaw/plugin-sdk/core';
+import { buildOpenClawChannelOutboundSessionRoute } from '../../openclaw/session-route-runtime.ts';
 import {
   buildCanonicalBncrSessionKey,
   formatDisplayScope,
@@ -72,7 +72,7 @@ export function resolveBncrOutboundSessionRoute(params: ResolveBncrOutboundSessi
   const sessionKey = buildCanonicalBncrSessionKey(route, canonicalAgentId);
   const displayTo = formatDisplayScope(route);
 
-  const built = buildChannelOutboundSessionRoute({
+  const built = buildOpenClawChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: canonicalAgentId,
     channel: params.channel,

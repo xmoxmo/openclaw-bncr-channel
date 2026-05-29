@@ -1,21 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readBooleanParam } from 'openclaw/plugin-sdk/boolean-param';
 import type {
   GatewayRequestHandlerOptions,
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
 } from 'openclaw/plugin-sdk/core';
-import {
-  applyAccountNameToChannelSection,
-  jsonResult,
-  setAccountEnabledInConfigSection,
-} from 'openclaw/plugin-sdk/core';
-import { readJsonFileWithFallback, writeJsonFileAtomically } from 'openclaw/plugin-sdk/json-store';
-import { readStringParam } from 'openclaw/plugin-sdk/param-readers';
-import { createDefaultChannelRuntimeState } from 'openclaw/plugin-sdk/status-helpers';
-import { extractToolSend } from 'openclaw/plugin-sdk/tool-send';
 import {
   BNCR_DEFAULT_ACCOUNT_ID,
   CHANNEL_ID,
@@ -78,6 +68,27 @@ import { buildExtendedDiagnostics as buildExtendedDiagnosticsFromRuntime } from 
 import { observeLeaseState, matchesTransferOwner as matchesTransferOwnerFromRuntime } from './core/lease-state.ts';
 import { emitBncrLog, emitBncrLogLine } from './core/logging.ts';
 import { resolveBncrChannelPolicy, resolveBncrConfigWarnings } from './core/policy.ts';
+import {
+  getOpenClawRuntimeConfig,
+  getOpenClawRuntimeConfigOrDefault,
+} from './openclaw/config-runtime.ts';
+import {
+  loadOpenClawWebMedia,
+  saveOpenClawChannelMediaBuffer,
+  type OpenClawLoadedMedia,
+} from './openclaw/media-runtime.ts';
+import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
+import {
+  applyOpenClawAccountNameToChannelSection,
+  createOpenClawDefaultChannelRuntimeState,
+  extractOpenClawToolSend,
+  openClawJsonResult,
+  readOpenClawBooleanParam,
+  readOpenClawJsonFileWithFallback,
+  readOpenClawStringParam,
+  setOpenClawAccountEnabledInConfigSection,
+  writeOpenClawJsonFileAtomically,
+} from './openclaw/sdk-helpers.ts';
 import {
   buildRegisterTraceSummary as buildRegisterTraceSummaryFromEntries,
   classifyRegisterTrace as classifyRegisterTraceFromStack,
@@ -309,6 +320,7 @@ import {
   computeRetryRerouteDecision,
 } from './messaging/outbound/retry-policy.ts';
 import { sendBncrMedia, sendBncrText } from './messaging/outbound/send.ts';
+import { buildBncrDurableQueuedResult } from './messaging/outbound/durable-queue-adapter.ts';
 import { resolveBncrOutboundSessionRoute } from './messaging/outbound/session-route.ts';
 import {
   looksLikeBncrExplicitTarget,
@@ -481,20 +493,20 @@ function normalizeBncrSendParams(input: {
   accountId: string;
 }): NormalizedBncrSendParams {
   const paramsObj = isPlainObject(input.params) ? input.params : {};
-  const to = readStringParam(paramsObj, 'to', { required: true });
+  const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
   const resolvedAccountId = normalizeAccountId(
-    readStringParam(paramsObj, 'accountId') ?? input.accountId,
+    readOpenClawStringParam(paramsObj, 'accountId') ?? input.accountId,
   );
 
-  const message = readStringParam(paramsObj, 'message', { allowEmpty: true }) ?? '';
-  const caption = readStringParam(paramsObj, 'caption', { allowEmpty: true }) ?? '';
+  const message = readOpenClawStringParam(paramsObj, 'message', { allowEmpty: true }) ?? '';
+  const caption = readOpenClawStringParam(paramsObj, 'caption', { allowEmpty: true }) ?? '';
   const mediaUrl =
-    readStringParam(paramsObj, 'media', { trim: false }) ??
-    readStringParam(paramsObj, 'path', { trim: false }) ??
-    readStringParam(paramsObj, 'filePath', { trim: false }) ??
-    readStringParam(paramsObj, 'mediaUrl', { trim: false });
-  const asVoice = readBooleanParam(paramsObj, 'asVoice') ?? false;
-  const audioAsVoice = readBooleanParam(paramsObj, 'audioAsVoice') ?? false;
+    readOpenClawStringParam(paramsObj, 'media', { trim: false }) ??
+    readOpenClawStringParam(paramsObj, 'path', { trim: false }) ??
+    readOpenClawStringParam(paramsObj, 'filePath', { trim: false }) ??
+    readOpenClawStringParam(paramsObj, 'mediaUrl', { trim: false });
+  const asVoice = readOpenClawBooleanParam(paramsObj, 'asVoice') ?? false;
+  const audioAsVoice = readOpenClawBooleanParam(paramsObj, 'audioAsVoice') ?? false;
 
   if (asVoice && !mediaUrl) throw new Error('send voice requires media path');
 
@@ -1198,7 +1210,7 @@ class BncrBridgeRuntime {
     this.stopped = false;
     this.statePath = path.join(ctx.stateDir, 'bncr-bridge-state.json');
     try {
-      const cfg = this.api.runtime.config.current();
+      const cfg = getOpenClawRuntimeConfig(this.api);
       this.initializeCanonicalAgentId(cfg);
       for (const warning of resolveBncrConfigWarnings(cfg?.channels?.[CHANNEL_ID] || {})) {
         this.logWarn('config', warning);
@@ -1292,7 +1304,7 @@ class BncrBridgeRuntime {
 
   private async refreshDebugFlagFromConfig(options?: { forceLog?: boolean }) {
     try {
-      const cfg = this.api.runtime.config.current();
+      const cfg = getOpenClawRuntimeConfig(this.api);
       const raw = (cfg as any)?.channels?.[CHANNEL_ID]?.debug?.verbose;
       const next = typeof raw === 'boolean' ? raw : false;
       const changed = next !== BNCR_DEBUG_VERBOSE;
@@ -1316,7 +1328,7 @@ class BncrBridgeRuntime {
     channelId?: string;
   }): string | null {
     try {
-      const resolved = this.api.runtime.channel.routing.resolveAgentRoute({
+      const resolved = resolveOpenClawAgentRoute(this.api, {
         cfg: args.cfg,
         channel: args.channelId || CHANNEL_ID,
         accountId: normalizeAccountId(args.accountId),
@@ -1440,7 +1452,7 @@ class BncrBridgeRuntime {
 
   private async loadState() {
     if (!this.statePath) return;
-    const loaded = await readJsonFileWithFallback(this.statePath, {
+    const loaded = await readOpenClawJsonFileWithFallback(this.statePath, {
       outbox: [],
       deadLetter: [],
       sessionRoutes: [],
@@ -1709,7 +1721,7 @@ class BncrBridgeRuntime {
         : null,
     };
 
-    await writeJsonFileAtomically(this.statePath, data);
+    await writeOpenClawJsonFileAtomically(this.statePath, data);
   }
 
   private resolveMessageAck(messageId: string, result: 'acked' | 'timeout' = 'acked') {
@@ -2863,10 +2875,10 @@ class BncrBridgeRuntime {
     });
   }
 
-  private prepareInboundAcceptance(args: {
+  private async prepareInboundAcceptance(args: {
     parsed: ReturnType<typeof parseBncrInboundParams>;
     canonicalAgentId: string;
-  }):
+  }): Promise<
     | {
         ok: true;
         accountId: string;
@@ -2878,7 +2890,8 @@ class BncrBridgeRuntime {
         ok: false;
         status: boolean;
         payload: ReturnType<typeof buildInboundResponsePayload>;
-      } {
+      }
+  > {
     const { parsed, canonicalAgentId } = args;
     const {
       accountId,
@@ -2915,8 +2928,8 @@ class BncrBridgeRuntime {
       };
     }
 
-    const cfg = this.api.runtime.config.current();
-    const gate = checkBncrMessageGate({
+    const cfg = getOpenClawRuntimeConfig(this.api);
+    const gate = await checkBncrMessageGate({
       parsed,
       cfg,
       account: resolveAccount(cfg, accountId),
@@ -2944,7 +2957,7 @@ class BncrBridgeRuntime {
       taskKey: extracted.taskKey,
       text,
       extractedText: extracted.text,
-      resolveAgentRoute: (params) => this.api.runtime.channel.routing.resolveAgentRoute(params),
+      resolveAgentRoute: (params) => resolveOpenClawAgentRoute(this.api, params),
     });
 
     return {
@@ -3089,7 +3102,7 @@ class BncrBridgeRuntime {
 
   private isOutboundAckRequired(accountId?: string) {
     try {
-      const cfg = this.api.runtime.config.current();
+      const cfg = getOpenClawRuntimeConfig(this.api);
       const channelCfg = (cfg as any)?.channels?.[CHANNEL_ID];
       const accountCfg =
         accountId && channelCfg?.accounts && typeof channelCfg.accounts === 'object'
@@ -3108,7 +3121,7 @@ class BncrBridgeRuntime {
   private buildRuntimeFlags(accountId?: string) {
     let ackPolicySource: 'channel' | 'default' = 'default';
     try {
-      const cfg = this.api.runtime.config.current();
+      const cfg = getOpenClawRuntimeConfig(this.api);
       const global = (cfg as any)?.channels?.[CHANNEL_ID]?.outboundRequireAck;
       if (typeof global === 'boolean') ackPolicySource = 'channel';
     } catch {
@@ -3920,7 +3933,7 @@ class BncrBridgeRuntime {
     const canonicalAgentId =
       this.canonicalAgentId ||
       this.ensureCanonicalAgentId({
-        cfg: this.api.runtime.config?.get?.() || {},
+        cfg: getOpenClawRuntimeConfigOrDefault(this.api, {}),
         accountId: acc,
         channelId: CHANNEL_ID,
         peer: { kind: 'direct', id: route.groupId === '0' ? route.userId : route.groupId },
@@ -4568,7 +4581,7 @@ class BncrBridgeRuntime {
     mediaUrl: string,
     mediaLocalRoots?: readonly string[],
   ): Promise<{ mediaBase64: string; mimeType?: string; fileName?: string }> {
-    const loaded = await this.api.runtime.media.loadWebMedia(mediaUrl, {
+    const loaded = await loadOpenClawWebMedia(this.api, mediaUrl, {
       localRoots: mediaLocalRoots,
       maxBytes: 20 * 1024 * 1024,
     });
@@ -4583,12 +4596,12 @@ class BncrBridgeRuntime {
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
   }): Promise<{
-    loaded: Awaited<ReturnType<OpenClawPluginApi['runtime']['media']['loadWebMedia']>>;
+    loaded: OpenClawLoadedMedia;
     size: number;
     mimeType?: string;
     fileName: string;
   }> {
-    const loaded = await this.api.runtime.media.loadWebMedia(params.mediaUrl, {
+    const loaded = await loadOpenClawWebMedia(this.api, params.mediaUrl, {
       localRoots: params.mediaLocalRoots,
       maxBytes: 50 * 1024 * 1024,
     });
@@ -5408,7 +5421,7 @@ class BncrBridgeRuntime {
 
   handleDiagnostics = async ({ params, respond }: GatewayRequestHandlerOptions) => {
     const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const cfg = this.api.runtime.config.current();
+    const cfg = getOpenClawRuntimeConfig(this.api);
     const runtime = this.getAccountRuntimeSnapshot(accountId);
     const diagnostics = this.buildExtendedDiagnostics(accountId);
 
@@ -5703,7 +5716,8 @@ class BncrBridgeRuntime {
         throw new Error('file sha256 mismatch');
       }
 
-      const saved = await this.api.runtime.channel.media.saveMediaBuffer(
+      const saved = await saveOpenClawChannelMediaBuffer(
+        this.api,
         merged,
         st.mimeType,
         'inbound',
@@ -6038,14 +6052,14 @@ class BncrBridgeRuntime {
     this.lastInboundAtGlobal = now();
     this.incrementCounter(this.inboundEventsByAccount, accountId);
 
-    const cfg = this.api.runtime.config.current();
+    const cfg = getOpenClawRuntimeConfig(this.api);
     const canonicalAgentId = this.ensureCanonicalAgentId({
       cfg,
       accountId,
       peer,
       channelId: CHANNEL_ID,
     });
-    const acceptance = this.prepareInboundAcceptance({ parsed, canonicalAgentId });
+    const acceptance = await this.prepareInboundAcceptance({ parsed, canonicalAgentId });
     if (!acceptance.ok) {
       respond(acceptance.status, acceptance.payload);
       return;
@@ -6352,6 +6366,65 @@ class BncrBridgeRuntime {
       createMessageId: () => randomUUID(),
     });
   };
+
+  private async enqueueChannelMessageHandoff(ctx: any, payload: ReplyPayloadInput) {
+    const accountId = normalizeAccountId(ctx.accountId);
+    const to = asString(ctx.to || '').trim();
+    const verified = this.resolveVerifiedTarget(to, accountId);
+    this.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
+    const before = new Set(this.outbox.keys());
+    await this.enqueueFromReply({
+      accountId,
+      sessionKey: verified.sessionKey,
+      route: verified.route,
+      payload,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+    });
+    const entries = Array.from(this.outbox.values()).filter((entry) => !before.has(entry.messageId));
+    if (!entries.length) {
+      throw new Error('bncr channel.message handoff did not enqueue an outbox entry');
+    }
+    return entries[entries.length - 1];
+  }
+
+  channelMessageSendText = async (ctx: any) => {
+    const entry = await this.enqueueChannelMessageHandoff(ctx, {
+      text: asString(ctx.text || ''),
+      kind: ctx?.kind,
+      replyToId: this.resolveChannelSendReplyToId(ctx),
+    });
+    return buildBncrDurableQueuedResult({ entry });
+  };
+
+  channelMessageSendMedia = async (ctx: any) => {
+    const entry = await this.enqueueChannelMessageHandoff(ctx, {
+      text: asString(ctx.text || ''),
+      mediaUrl: asString(ctx.mediaUrl || ''),
+      mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
+      asVoice: ctx?.asVoice === true,
+      audioAsVoice: ctx?.audioAsVoice === true,
+      kind: ctx?.kind,
+      replyToId: this.resolveChannelSendReplyToId(ctx),
+    });
+    return buildBncrDurableQueuedResult({ entry });
+  };
+
+  channelMessageSendPayload = async (ctx: any) => {
+    const payload = ctx?.payload || {};
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('bncr channel.message payload must be an object');
+    }
+    const entry = await this.enqueueChannelMessageHandoff(ctx, {
+      text: asString(payload.text || payload.message || payload.caption || ''),
+      mediaUrl: asString(payload.mediaUrl || ''),
+      mediaUrls: Array.isArray(payload.mediaUrls) ? payload.mediaUrls : undefined,
+      asVoice: payload.asVoice === true,
+      audioAsVoice: payload.audioAsVoice === true,
+      kind: payload.kind,
+      replyToId: asString(payload.replyToId || ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
+    });
+    return buildBncrDurableQueuedResult({ entry });
+  };
 }
 
 export function createBncrBridge(api: OpenClawPluginApi) {
@@ -6387,7 +6460,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
       };
     },
     supportsAction: ({ action }) => action === 'send',
-    extractToolSend: ({ args }) => extractToolSend(args, 'sendMessage'),
+    extractToolSend: ({ args })  => extractOpenClawToolSend(args, 'sendMessage'),
     handleAction: async ({ action, params, accountId, mediaLocalRoots }) => {
       if (action !== 'send')
         throw new Error(`Action ${action} is not supported for provider ${CHANNEL_ID}.`);
@@ -6425,7 +6498,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
             createMessageId: () => randomUUID(),
           });
 
-      return jsonResult({ ok: true, ...result });
+      return openClawJsonResult({ ok: true, ...result });
     },
   };
 
@@ -6440,6 +6513,17 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
       aliases: ['bncr'],
     },
     actions: messageActions,
+    message: {
+      receive: {
+        defaultAckPolicy: 'manual' as const,
+        supportedAckPolicies: ['manual'] as const,
+      },
+      send: {
+        text: async (ctx: any) => getBridge().channelMessageSendText(ctx),
+        media: async (ctx: any) => getBridge().channelMessageSendMedia(ctx),
+        payload: async (ctx: any) => getBridge().channelMessageSendPayload(ctx),
+      },
+    },
     capabilities: {
       chatTypes: ['direct'] as ChatType[],
       media: true,
@@ -6528,7 +6612,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
       listAccountIds,
       resolveAccount,
       setAccountEnabled: ({ cfg, accountId, enabled }: any) =>
-        setAccountEnabledInConfigSection({
+        setOpenClawAccountEnabledInConfigSection({
           cfg,
           sectionKey: CHANNEL_ID,
           accountId,
@@ -6552,7 +6636,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
     },
     setup: {
       applyAccountName: ({ cfg, accountId, name }: any) =>
-        applyAccountNameToChannelSection({
+        applyOpenClawAccountNameToChannelSection({
           cfg,
           channelKey: CHANNEL_ID,
           accountId,
@@ -6604,7 +6688,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
         }),
     },
     status: {
-      defaultRuntime: createDefaultChannelRuntimeState(BNCR_DEFAULT_ACCOUNT_ID, {
+      defaultRuntime: createOpenClawDefaultChannelRuntimeState(BNCR_DEFAULT_ACCOUNT_ID, {
         mode: 'ws-offline',
       }),
       buildChannelSummary: async ({ defaultAccountId }: any) => {

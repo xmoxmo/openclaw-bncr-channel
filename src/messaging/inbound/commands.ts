@@ -1,5 +1,3 @@
-import { resolvePinnedMainDmOwnerFromAllowlist } from 'openclaw/plugin-sdk/conversation-runtime';
-import { resolveInboundLastRouteSessionKey } from 'openclaw/plugin-sdk/routing';
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import {
@@ -8,11 +6,22 @@ import {
   withTaskSessionKey,
 } from '../../core/targets.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
+import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import {
   buildBncrInboundSessionIdentityPatch,
   recordAndPatchBncrInboundSessionEntry,
   wrapBncrInboundRecordSessionLabelCorrection,
 } from './session-label.ts';
+import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
+import {
+  resolveOpenClawAgentRoute,
+  resolveOpenClawInboundLastRouteSessionKey,
+} from '../../openclaw/routing-runtime.ts';
+import {
+  recordBncrInboundSession,
+  resolveBncrInboundSessionStorePath,
+  resolveBncrPinnedMainDmOwnerFromAllowlist,
+} from '../../openclaw/inbound-session-runtime.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
@@ -110,7 +119,7 @@ export async function handleBncrNativeCommand(params: {
     { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
   );
 
-  const resolvedRoute = api.runtime.channel.routing.resolveAgentRoute({
+  const resolvedRoute = resolveOpenClawAgentRoute(api, {
     cfg,
     channel: channelId,
     accountId,
@@ -137,11 +146,12 @@ export async function handleBncrNativeCommand(params: {
   }
   const senderIdForContext = clientId || displayTo;
   const senderDisplayName = clientId ? 'bncr-client' : displayTo;
-  const storePath = api.runtime.channel.session.resolveStorePath(cfg?.session?.store, {
+  const storePath = resolveBncrInboundSessionStorePath({
+    storeConfig: cfg?.session?.store,
     agentId: resolvedRoute.agentId,
   });
 
-  const ctxPayload = api.runtime.channel.turn.buildContext({
+  const ctxPayload = resolveBncrChannelInboundRuntime(api).buildContext({
     channel: channelId,
     provider: channelId,
     surface: channelId,
@@ -259,13 +269,13 @@ export async function handleBncrNativeCommand(params: {
   const channelPolicy = resolveBncrChannelPolicy(cfg?.channels?.bncr || {});
   const pinnedMainDmOwner =
     peer.kind === 'direct'
-      ? resolvePinnedMainDmOwnerFromAllowlist({
+      ? resolveBncrPinnedMainDmOwnerFromAllowlist({
           dmScope: cfg?.session?.dmScope,
           allowFrom: channelPolicy.allowFrom,
           normalizeEntry: (entry: string) => String(entry || '').trim(),
         })
       : null;
-  const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+  const inboundLastRouteSessionKey = resolveOpenClawInboundLastRouteSessionKey({
     route: resolvedRoute,
     sessionKey,
   });
@@ -282,7 +292,7 @@ export async function handleBncrNativeCommand(params: {
     },
     { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
   );
-  await api.runtime.channel.turn.run({
+  await resolveBncrChannelInboundRuntime(api).run({
     channel: channelId,
     accountId,
     raw: parsed,
@@ -302,7 +312,7 @@ export async function handleBncrNativeCommand(params: {
         storePath,
         ctxPayload,
         recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
-          recordInboundSession: api.runtime.channel.session.recordInboundSession,
+          recordInboundSession: recordBncrInboundSession,
           expectedLabel: displayTo,
         }),
         record: {
@@ -330,7 +340,7 @@ export async function handleBncrNativeCommand(params: {
           },
         },
         runDispatch: () =>
-          api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+          dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
             ctx: ctxPayload,
             cfg: effectiveReply.replyCfg,
             dispatcherOptions: {

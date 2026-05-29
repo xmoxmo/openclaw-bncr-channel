@@ -5,6 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BncrConfigSchema } from './src/core/config-schema.ts';
 import { emitBncrLogLine } from './src/core/logging.ts';
+import {
+  getOpenClawRuntimeConfig,
+  mutateOpenClawRuntimeConfigFile,
+} from './src/openclaw/config-runtime.ts';
 
 const pluginFile = fileURLToPath(import.meta.url);
 const pluginDir = path.dirname(pluginFile);
@@ -660,35 +664,46 @@ const registerBncrCli = (api: OpenClawPluginApi & { registerCli?: (...args: any[
           'Seed minimal channels.bncr config (adds enabled=true and allowTool=false only when missing)',
         )
         .action(async () => {
-          const cfg = api.runtime.config.current() as Record<string, unknown>;
-          const next = structuredClone(cfg);
-          if (!isPlainObject(next.channels)) next.channels = {};
-
-          const existing = isPlainObject(next.channels.bncr) ? next.channels.bncr : {};
-          const bncrCfg: Record<string, unknown> = { ...existing };
+          const cfg = getOpenClawRuntimeConfig(api) as Record<string, unknown>;
+          const channels = isPlainObject(cfg.channels) ? cfg.channels : {};
+          const existing = isPlainObject(channels.bncr) ? channels.bncr : {};
           const added: string[] = [];
 
-          if (bncrCfg.enabled === undefined) {
-            bncrCfg.enabled = true;
+          if (existing.enabled === undefined) {
             added.push('enabled=true');
           }
 
-          if (bncrCfg.allowTool === undefined) {
-            bncrCfg.allowTool = false;
+          if (existing.allowTool === undefined) {
             added.push('allowTool=false');
           }
-
-          next.channels.bncr = bncrCfg;
 
           if (added.length === 0) {
             console.log('Minimal bncr config already present. No changes made.');
             return;
           }
 
-          await api.runtime.config.writeConfigFile(next);
+          await mutateOpenClawRuntimeConfigFile(api, {
+            afterWrite: { mode: 'auto' },
+            mutate(draft: Record<string, unknown>) {
+              if (!isPlainObject(draft.channels)) draft.channels = {};
+              const draftChannels = draft.channels as Record<string, unknown>;
+              const draftExisting = isPlainObject(draftChannels.bncr) ? draftChannels.bncr : {};
+              const draftBncrCfg: Record<string, unknown> = { ...draftExisting };
+
+              if (draftBncrCfg.enabled === undefined) {
+                draftBncrCfg.enabled = true;
+              }
+
+              if (draftBncrCfg.allowTool === undefined) {
+                draftBncrCfg.allowTool = false;
+              }
+
+              draftChannels.bncr = draftBncrCfg;
+            },
+          });
           console.log('Seeded minimal bncr config at channels.bncr.');
           console.log(`Added missing fields: ${added.join(', ')}`);
-          console.log('Restart the gateway to apply changes.');
+          console.log('Gateway will apply the config using the host afterWrite policy.');
         });
     },
     { commands: ['bncr'] },
@@ -801,7 +816,7 @@ const plugin = {
 
     const resolveDebug = async () => {
       try {
-        const cfg = api.runtime.config.current();
+        const cfg = getOpenClawRuntimeConfig(api);
         return Boolean((cfg as any)?.channels?.bncr?.debug?.verbose);
       } catch {
         return false;
