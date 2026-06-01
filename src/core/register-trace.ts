@@ -33,6 +33,19 @@ export type RegisterTraceSummary = {
   likelyStartupFanoutOnly: boolean;
 };
 
+export type RegisterDriftSnapshot = {
+  capturedAt: number;
+  registerCount: number;
+  apiGeneration: number;
+  postWarmupRegisterCount: number;
+  apiInstanceId: string | null;
+  registryFingerprint: string | null;
+  dominantBucket: string | null;
+  sourceBuckets: Record<string, number>;
+  traceWindowSize: number;
+  traceRecent: Array<Record<string, unknown>>;
+};
+
 export function classifyRegisterTrace(stack: string) {
   if (
     stack.includes('prepareSecretsRuntimeSnapshot') ||
@@ -66,6 +79,72 @@ export function dominantRegisterBucket(sourceBuckets: Record<string, number>) {
     }
   }
   return winner;
+}
+
+export function buildRegisterTraceEntry(args: {
+  ts: number;
+  bridgeId: string;
+  gatewayPid: number;
+  registerCount: number;
+  apiGeneration: number;
+  apiRebound: boolean;
+  apiInstanceId: string | null;
+  registryFingerprint: string | null;
+  source: string | null;
+  pluginVersion: string | null;
+  stack: string;
+}): RegisterTraceEntry {
+  return {
+    ts: args.ts,
+    bridgeId: args.bridgeId,
+    gatewayPid: args.gatewayPid,
+    registerCount: args.registerCount,
+    apiGeneration: args.apiGeneration,
+    apiRebound: args.apiRebound,
+    apiInstanceId: args.apiInstanceId,
+    registryFingerprint: args.registryFingerprint,
+    source: args.source,
+    pluginVersion: args.pluginVersion,
+    stack: args.stack,
+    stackBucket: classifyRegisterTrace(args.stack),
+  };
+}
+
+export function appendBoundedRegisterTrace(
+  traceRecent: RegisterTraceEntry[],
+  trace: RegisterTraceEntry,
+  maxEntries = 12,
+) {
+  traceRecent.push(trace);
+  const cap = Math.max(0, Math.floor(finiteNumberOr(maxEntries, 12)));
+  if (cap === 0) {
+    traceRecent.splice(0, traceRecent.length);
+    return;
+  }
+  if (traceRecent.length > cap) traceRecent.splice(0, traceRecent.length - cap);
+}
+
+export function buildRegisterDriftSnapshot(args: {
+  capturedAt: number;
+  registerCount: number;
+  apiGeneration: number;
+  summary: RegisterTraceSummary;
+  apiInstanceId: string | null;
+  registryFingerprint: string | null;
+  traceRecent: RegisterTraceEntry[];
+}): RegisterDriftSnapshot {
+  return {
+    capturedAt: args.capturedAt,
+    registerCount: args.registerCount,
+    apiGeneration: args.apiGeneration,
+    postWarmupRegisterCount: args.summary.postWarmupRegisterCount,
+    apiInstanceId: args.apiInstanceId,
+    registryFingerprint: args.registryFingerprint,
+    dominantBucket: args.summary.dominantBucket,
+    sourceBuckets: { ...args.summary.sourceBuckets },
+    traceWindowSize: args.traceRecent.length,
+    traceRecent: args.traceRecent.map((trace) => ({ ...trace })),
+  };
 }
 
 export function buildRegisterTraceSummary(args: {

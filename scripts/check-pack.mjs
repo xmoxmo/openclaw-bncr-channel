@@ -15,6 +15,17 @@ const requiredPackFiles = [
   'scripts/selfcheck.mjs',
   'scripts/check-register-drift.mjs',
   'src/channel.ts',
+  'src/plugin/config.ts',
+  'src/plugin/message-policy.ts',
+  'src/plugin/messaging.ts',
+  'src/plugin/gateway-runtime.ts',
+  'src/plugin/message-send.ts',
+  'src/plugin/outbound.ts',
+  'src/plugin/setup.ts',
+  'src/plugin/status.ts',
+  'src/runtime/outbound-ack-timeout.ts',
+  'src/runtime/outbound-flags.ts',
+  'src/runtime/outbox-transitions.ts',
   'src/messaging/outbound/durable-message-adapter.ts',
   'src/messaging/outbound/durable-queue-adapter.ts',
   'src/openclaw/config-runtime.ts',
@@ -37,14 +48,19 @@ const [pack] = JSON.parse(output);
 const packedFiles = new Set((pack?.files ?? []).map((file) => file.path));
 const missing = requiredPackFiles.filter((file) => !packedFiles.has(file));
 const channelSource = fs.readFileSync(path.join(root, 'src/channel.ts'), 'utf8');
+const messagePolicySource = fs.readFileSync(path.join(root, 'src/plugin/message-policy.ts'), 'utf8');
+const messageSendSource = fs.readFileSync(path.join(root, 'src/plugin/message-send.ts'), 'utf8');
 const channelMessageChecks = {
   registered: channelSource.includes('message: {'),
-  text: channelSource.includes('channelMessageSendText'),
-  media: channelSource.includes('channelMessageSendMedia'),
-  payload: channelSource.includes('channelMessageSendPayload'),
-  manualAck: channelSource.includes("defaultAckPolicy: 'manual'"),
+  text: channelSource.includes('createBncrMessageSend') && messageSendSource.includes('channelMessageSendText'),
+  media: channelSource.includes('createBncrMessageSend') && messageSendSource.includes('channelMessageSendMedia'),
+  payload: channelSource.includes('createBncrMessageSend') && messageSendSource.includes('channelMessageSendPayload'),
+  manualAck:
+    channelSource.includes('BNCR_MESSAGE_RECEIVE_POLICY') &&
+    messagePolicySource.includes("defaultAckPolicy: 'manual'") &&
+    messagePolicySource.includes("supportedAckPolicies: ['manual']"),
   genericActionsPreserved: channelSource.includes('actions: messageActions'),
-  noDurableFinal: !channelSource.includes('durableFinal:'),
+  noDurableFinal: !channelSource.includes('durableFinal:') && !messagePolicySource.includes('durableFinal:'),
 };
 const channelMessageOk = Object.values(channelMessageChecks).every(Boolean);
 

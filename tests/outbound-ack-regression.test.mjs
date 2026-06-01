@@ -177,6 +177,117 @@ test('flushPushQueue does not push entries whose nextAttemptAt is still in the f
   }
 });
 
+test('flushPushQueue does not degrade or reroute when pushed entry leaves outbox before ack handling', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+  let degraded = false;
+  let waited = false;
+
+  try {
+    const entry = makeEntry('msg-removed-after-push', 'removed after push');
+    entry.lastPushConnId = 'conn-a';
+    entry.lastPushClientId = 'client-a';
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async (pushedEntry) => {
+      assert.equal(pushedEntry.messageId, entry.messageId);
+      bridge.outbox.delete(pushedEntry.messageId);
+      return true;
+    };
+    bridge.waitForMessageAck = async () => {
+      waited = true;
+      return 'timeout';
+    };
+    bridge.degradeOutboundCapability = () => {
+      degraded = true;
+    };
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+    bridge.sleepMs = async () => {};
+    bridge.isOnline = () => true;
+    bridge.isOutboundAckRequired = () => true;
+
+    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'removed-after-push' });
+
+    assert.equal(waited, true);
+    assert.equal(degraded, false);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+    assert.deepEqual(scheduled, []);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue does not wait for ack or degrade when no-ack pushed entry leaves outbox', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  let waited = false;
+  let degraded = false;
+
+  try {
+    const entry = makeEntry('msg-no-ack-removed-after-push', 'no ack removed after push');
+    entry.lastPushConnId = 'conn-no-ack';
+    entry.lastPushClientId = 'client-no-ack';
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async (pushedEntry) => {
+      assert.equal(pushedEntry.messageId, entry.messageId);
+      bridge.outbox.delete(pushedEntry.messageId);
+      return true;
+    };
+    bridge.waitForMessageAck = async () => {
+      waited = true;
+      return 'timeout';
+    };
+    bridge.degradeOutboundCapability = () => {
+      degraded = true;
+    };
+    bridge.sleepMs = async () => {};
+    bridge.isOnline = () => true;
+    bridge.isOutboundAckRequired = () => false;
+
+    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'no-ack-removed-after-push' });
+
+    assert.equal(waited, false);
+    assert.equal(degraded, false);
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue skips reentrant drain for the same account', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const pushed = [];
+  let nestedReturned = false;
+
+  try {
+    const entry = makeEntry('msg-reentrant-same-account', 'same account reentry');
+    entry.nextAttemptAt = Date.now() - 1_000;
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async (pushedEntry) => {
+      pushed.push(pushedEntry.messageId);
+      await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'nested-same-account' });
+      nestedReturned = true;
+      bridge.outbox.delete(pushedEntry.messageId);
+      return true;
+    };
+    bridge.sleepMs = async () => {};
+    bridge.isOutboundAckRequired = () => false;
+
+    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'outer-same-account' });
+
+    assert.equal(nestedReturned, true);
+    assert.deepEqual(pushed, ['msg-reentrant-same-account']);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+    assert.equal(bridge.pushDrainRunningAccounts.has('Primary'), false);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
 test('flushPushQueue yields after per-account budget instead of draining unbounded entries', async () => {
   const bridge = createBncrBridge(createApiStub());
   const pushed = [];
@@ -212,6 +323,192 @@ test('flushPushQueue yields after per-account budget instead of draining unbound
     assert.equal(bridge.outbox.has('msg-budget-6'), true);
     assert.equal(bridge.outbox.has('msg-budget-7'), true);
     assert.deepEqual(scheduled, [0]);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue merges multi-account next delays using the smallest delay', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const pushed = [];
+  const scheduled = [];
+  const nowTs = Date.now();
+
+  try {
+    const futureEntry = makeEntry('msg-primary-future', 'primary future');
+    futureEntry.accountId = 'Primary';
+    futureEntry.nextAttemptAt = nowTs + 5_000;
+    bridge.outbox.set(futureEntry.messageId, futureEntry);
+
+    for (let i = 1; i <= 7; i++) {
+      const entry = makeEntry(`msg-secondary-${i}`, `secondary ${i}`);
+      entry.accountId = 'Secondary';
+      entry.nextAttemptAt = nowTs - 1_000;
+      bridge.outbox.set(entry.messageId, entry);
+    }
+
+    bridge.tryPushEntry = async (entry) => {
+      pushed.push(entry.messageId);
+      bridge.outbox.delete(entry.messageId);
+      return true;
+    };
+    bridge.sleepMs = async () => {};
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+    bridge.isOutboundAckRequired = () => false;
+
+    await bridge.flushPushQueue({ trigger: 'test', reason: 'multi-account-delay-merge' });
+
+    assert.equal(bridge.outbox.has(futureEntry.messageId), true);
+    assert.deepEqual(pushed, [
+      'msg-secondary-1',
+      'msg-secondary-2',
+      'msg-secondary-3',
+      'msg-secondary-4',
+      'msg-secondary-5',
+    ]);
+    assert.equal(bridge.outbox.has('msg-secondary-6'), true);
+    assert.equal(bridge.outbox.has('msg-secondary-7'), true);
+    assert.deepEqual(scheduled, [0]);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue marks no-ack offline pushes as unconfirmed retry without waiting for ack', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+  let waited = false;
+  let degraded = null;
+  let saveCount = 0;
+  const before = Date.now();
+
+  try {
+    const entry = makeEntry('msg-no-ack-offline-unconfirmed', 'no ack offline unconfirmed');
+    entry.lastPushConnId = 'conn-no-ack-offline';
+    entry.lastPushClientId = 'client-no-ack-offline';
+    entry.nextAttemptAt = before - 1_000;
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async (pushedEntry) => {
+      assert.equal(pushedEntry.messageId, entry.messageId);
+      return true;
+    };
+    bridge.waitForMessageAck = async () => {
+      waited = true;
+      return 'timeout';
+    };
+    bridge.degradeOutboundCapability = (args) => {
+      degraded = args;
+    };
+    bridge.sleepMs = async () => {};
+    bridge.isOnline = () => false;
+    bridge.isOutboundAckRequired = () => false;
+    bridge.scheduleSave = () => {
+      saveCount += 1;
+    };
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'no-ack-offline-unconfirmed' });
+
+    const updated = bridge.outbox.get(entry.messageId);
+    assert.ok(updated, 'offline no-ack push should remain queued for retry');
+    assert.equal(waited, false);
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(degraded?.reason, 'push-unconfirmed');
+    assert.equal(degraded?.connId, 'conn-no-ack-offline');
+    assert.equal(degraded?.clientId, 'client-no-ack-offline');
+    assert.equal(updated.retryCount, 1);
+    assert.equal(updated.lastError, 'push-delivery-unconfirmed');
+    assert.ok(updated.lastAttemptAt >= before);
+    assert.ok(updated.nextAttemptAt >= updated.lastAttemptAt);
+    assert.equal(saveCount, 1);
+    assert.equal(bridge.deadLetter.length, 0);
+    assert.equal(scheduled.length, 1);
+    assert.ok(scheduled[0] >= 0);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue schedules retry after push failure without dead-lettering', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+  let saveCount = 0;
+  const before = Date.now();
+
+  try {
+    const entry = makeEntry('msg-push-failure-retry', 'push failure retry');
+    entry.nextAttemptAt = before - 1_000;
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async () => false;
+    bridge.sleepMs = async () => {};
+    bridge.scheduleSave = () => {
+      saveCount += 1;
+    };
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'push-failure-retry' });
+
+    const updated = bridge.outbox.get(entry.messageId);
+    assert.ok(updated, 'entry should remain queued for retry');
+    assert.equal(updated.retryCount, 1);
+    assert.equal(updated.lastError, 'push-retry');
+    assert.ok(updated.lastAttemptAt >= before);
+    assert.ok(updated.nextAttemptAt >= updated.lastAttemptAt);
+    assert.equal(saveCount, 1);
+    assert.equal(bridge.deadLetter.length, 0);
+    assert.equal(scheduled.length, 1);
+    assert.ok(scheduled[0] >= 0);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue moves push failure retry-limit entries to deadLetter without retry scheduling', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+  let saveCount = 0;
+  const before = Date.now();
+
+  try {
+    const entry = makeEntry('msg-push-failure-retry-limit', 'push failure retry limit');
+    entry.retryCount = 10;
+    entry.nextAttemptAt = before - 1_000;
+    entry.lastError = 'push-terminal-seed';
+    bridge.outbox.set(entry.messageId, entry);
+    const waiter = bridge.waitForMessageAck(entry.messageId, 1_000);
+
+    bridge.tryPushEntry = async () => false;
+    bridge.sleepMs = async () => {};
+    bridge.scheduleSave = () => {
+      saveCount += 1;
+    };
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'push-failure-retry-limit',
+    });
+
+    assert.equal(await waiter, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+    assert.equal(bridge.deadLetter.length, 1);
+    assert.equal(bridge.deadLetter[0].messageId, entry.messageId);
+    assert.equal(bridge.deadLetter[0].lastError, 'push-terminal-seed');
+    assert.equal(saveCount, 1);
+    assert.deepEqual(scheduled, []);
+    assert.equal(bridge.resolveMessageAck(entry.messageId, 'acked'), false);
   } finally {
     cleanupBridge(bridge);
   }
@@ -497,6 +794,36 @@ test('handleAck retryable ack keeps entry queued and reports willRetry', async (
   }
 });
 
+test('handleAck retryable ack does not resolve the pending message ack waiter', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    const entry = makeEntry('msg-ack-retryable-waiter', 'retry keeps waiter pending');
+    bridge.outbox.set(entry.messageId, entry);
+    const waiter = bridge.waitForMessageAck(entry.messageId, 40);
+
+    await bridge.handleAck({
+      params: {
+        accountId: 'Primary',
+        messageId: entry.messageId,
+        ok: false,
+        error: 'retryable-ack-waiter-test',
+      },
+      respond() {},
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(bridge.messageAckWaiters.size, 1);
+    assert.equal(await waiter, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.outbox.has(entry.messageId), true);
+    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), false);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
 test('handleAck fatal ack moves entry to deadLetter and reports movedToDeadLetter', async () => {
   const bridge = createBncrBridge(createApiStub());
 
@@ -524,6 +851,81 @@ test('handleAck fatal ack moves entry to deadLetter and reports movedToDeadLette
     assert.equal(bridge.outbox.has('msg-ack-fatal'), false);
     assert.equal(bridge.deadLetter.some((item) => item.messageId === 'msg-ack-fatal'), true);
     assert.deepEqual(respondPayload, { ok: true, payload: { ok: true, movedToDeadLetter: true } });
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('handleAck fatal ack resolves pending message ack waiter as timeout', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    const entry = makeEntry('msg-ack-fatal-waiter', 'fatal resolves waiter timeout');
+    bridge.outbox.set(entry.messageId, entry);
+    const waiter = bridge.waitForMessageAck(entry.messageId, 1_000);
+
+    await bridge.handleAck({
+      params: {
+        accountId: 'Primary',
+        messageId: entry.messageId,
+        ok: false,
+        fatal: true,
+        error: 'fatal-ack-waiter-test',
+      },
+      respond() {},
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(await waiter, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), true);
+    assert.equal(bridge.resolveMessageAck(entry.messageId, 'acked'), false);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('moveToDeadLetter resolves pending message ack waiter as timeout', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    const entry = makeEntry('msg-deadletter-waiter', 'deadletter resolves waiter timeout');
+    bridge.outbox.set(entry.messageId, entry);
+    const waiter = bridge.waitForMessageAck(entry.messageId, 1_000);
+
+    bridge.moveToDeadLetter(entry, 'direct-deadletter-waiter-test');
+
+    assert.equal(await waiter, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), true);
+    assert.equal(bridge.resolveMessageAck(entry.messageId, 'acked'), false);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('collectDue retry-limit dead-letter resolves pending message ack waiter as timeout', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    const entry = makeEntry('msg-collectdue-waiter', 'collectDue resolves waiter timeout');
+    entry.retryCount = 99;
+    entry.nextAttemptAt = Date.now() - 1_000;
+    entry.lastError = 'retry-limit-test';
+    bridge.outbox.set(entry.messageId, entry);
+    const waiter = bridge.waitForMessageAck(entry.messageId, 1_000);
+
+    const payloads = bridge.collectDue('Primary', 10);
+
+    assert.deepEqual(payloads, []);
+    assert.equal(await waiter, 'timeout');
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), true);
+    assert.equal(bridge.resolveMessageAck(entry.messageId, 'acked'), false);
   } finally {
     cleanupBridge(bridge);
   }
@@ -1584,6 +1986,220 @@ test('handleFileChunk rejects out-of-range chunk indexes without mutating transf
   }
 });
 
+
+test('handleFileComplete aborts inbound transfer when chunks are missing', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.fileRecvTransfers.set('recv-complete-missing-chunk', {
+      transferId: 'recv-complete-missing-chunk',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'missing-chunk.txt',
+      mimeType: 'text/plain',
+      fileSize: 10,
+      chunkSize: 5,
+      totalChunks: 2,
+      fileSha256: '',
+      startedAt: Date.now() - 1_000,
+      status: 'transferring',
+      bufferByChunk: new Map([[0, Buffer.from('hello')]]),
+      receivedChunks: new Set([0]),
+      ownerConnId: 'conn-1',
+      ownerClientId: 'client-a',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileComplete({
+      params: {
+        accountId: 'Primary',
+        clientId: 'client-a',
+        transferId: 'recv-complete-missing-chunk',
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, false);
+    assert.match(respondPayload.payload.error, /chunk not complete received=1 total=2/);
+    const st = bridge.fileRecvTransfers.get('recv-complete-missing-chunk');
+    assert.equal(st.status, 'aborted');
+    assert.match(st.error, /chunk not complete received=1 total=2/);
+    assert.equal(typeof st.terminalAt, 'number');
+    assert.equal(st.completedPath, undefined);
+    assert.equal(st.receivedChunks.size, 1);
+    assert.equal(st.bufferByChunk.get(0).toString(), 'hello');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('handleFileComplete aborts inbound transfer on sha256 mismatch', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.fileRecvTransfers.set('recv-complete-sha-mismatch', {
+      transferId: 'recv-complete-sha-mismatch',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'sha-mismatch.txt',
+      mimeType: 'text/plain',
+      fileSize: 5,
+      chunkSize: 5,
+      totalChunks: 1,
+      fileSha256: '0000000000000000000000000000000000000000000000000000000000000000',
+      startedAt: Date.now() - 1_000,
+      status: 'transferring',
+      bufferByChunk: new Map([[0, Buffer.from('hello')]]),
+      receivedChunks: new Set([0]),
+      ownerConnId: 'conn-1',
+      ownerClientId: 'client-a',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileComplete({
+      params: {
+        accountId: 'Primary',
+        clientId: 'client-a',
+        transferId: 'recv-complete-sha-mismatch',
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, false);
+    assert.match(respondPayload.payload.error, /file sha256 mismatch/);
+    const st = bridge.fileRecvTransfers.get('recv-complete-sha-mismatch');
+    assert.equal(st.status, 'aborted');
+    assert.equal(st.error, 'file sha256 mismatch');
+    assert.equal(typeof st.terminalAt, 'number');
+    assert.equal(st.completedPath, undefined);
+    assert.equal(st.receivedChunks.size, 1);
+    assert.equal(st.bufferByChunk.get(0).toString(), 'hello');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+
+test('handleFileChunk ignores chunks after inbound transfer is completed', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.fileRecvTransfers.set('recv-completed-late-chunk', {
+      transferId: 'recv-completed-late-chunk',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.txt',
+      mimeType: 'text/plain',
+      fileSize: 5,
+      chunkSize: 5,
+      totalChunks: 1,
+      fileSha256: '',
+      startedAt: Date.now() - 1_000,
+      terminalAt: Date.now() - 500,
+      completedPath: '/tmp/completed-demo.txt',
+      status: 'completed',
+      bufferByChunk: new Map([[0, Buffer.from('hello')]]),
+      receivedChunks: new Set([0]),
+      ownerConnId: 'conn-1',
+      ownerClientId: 'client-a',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileChunk({
+      params: {
+        accountId: 'Primary',
+        clientId: 'client-a',
+        transferId: 'recv-completed-late-chunk',
+        chunkIndex: 0,
+        offset: 0,
+        size: 4,
+        base64: Buffer.from('oops').toString('base64'),
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, true);
+    assert.equal(respondPayload.payload.status, 'completed');
+    assert.equal(respondPayload.payload.ignored, true);
+    assert.equal(respondPayload.payload.terminal, true);
+    const st = bridge.fileRecvTransfers.get('recv-completed-late-chunk');
+    assert.equal(st.status, 'completed');
+    assert.equal(st.completedPath, '/tmp/completed-demo.txt');
+    assert.equal(st.bufferByChunk.get(0).toString(), 'hello');
+    assert.equal(st.receivedChunks.size, 1);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('handleFileAbort ignores abort after inbound transfer is completed', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.fileRecvTransfers.set('recv-completed-late-abort', {
+      transferId: 'recv-completed-late-abort',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.txt',
+      mimeType: 'text/plain',
+      fileSize: 5,
+      chunkSize: 5,
+      totalChunks: 1,
+      fileSha256: '',
+      startedAt: Date.now() - 1_000,
+      terminalAt: Date.now() - 500,
+      completedPath: '/tmp/completed-demo.txt',
+      status: 'completed',
+      bufferByChunk: new Map([[0, Buffer.from('hello')]]),
+      receivedChunks: new Set([0]),
+      ownerConnId: 'conn-1',
+      ownerClientId: 'client-a',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileAbort({
+      params: {
+        accountId: 'Primary',
+        clientId: 'client-a',
+        transferId: 'recv-completed-late-abort',
+        reason: 'late abort should not override completed',
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, true);
+    assert.equal(respondPayload.payload.status, 'completed');
+    assert.equal(respondPayload.payload.ignored, true);
+    assert.equal(respondPayload.payload.terminal, true);
+    const st = bridge.fileRecvTransfers.get('recv-completed-late-abort');
+    assert.equal(st.status, 'completed');
+    assert.equal(st.completedPath, '/tmp/completed-demo.txt');
+    assert.equal(st.error, undefined);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
 test('waitChunkAck uses file ack waiter instead of polling transfer state', async () => {
   const bridge = createBncrBridge(createApiStub());
 
@@ -1876,6 +2492,314 @@ test('handleFileAck failure rejects waiter and clears file ack waiter state', as
   }
 });
 
+
+
+test('handleFileAck ignores chunk ack mutation after outbound transfer is completed', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.fileSendTransfers.set('transfer-ack-completed-late-chunk', {
+      transferId: 'transfer-ack-completed-late-chunk',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set([0]),
+      failedChunks: new Map(),
+      status: 'completed',
+      completedPath: '/tmp/completed.png',
+      terminalAt: Date.now() - 500,
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now() - 1_000,
+      ownerConnId: 'conn-1',
+      ownerClientId: 'client-a',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileAck({
+      params: {
+        accountId: 'Primary',
+        clientId: 'client-a',
+        transferId: 'transfer-ack-completed-late-chunk',
+        stage: 'chunk',
+        chunkIndex: 0,
+        ok: false,
+        errorCode: 'LATE_CHUNK_FAIL',
+        errorMessage: 'should stay completed',
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, true);
+    assert.equal(respondPayload.payload.state, 'completed');
+    assert.equal(respondPayload.payload.ignored, true);
+    assert.equal(respondPayload.payload.terminal, true);
+    const st = bridge.fileSendTransfers.get('transfer-ack-completed-late-chunk');
+    assert.equal(st.status, 'completed');
+    assert.equal(st.completedPath, '/tmp/completed.png');
+    assert.equal(st.failedChunks.size, 0);
+    assert.equal(st.error, undefined);
+    assert.equal(bridge.earlyFileAcks.size, 0);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('handleFileAck ignores complete ok mutation after outbound transfer is aborted', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.fileSendTransfers.set('transfer-ack-aborted-late-complete', {
+      transferId: 'transfer-ack-aborted-late-complete',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set(),
+      failedChunks: new Map([[0, 'CHUNK_FAILED:original']]),
+      status: 'aborted',
+      error: 'CHUNK_FAILED:original',
+      terminalAt: Date.now() - 500,
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now() - 1_000,
+      ownerConnId: 'conn-1',
+      ownerClientId: 'client-a',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileAck({
+      params: {
+        accountId: 'Primary',
+        clientId: 'client-a',
+        transferId: 'transfer-ack-aborted-late-complete',
+        stage: 'complete',
+        ok: true,
+        path: '/tmp/late-complete.png',
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, true);
+    assert.equal(respondPayload.payload.state, 'aborted');
+    assert.equal(respondPayload.payload.ignored, true);
+    assert.equal(respondPayload.payload.terminal, true);
+    const st = bridge.fileSendTransfers.get('transfer-ack-aborted-late-complete');
+    assert.equal(st.status, 'aborted');
+    assert.equal(st.completedPath, undefined);
+    assert.equal(st.error, 'CHUNK_FAILED:original');
+    assert.equal(st.failedChunks.get(0), 'CHUNK_FAILED:original');
+    assert.equal(bridge.earlyFileAcks.size, 0);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+
+test('handleFileAck reports stale terminal completed ack as ignored without staleAccepted', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const originalObserveLease = bridge.observeLease;
+
+  try {
+    bridge.observeLease = (...args) => ({ ...originalObserveLease.call(bridge, ...args), stale: true });
+    bridge.fileSendTransfers.set('transfer-ack-stale-terminal-completed', {
+      transferId: 'transfer-ack-stale-terminal-completed',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set([0]),
+      failedChunks: new Map(),
+      status: 'completed',
+      completedPath: '/tmp/completed.png',
+      terminalAt: Date.now() - 500,
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now() - 1_000,
+      ownerConnId: 'conn-owner',
+      ownerClientId: 'owner',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileAck({
+      params: {
+        accountId: 'Primary',
+        clientId: 'other',
+        transferId: 'transfer-ack-stale-terminal-completed',
+        stage: 'chunk',
+        chunkIndex: 0,
+        ok: false,
+        errorCode: 'STALE_LATE_CHUNK',
+        errorMessage: 'should stay terminal ignored',
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-other' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, true);
+    assert.equal(respondPayload.payload.state, 'completed');
+    assert.equal(respondPayload.payload.stale, true);
+    assert.equal(respondPayload.payload.ignored, true);
+    assert.equal(respondPayload.payload.terminal, true);
+    assert.equal('staleAccepted' in respondPayload.payload, false);
+    const st = bridge.fileSendTransfers.get('transfer-ack-stale-terminal-completed');
+    assert.equal(st.status, 'completed');
+    assert.equal(st.completedPath, '/tmp/completed.png');
+    assert.equal(st.ownerConnId, 'conn-owner');
+    assert.equal(st.ownerClientId, 'owner');
+    assert.equal(st.failedChunks.size, 0);
+    assert.equal(st.error, undefined);
+    assert.equal(bridge.earlyFileAcks.size, 0);
+  } finally {
+    bridge.observeLease = originalObserveLease;
+    cleanupBridge(bridge);
+  }
+});
+
+test('handleFileAck reports stale terminal aborted ack as ignored without staleAccepted', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const originalObserveLease = bridge.observeLease;
+
+  try {
+    bridge.observeLease = (...args) => ({ ...originalObserveLease.call(bridge, ...args), stale: true });
+    bridge.fileSendTransfers.set('transfer-ack-stale-terminal-aborted', {
+      transferId: 'transfer-ack-stale-terminal-aborted',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set(),
+      failedChunks: new Map([[0, 'CHUNK_FAILED:original']]),
+      status: 'aborted',
+      error: 'CHUNK_FAILED:original',
+      terminalAt: Date.now() - 500,
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now() - 1_000,
+      ownerConnId: 'conn-owner',
+      ownerClientId: 'owner',
+    });
+
+    let respondPayload = null;
+    await bridge.handleFileAck({
+      params: {
+        accountId: 'Primary',
+        clientId: 'other',
+        transferId: 'transfer-ack-stale-terminal-aborted',
+        stage: 'complete',
+        ok: true,
+        path: '/tmp/stale-late-complete.png',
+      },
+      respond(ok, payload) {
+        respondPayload = { ok, payload };
+      },
+      client: { connId: 'conn-other' },
+      context: null,
+    });
+
+    assert.equal(respondPayload.ok, true);
+    assert.equal(respondPayload.payload.state, 'aborted');
+    assert.equal(respondPayload.payload.stale, true);
+    assert.equal(respondPayload.payload.ignored, true);
+    assert.equal(respondPayload.payload.terminal, true);
+    assert.equal('staleAccepted' in respondPayload.payload, false);
+    const st = bridge.fileSendTransfers.get('transfer-ack-stale-terminal-aborted');
+    assert.equal(st.status, 'aborted');
+    assert.equal(st.completedPath, undefined);
+    assert.equal(st.error, 'CHUNK_FAILED:original');
+    assert.equal(st.failedChunks.get(0), 'CHUNK_FAILED:original');
+    assert.equal(st.ownerConnId, 'conn-owner');
+    assert.equal(st.ownerClientId, 'owner');
+    assert.equal(bridge.earlyFileAcks.size, 0);
+  } finally {
+    bridge.observeLease = originalObserveLease;
+    cleanupBridge(bridge);
+  }
+});
+
+test('early cached complete file ack resolves later waiter immediately', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.fileSendTransfers.set('transfer-event-early-complete', {
+      transferId: 'transfer-event-early-complete',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set(),
+      failedChunks: new Map(),
+      status: 'transferring',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    await bridge.handleFileAck({
+      params: {
+        accountId: 'Primary',
+        transferId: 'transfer-event-early-complete',
+        stage: 'complete',
+        ok: true,
+        path: '/tmp/early-complete.png',
+      },
+      respond() {},
+      client: { connId: 'conn-1' },
+      context: null,
+    });
+
+    assert.equal(bridge.fileAckWaiters.size, 0);
+    assert.equal(bridge.earlyFileAcks.size, 1);
+    assert.equal(bridge.fileSendTransfers.get('transfer-event-early-complete')?.status, 'completed');
+    assert.equal(
+      bridge.fileSendTransfers.get('transfer-event-early-complete')?.completedPath,
+      '/tmp/early-complete.png',
+    );
+
+    bridge.fileSendTransfers.get('transfer-event-early-complete').status = 'transferring';
+    bridge.fileSendTransfers.get('transfer-event-early-complete').completedPath = undefined;
+
+    const result = await bridge.waitCompleteAck({ transferId: 'transfer-event-early-complete', timeoutMs: 1_000 });
+    assert.deepEqual(result, { path: '/tmp/early-complete.png' });
+    assert.equal(bridge.fileAckWaiters.size, 0);
+    assert.equal(bridge.earlyFileAcks.size, 0);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
 test('early cached failed file ack rejects later waiter immediately', async () => {
   const bridge = createBncrBridge(createApiStub());
 
@@ -2080,6 +3004,198 @@ test('startService reopens runtime scheduling after stopService cleanup', async 
   } finally {
     cleanupBridge(bridge);
     await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+
+test('transferMediaToBncrClient chunk mode records init transferring and completed states', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const originalLoad = bridge.loadOutboundTransferMedia;
+  const broadcasts = [];
+
+  try {
+    const nowTs = Date.now();
+    bridge.connections.set('Primary:client-a', {
+      accountId: 'Primary',
+      connId: 'conn-a',
+      clientId: 'client-a',
+      connectedAt: nowTs - 10_000,
+      lastSeenAt: nowTs - 1_000,
+      outboundReadyUntil: nowTs + 30_000,
+      preferredForOutboundUntil: nowTs + 30_000,
+      inboundOnly: false,
+    });
+    bridge.activeConnectionByAccount.set('Primary', 'Primary:client-a');
+    bridge.loadOutboundTransferMedia = async () => ({
+      loaded: { buffer: Buffer.alloc(5 * 1024 * 1024 + 1, 7), contentType: 'application/octet-stream', fileName: 'large.bin' },
+      size: 5 * 1024 * 1024 + 1,
+      mimeType: 'application/octet-stream',
+      fileName: 'large.bin',
+    });
+    bridge.gatewayContext = {
+      broadcastToConnIds(event, payload, connIds) {
+        broadcasts.push({ event, payload, connIds: Array.from(connIds) });
+        if (event === 'plugin.bncr.file.chunk') {
+          queueMicrotask(() => {
+            bridge.handleFileAck({
+              params: {
+                accountId: 'Primary',
+                clientId: 'client-a',
+                transferId: payload.transferId,
+                stage: 'chunk',
+                chunkIndex: payload.chunkIndex,
+                ok: true,
+              },
+              respond() {},
+              client: { connId: 'conn-a' },
+              context: bridge.gatewayContext,
+            });
+          });
+        }
+        if (event === 'plugin.bncr.file.complete') {
+          queueMicrotask(() => {
+            bridge.handleFileAck({
+              params: {
+                accountId: 'Primary',
+                clientId: 'client-a',
+                transferId: payload.transferId,
+                stage: 'complete',
+                ok: true,
+                path: '/tmp/large.bin',
+              },
+              respond() {},
+              client: { connId: 'conn-a' },
+              context: bridge.gatewayContext,
+            });
+          });
+        }
+      },
+    };
+
+    const result = await bridge.transferMediaToBncrClient({
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      mediaUrl: 'file:///tmp/large.bin',
+    });
+
+    const init = broadcasts.find((call) => call.event === 'plugin.bncr.file.init');
+    const chunks = broadcasts.filter((call) => call.event === 'plugin.bncr.file.chunk');
+    const complete = broadcasts.find((call) => call.event === 'plugin.bncr.file.complete');
+    assert.equal(result.mode, 'chunk');
+    assert.equal(result.path, '/tmp/large.bin');
+    assert.ok(init, 'init event should be broadcast');
+    assert.equal(init.payload.totalChunks, 21);
+    assert.equal(chunks.length, 21);
+    assert.ok(complete, 'complete event should be broadcast');
+    assert.equal(complete.payload.transferId, init.payload.transferId);
+    assert.deepEqual(init.connIds, ['conn-a']);
+
+    const state = bridge.fileSendTransfers.get(init.payload.transferId);
+    assert.ok(state, 'send transfer state should remain for cleanup TTL');
+    assert.equal(state.status, 'completed');
+    assert.equal(state.completedPath, '/tmp/large.bin');
+    assert.equal(state.ackedChunks.size, 21);
+    assert.equal(state.failedChunks.size, 0);
+    assert.equal(state.ownerConnId, 'conn-a');
+    assert.equal(state.ownerClientId, 'client-a');
+    assert.equal(bridge.fileAckWaiters.size, 0);
+    assert.equal(bridge.earlyFileAcks.size, 0);
+  } finally {
+    bridge.loadOutboundTransferMedia = originalLoad;
+    cleanupBridge(bridge);
+  }
+});
+
+
+test('transferMediaToBncrClient aborts chunk mode after retry exhaustion', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const originalLoad = bridge.loadOutboundTransferMedia;
+  const originalSleep = bridge.sleepMs;
+  const broadcasts = [];
+
+  try {
+    const nowTs = Date.now();
+    bridge.connections.set('Primary:client-a', {
+      accountId: 'Primary',
+      connId: 'conn-a',
+      clientId: 'client-a',
+      connectedAt: nowTs - 10_000,
+      lastSeenAt: nowTs - 1_000,
+      outboundReadyUntil: nowTs + 30_000,
+      preferredForOutboundUntil: nowTs + 30_000,
+      inboundOnly: false,
+    });
+    bridge.activeConnectionByAccount.set('Primary', 'Primary:client-a');
+    bridge.loadOutboundTransferMedia = async () => ({
+      loaded: { buffer: Buffer.alloc(5 * 1024 * 1024 + 1, 9), contentType: 'application/octet-stream', fileName: 'retry.bin' },
+      size: 5 * 1024 * 1024 + 1,
+      mimeType: 'application/octet-stream',
+      fileName: 'retry.bin',
+    });
+    bridge.sleepMs = async () => {};
+    bridge.gatewayContext = {
+      broadcastToConnIds(event, payload, connIds) {
+        broadcasts.push({ event, payload, connIds: Array.from(connIds) });
+        if (event === 'plugin.bncr.file.chunk') {
+          queueMicrotask(() => {
+            bridge.handleFileAck({
+              params: {
+                accountId: 'Primary',
+                clientId: 'client-a',
+                transferId: payload.transferId,
+                stage: 'chunk',
+                chunkIndex: payload.chunkIndex,
+                ok: false,
+                errorCode: 'CHUNK_WRITE_FAILED',
+                errorMessage: 'cannot write chunk',
+              },
+              respond() {},
+              client: { connId: 'conn-a' },
+              context: bridge.gatewayContext,
+            });
+          });
+        }
+      },
+    };
+
+    await assert.rejects(
+      bridge.transferMediaToBncrClient({
+        accountId: 'Primary',
+        sessionKey: 'agent:orion:bncr:direct:demo',
+        route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+        mediaUrl: 'file:///tmp/retry.bin',
+      }),
+      /CHUNK_WRITE_FAILED:cannot write chunk/,
+    );
+
+    const init = broadcasts.find((call) => call.event === 'plugin.bncr.file.init');
+    const chunks = broadcasts.filter((call) => call.event === 'plugin.bncr.file.chunk');
+    const abort = broadcasts.find((call) => call.event === 'plugin.bncr.file.abort');
+    const complete = broadcasts.find((call) => call.event === 'plugin.bncr.file.complete');
+    assert.ok(init, 'init event should be broadcast before retries');
+    assert.equal(chunks.length, 3, 'first chunk should be retried three times before abort');
+    assert.ok(chunks.every((call) => call.payload.transferId === init.payload.transferId));
+    assert.ok(chunks.every((call) => call.payload.chunkIndex === 0));
+    assert.ok(abort, 'abort event should be broadcast after retry exhaustion');
+    assert.equal(abort.payload.transferId, init.payload.transferId);
+    assert.match(abort.payload.reason, /CHUNK_WRITE_FAILED:cannot write chunk/);
+    assert.equal(complete, undefined);
+
+    const state = bridge.fileSendTransfers.get(init.payload.transferId);
+    assert.ok(state, 'aborted send transfer state should remain for cleanup TTL');
+    assert.equal(state.status, 'aborted');
+    assert.match(state.error, /CHUNK_WRITE_FAILED:cannot write chunk/);
+    assert.equal(state.failedChunks.get(0), 'CHUNK_WRITE_FAILED:cannot write chunk');
+    assert.equal(state.ackedChunks.size, 0);
+    assert.ok(typeof state.terminalAt === 'number');
+    assert.equal(state.ownerConnId, 'conn-a');
+    assert.equal(state.ownerClientId, 'client-a');
+    assert.equal(bridge.fileAckWaiters.size, 0);
+  } finally {
+    bridge.loadOutboundTransferMedia = originalLoad;
+    bridge.sleepMs = originalSleep;
+    cleanupBridge(bridge);
   }
 });
 

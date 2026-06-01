@@ -2,6 +2,10 @@ import type { RegisterTraceEntry } from './register-trace.ts';
 
 type ExtendedDiagnosticsInput = {
   diagnostics: Record<string, any>;
+  runtimeSurface?: {
+    channel: Record<string, boolean>;
+    missing: string[];
+  };
   register: {
     bridgeId: string;
     gatewayPid: number;
@@ -48,6 +52,12 @@ type ExtendedDiagnosticsInput = {
 export function buildExtendedDiagnostics(input: ExtendedDiagnosticsInput) {
   return {
     ...input.diagnostics,
+    runtimeSurface: input.runtimeSurface
+      ? {
+          channel: { ...input.runtimeSurface.channel },
+          missing: input.runtimeSurface.missing.slice(),
+        }
+      : undefined,
     register: {
       ...input.register,
       traceRecent: input.register.traceRecent.slice(),

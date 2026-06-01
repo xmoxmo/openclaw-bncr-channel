@@ -115,6 +115,14 @@ test('bncr.connect exposes lease/epoch and diagnostics include hardening fields'
   assert.ok(payload.diagnostics.connection);
   assert.ok(payload.diagnostics.protocol);
   assert.ok(payload.diagnostics.stale);
+  assert.deepEqual(payload.diagnostics.runtimeSurface.channel, {
+    inbound: false,
+    media: true,
+    reply: false,
+    routing: true,
+    session: false,
+  });
+  assert.deepEqual(payload.diagnostics.runtimeSurface.missing, ['inbound', 'reply', 'session']);
   assert.equal(payload.runtimeFlags.outboundRequireAck, true);
   assert.equal(payload.runtimeFlags.ackPolicySource, 'default');
   assert.equal(typeof payload.waiters.messageAck, 'number');
@@ -146,6 +154,14 @@ test('bncr diagnostics register info updates after api rebind', async () => {
 
   const [ok, payload] = calls[0];
   assert.equal(ok, true);
+  assert.deepEqual(payload.diagnostics.runtimeSurface.channel, {
+    inbound: false,
+    media: true,
+    reply: false,
+    routing: true,
+    session: false,
+  });
+  assert.deepEqual(payload.diagnostics.runtimeSurface.missing, ['inbound', 'reply', 'session']);
   assert.ok(payload.diagnostics.register.registerCount >= 2);
   assert.ok(payload.diagnostics.register.apiGeneration >= 1);
   assert.equal(typeof payload.diagnostics.register.apiInstanceId, 'string');

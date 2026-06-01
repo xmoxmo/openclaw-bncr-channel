@@ -12,7 +12,6 @@ import {
   listAccountIds,
   normalizeAccountId,
   resolveAccount,
-  resolveDefaultDisplayName,
 } from './core/accounts.ts';
 import { BncrConfigSchema } from './core/config-schema.ts';
 import {
@@ -67,6 +66,13 @@ import { buildDownlinkHealth as buildDownlinkHealthFromRuntime } from './core/do
 import { buildExtendedDiagnostics as buildExtendedDiagnosticsFromRuntime } from './core/extended-diagnostics.ts';
 import { observeLeaseState, matchesTransferOwner as matchesTransferOwnerFromRuntime } from './core/lease-state.ts';
 import { emitBncrLog, emitBncrLogLine } from './core/logging.ts';
+import { buildFileAckKey } from './core/file-ack.ts';
+import {
+  buildFileTransferAbortPayload,
+  buildFileTransferChunkPayload,
+  buildFileTransferCompletePayload,
+  buildFileTransferInitPayload,
+} from './core/file-transfer-payloads.ts';
 import { resolveBncrChannelPolicy, resolveBncrConfigWarnings } from './core/policy.ts';
 import {
   getOpenClawRuntimeConfig,
@@ -79,23 +85,21 @@ import {
 } from './openclaw/media-runtime.ts';
 import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
 import {
-  applyOpenClawAccountNameToChannelSection,
-  createOpenClawDefaultChannelRuntimeState,
   extractOpenClawToolSend,
   openClawJsonResult,
   readOpenClawBooleanParam,
   readOpenClawJsonFileWithFallback,
   readOpenClawStringParam,
-  setOpenClawAccountEnabledInConfigSection,
   writeOpenClawJsonFileAtomically,
 } from './openclaw/sdk-helpers.ts';
 import {
+  appendBoundedRegisterTrace,
+  buildRegisterDriftSnapshot,
+  buildRegisterTraceEntry,
   buildRegisterTraceSummary as buildRegisterTraceSummaryFromEntries,
-  classifyRegisterTrace as classifyRegisterTraceFromStack,
 } from './core/register-trace.ts';
 import {
   buildAccountRuntimeSnapshot,
-  buildAccountStatusSnapshot,
   buildIntegratedDiagnostics as buildIntegratedDiagnosticsFromRuntime,
   buildStatusHeadlineFromRuntime,
   buildStatusMetaFromRuntime,
@@ -103,11 +107,9 @@ import {
 import {
   buildCanonicalBncrSessionKey,
   formatDisplayScope,
-  formatTargetDisplay,
   isLowerHex,
   normalizeInboundSessionKey,
   normalizeStoredSessionKey,
-  parseExplicitTarget,
   parseRouteFromDisplayScope,
   parseRouteFromHexScope,
   parseRouteFromScope,
@@ -321,11 +323,47 @@ import {
 } from './messaging/outbound/retry-policy.ts';
 import { sendBncrMedia, sendBncrText } from './messaging/outbound/send.ts';
 import { buildBncrDurableQueuedResult } from './messaging/outbound/durable-queue-adapter.ts';
-import { resolveBncrOutboundSessionRoute } from './messaging/outbound/session-route.ts';
+import { BNCR_CHANNEL_CAPABILITIES } from './plugin/capabilities.ts';
+import { BNCR_CONFIG_SURFACE } from './plugin/config.ts';
+import { createBncrGatewayRuntime } from './plugin/gateway-runtime.ts';
+import { BNCR_GATEWAY_METHODS } from './plugin/gateway-methods.ts';
+import { BNCR_CHANNEL_META } from './plugin/meta.ts';
+import { createBncrMessagingSurface } from './plugin/messaging.ts';
+import { createBncrMessageSend } from './plugin/message-send.ts';
+import { BNCR_MESSAGE_RECEIVE_POLICY } from './plugin/message-policy.ts';
+import { createBncrOutboundRuntime } from './plugin/outbound.ts';
+import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
+import { createBncrStatusSurface } from './plugin/status.ts';
 import {
-  looksLikeBncrExplicitTarget,
-  resolveBncrOutboundTarget,
-} from './messaging/outbound/target-resolver.ts';
+  clearAllBncrStatusWorkers,
+  clearBncrStatusWorker,
+  startBncrStatusWorker,
+  stopBncrStatusWorker,
+  type ChannelAccountWorkerHandle,
+} from './runtime/status-worker.ts';
+import {
+  buildBncrRuntimeAckStrategy,
+  computeBncrRecommendedAckTimeoutMs,
+  computeBncrRecommendedAckTimeoutReason,
+} from './runtime/outbound-ack-timeout.ts';
+import {
+  buildBncrRuntimeFlags,
+  buildBncrRuntimeStatusInput,
+  resolveBncrOutboundAckRequired,
+} from './runtime/outbound-flags.ts';
+import { buildRuntimeStatusSnapshots } from './runtime/status-snapshots.ts';
+import {
+  applyBncrPushFailureDecisionToEntry,
+  applyBncrRetryRerouteDecisionToEntry,
+  buildBncrAckOkTelemetryPatch,
+  buildBncrAckRetryEntryPatch,
+  buildBncrOutboxFailureEntryPatch,
+  buildBncrOutboxPushSuccessEntryPatch,
+} from './runtime/outbox-transitions.ts';
+import {
+  pruneLogDedupeState as pruneLogDedupeStateFromRuntime,
+  shouldEmitDedupLog as shouldEmitDedupLogFromRuntime,
+} from './runtime/log-dedupe.ts';
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'plugin.bncr.push';
 const BNCR_FILE_INIT_EVENT = 'plugin.bncr.file.init';
@@ -351,8 +389,6 @@ const ADAPTIVE_ACK_TIMEOUT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 const OUTBOUND_READY_TTL_MS = 30_000;
 const PREFERRED_OUTBOUND_TTL_MS = 12_000;
 const FILE_FORCE_CHUNK = true; // 统一走 WS 分块，保留 base64 仅作兜底
-const LOG_DEDUPE_STATE_TTL_MS = 10 * 60 * 1000;
-const LOG_DEDUPE_STATE_MAX_ENTRIES = 1_000;
 const FILE_INLINE_THRESHOLD = 5 * 1024 * 1024; // fallback 阈值（仅 FILE_FORCE_CHUNK=false 时生效）
 const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
 const INBOUND_FILE_TRANSFER_MAX_BYTES = 50 * 1024 * 1024;
@@ -387,12 +423,6 @@ type FileSendTransferState = {
   completedPath?: string;
   terminalAt?: number;
   error?: string;
-};
-
-type ChannelAccountWorkerHandle = {
-  timer: NodeJS.Timeout;
-  finish: (reason: string) => void;
-  cleanupAbortListener?: () => void;
 };
 
 type FileRecvTransferState = {
@@ -837,27 +867,17 @@ class BncrBridgeRuntime {
   }
 
   private pruneLogDedupeState(currentTime = now()) {
-    for (const [key, entry] of this.logDedupeState.entries()) {
-      if (currentTime - entry.at > LOG_DEDUPE_STATE_TTL_MS) {
-        this.logDedupeState.delete(key);
-      }
-    }
-
-    while (this.logDedupeState.size > LOG_DEDUPE_STATE_MAX_ENTRIES) {
-      const oldestKey = this.logDedupeState.keys().next().value;
-      if (!oldestKey) break;
-      this.logDedupeState.delete(oldestKey);
-    }
+    pruneLogDedupeStateFromRuntime(this.logDedupeState, currentTime);
   }
 
   private shouldEmitDedupLog(key: string, sig: string, windowMs = 5 * 60 * 1000) {
-    const t = now();
-    this.pruneLogDedupeState(t);
-    const prev = this.logDedupeState.get(key) || null;
-    if (prev && prev.sig === sig && t - prev.at < windowMs) return false;
-    this.logDedupeState.set(key, { at: t, sig });
-    this.pruneLogDedupeState(t);
-    return true;
+    return shouldEmitDedupLogFromRuntime({
+      state: this.logDedupeState,
+      key,
+      sig,
+      nowMs: now(),
+      windowMs,
+    });
   }
 
   private logInfoDedup(
@@ -954,39 +974,64 @@ class BncrBridgeRuntime {
     );
   }
 
+  private buildStatusWorkerRuntime() {
+    return {
+      workers: this.channelAccountWorkers,
+      bridgeId: this.bridgeId,
+      hooks: {
+        isOnline: (accountId: string) => this.isOnline(accountId),
+        hasRecentInboundReachability: (accountId: string) =>
+          this.hasRecentInboundReachability(accountId),
+        getLastActivityAt: (accountId: string, previous: Record<string, any>) =>
+          this.lastActivityByAccount.get(accountId) ||
+          this.lastInboundByAccount.get(accountId) ||
+          this.lastOutboundByAccount.get(accountId) ||
+          previous?.lastEventAt ||
+          null,
+        getActiveConnectionKey: (accountId: string) =>
+          this.activeConnectionByAccount.get(accountId) || null,
+        getActiveConnections: (accountId: string) =>
+          Array.from(this.connections.values())
+            .filter((c) => c.accountId === accountId)
+            .map((c) => ({
+              connId: c.connId,
+              clientId: c.clientId,
+              inboundOnly: c.inboundOnly === true,
+              outboundReady: c.outboundReady === true,
+              preferredForOutbound: c.preferredForOutbound === true,
+            })),
+        buildStatusMeta: (accountId: string) => this.buildStatusMeta(accountId),
+        logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) =>
+          this.logInfo(scope, message, options),
+        logInfoDedup: (
+          scope: string | undefined,
+          message: string,
+          options: { key: string; sig: string; debugOnly?: boolean; windowMs?: number },
+        ) => this.logInfoDedup(scope, message, options),
+      },
+    };
+  }
+
   private clearChannelAccountWorker(accountId: string, reason: string) {
-    const worker = this.channelAccountWorkers.get(accountId);
-    if (!worker) return false;
-    worker.finish(reason);
-    this.logInfo(
-      'health',
-      `status-worker cleared ${JSON.stringify({ bridge: this.bridgeId, accountId, reason })}`,
-      { debugOnly: true },
-    );
-    return true;
+    return clearBncrStatusWorker(this.buildStatusWorkerRuntime(), accountId, reason);
   }
 
   private clearAllChannelAccountWorkers(reason: string) {
-    for (const accountId of Array.from(this.channelAccountWorkers.keys())) {
-      this.clearChannelAccountWorker(accountId, reason);
-    }
+    clearAllBncrStatusWorkers(this.buildStatusWorkerRuntime(), reason);
   }
 
   private captureDriftSnapshot(
     summary: ReturnType<BncrBridgeRuntime['buildRegisterTraceSummary']>,
   ) {
-    this.lastDriftSnapshot = {
+    this.lastDriftSnapshot = buildRegisterDriftSnapshot({
       capturedAt: now(),
       registerCount: this.registerCount,
       apiGeneration: this.apiGeneration,
-      postWarmupRegisterCount: summary.postWarmupRegisterCount,
+      summary,
       apiInstanceId: this.lastApiInstanceId,
       registryFingerprint: this.lastRegistryFingerprint,
-      dominantBucket: summary.dominantBucket,
-      sourceBuckets: { ...summary.sourceBuckets },
-      traceWindowSize: this.registerTraceRecent.length,
-      traceRecent: this.registerTraceRecent.map((trace) => ({ ...trace })),
-    };
+      traceRecent: this.registerTraceRecent,
+    });
     this.scheduleSave();
   }
 
@@ -1026,9 +1071,7 @@ class BncrBridgeRuntime {
       .map((line) => line.trim())
       .filter(Boolean)
       .join(' <- ');
-    const stackBucket = classifyRegisterTraceFromStack(stack);
-
-    const trace = {
+    const trace = buildRegisterTraceEntry({
       ts,
       bridgeId: this.bridgeId,
       gatewayPid: this.gatewayPid,
@@ -1040,11 +1083,8 @@ class BncrBridgeRuntime {
       source: this.pluginSource,
       pluginVersion: this.pluginVersion,
       stack,
-      stackBucket,
-    };
-    this.registerTraceRecent.push(trace);
-    if (this.registerTraceRecent.length > 12)
-      this.registerTraceRecent.splice(0, this.registerTraceRecent.length - 12);
+    });
+    appendBoundedRegisterTrace(this.registerTraceRecent, trace, 12);
 
     const summary = this.buildRegisterTraceSummary();
     if (summary.postWarmupRegisterCount > 0) this.captureDriftSnapshot(summary);
@@ -1147,11 +1187,29 @@ class BncrBridgeRuntime {
     return matchesTransferOwnerFromRuntime(params);
   }
 
+  private buildRuntimeSurfaceDiagnostics() {
+    const channelRuntime = (this.api as any)?.runtime?.channel;
+    const surfaces = {
+      inbound: Boolean(channelRuntime?.inbound),
+      media: Boolean(channelRuntime?.media),
+      reply: Boolean(channelRuntime?.reply),
+      routing: Boolean(channelRuntime?.routing),
+      session: Boolean(channelRuntime?.session),
+    };
+    return {
+      channel: surfaces,
+      missing: Object.entries(surfaces)
+        .filter(([, present]) => !present)
+        .map(([name]) => name),
+    };
+  }
+
   private buildExtendedDiagnostics(accountId: string) {
     const acc = normalizeAccountId(accountId);
     const diagnostics = this.buildIntegratedDiagnostics(acc) as Record<string, any>;
     return buildExtendedDiagnosticsFromRuntime({
       diagnostics,
+      runtimeSurface: this.buildRuntimeSurfaceDiagnostics(),
       register: {
         bridgeId: this.bridgeId,
         gatewayPid: this.gatewayPid,
@@ -2733,19 +2791,18 @@ class BncrBridgeRuntime {
       outboundReady: true,
       preferredForOutbound: true,
     });
-    const ackAt = now();
+    const telemetryPatch = buildBncrAckOkTelemetryPatch({
+      entry: args.entry,
+      ackAt: now(),
+      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+    });
+    const { ackAt, ackQueueLatencyMs, ackPushLatencyMs, lateAccepted } = telemetryPatch;
     this.lastAckOkByAccount.set(args.accountId, ackAt);
-    const ackQueueLatencyMs = Math.max(0, ackAt - finiteNumberOr(args.entry.createdAt, ackAt));
-    const ackPushLatencyMs =
-      typeof args.entry.lastPushAt === 'number'
-        ? Math.max(0, ackAt - args.entry.lastPushAt)
-        : null;
     this.lastAckQueueLatencyMsByAccount.set(args.accountId, ackQueueLatencyMs);
     if (typeof ackPushLatencyMs === 'number') {
       this.lastAckPushLatencyMsByAccount.set(args.accountId, ackPushLatencyMs);
     }
-    const lateAccepted = args.entry.awaitingRetryPush === true;
-    if (lateAccepted) {
+    if (telemetryPatch.shouldResetAdaptiveAckRecovery) {
       this.adaptiveAckRecoveryOkCountByAccount.set(args.accountId, 0);
       this.lateAckOkCountByAccount.set(
         args.accountId,
@@ -2758,7 +2815,7 @@ class BncrBridgeRuntime {
       }
       args.entry.awaitingRetryPush = false;
       args.entry.lastError = undefined;
-    } else if (typeof ackPushLatencyMs === 'number' && ackPushLatencyMs <= PUSH_ACK_TIMEOUT_MS) {
+    } else if (telemetryPatch.shouldIncrementAdaptiveAckRecovery) {
       this.adaptiveAckRecoveryOkCountByAccount.set(
         args.accountId,
         this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, args.accountId) + 1,
@@ -2800,16 +2857,18 @@ class BncrBridgeRuntime {
     clientId?: string;
     error: string;
   }) {
-    args.entry.nextAttemptAt = now() + 1_000;
-    args.entry.lastError = args.error;
-    args.entry.awaitingRetryPush = true;
-    this.outbox.set(args.messageId, args.entry);
+    const nextEntry = buildBncrAckRetryEntryPatch({
+      entry: args.entry,
+      error: args.error,
+      nextAttemptAt: now() + 1_000,
+    });
+    this.outbox.set(args.messageId, nextEntry);
     this.scheduleSave();
     this.logOutboxAckSummary('outbox ack retry', {
       messageId: args.messageId,
       connId: args.connId,
       clientId: args.clientId,
-      err: args.entry.lastError,
+      err: nextEntry.lastError,
     });
   }
 
@@ -3028,8 +3087,12 @@ class BncrBridgeRuntime {
     entry: OutboxEntry;
     lastError: string;
   }) {
-    args.entry.lastError = args.lastError;
-    this.outbox.set(args.entry.messageId, args.entry);
+    const nextEntry = buildBncrOutboxFailureEntryPatch({
+      entry: args.entry,
+      lastError: args.lastError,
+    });
+    Object.assign(args.entry, nextEntry);
+    this.outbox.set(nextEntry.messageId, args.entry);
   }
 
   private recordOutboxPushFailure(args: {
@@ -3038,8 +3101,12 @@ class BncrBridgeRuntime {
     fallbackError: string;
     persist?: boolean;
   }) {
-    args.entry.lastError = asString((args.error as any)?.message || args.error || args.fallbackError);
-    this.outbox.set(args.entry.messageId, args.entry);
+    const nextEntry = buildBncrOutboxFailureEntryPatch({
+      entry: args.entry,
+      lastError: asString((args.error as any)?.message || args.error || args.fallbackError),
+    });
+    Object.assign(args.entry, nextEntry);
+    this.outbox.set(nextEntry.messageId, args.entry);
     if (args.persist) this.scheduleSave();
   }
 
@@ -3050,23 +3117,19 @@ class BncrBridgeRuntime {
     ownerClientId?: string;
     clearLastError?: boolean;
   }) {
-    const connIds = Array.from(args.connIds);
-    args.entry.lastPushAt = now();
-    args.entry.lastPushConnId =
-      args.ownerConnId || (connIds.length === 1 ? connIds[0] : undefined);
-    args.entry.lastPushClientId = args.ownerClientId;
-    args.entry.awaitingRetryPush = false;
-    if (!Array.isArray(args.entry.routeAttemptConnIds)) args.entry.routeAttemptConnIds = [];
-    if (
-      args.entry.lastPushConnId &&
-      !args.entry.routeAttemptConnIds.includes(args.entry.lastPushConnId)
-    ) {
-      args.entry.routeAttemptConnIds.push(args.entry.lastPushConnId);
-    }
-    if (args.clearLastError) args.entry.lastError = undefined;
-    this.outbox.set(args.entry.messageId, args.entry);
-    this.lastOutboundByAccount.set(args.entry.accountId, args.entry.lastPushAt);
-    this.markActivity(args.entry.accountId, args.entry.lastPushAt);
+    const pushedAt = now();
+    const nextEntry = buildBncrOutboxPushSuccessEntryPatch({
+      entry: args.entry,
+      connIds: args.connIds,
+      pushedAt,
+      ownerConnId: args.ownerConnId,
+      ownerClientId: args.ownerClientId,
+      clearLastError: args.clearLastError,
+    });
+    Object.assign(args.entry, nextEntry);
+    this.outbox.set(nextEntry.messageId, args.entry);
+    this.lastOutboundByAccount.set(nextEntry.accountId, pushedAt);
+    this.markActivity(nextEntry.accountId, pushedAt);
     this.scheduleSave();
   }
 
@@ -3101,41 +3164,19 @@ class BncrBridgeRuntime {
   }
 
   private isOutboundAckRequired(accountId?: string) {
-    try {
-      const cfg = getOpenClawRuntimeConfig(this.api);
-      const channelCfg = (cfg as any)?.channels?.[CHANNEL_ID];
-      const accountCfg =
-        accountId && channelCfg?.accounts && typeof channelCfg.accounts === 'object'
-          ? (channelCfg.accounts as Record<string, any>)[normalizeAccountId(accountId)]
-          : null;
-      const scoped = accountCfg?.outboundRequireAck;
-      const global = channelCfg?.outboundRequireAck;
-      if (typeof scoped === 'boolean') return scoped;
-      if (typeof global === 'boolean') return global;
-      return true;
-    } catch {
-      return true;
-    }
+    return resolveBncrOutboundAckRequired({ api: this.api, accountId });
   }
 
   private buildRuntimeFlags(accountId?: string) {
-    let ackPolicySource: 'channel' | 'default' = 'default';
-    try {
-      const cfg = getOpenClawRuntimeConfig(this.api);
-      const global = (cfg as any)?.channels?.[CHANNEL_ID]?.outboundRequireAck;
-      if (typeof global === 'boolean') ackPolicySource = 'channel';
-    } catch {
-      // keep default source
-    }
-    return {
-      outboundRequireAck: this.isOutboundAckRequired(accountId),
-      ackPolicySource,
-      messageAckTimeoutMs: this.resolveMessageAckTimeoutMs(accountId),
+    return buildBncrRuntimeFlags({
+      api: this.api,
+      accountId,
+      resolveMessageAckTimeoutMs: (acc?: string) => this.resolveMessageAckTimeoutMs(acc),
       adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
       defaultMessageAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
       fileAckTimeoutMs: FILE_ACK_TIMEOUT_MS,
       debugVerbose: BNCR_DEBUG_VERBOSE,
-    };
+    });
   }
 
   private async flushPushQueue(args?: {
@@ -3356,14 +3397,8 @@ class BncrBridgeRuntime {
               continue;
             }
 
-            entry.routeAttemptConnIds = decision.attemptedConnIds;
-            entry.fastReroutePending = decision.fastReroutePending;
-            entry.retryCount = decision.nextRetryCount;
-            entry.lastAttemptAt = decision.lastAttemptAt;
-            entry.nextAttemptAt = decision.nextAttemptAt;
-            entry.lastError = decision.lastError;
-            entry.routeAttemptRound = decision.routeAttemptRound;
-            this.outbox.set(entry.messageId, entry);
+            const nextEntry = applyBncrRetryRerouteDecisionToEntry(entry, decision);
+            this.outbox.set(entry.messageId, nextEntry);
             this.scheduleSave();
             if (requireAck) {
               this.lastAckTimeoutByAccount.set(acc, now());
@@ -3377,7 +3412,7 @@ class BncrBridgeRuntime {
             localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
             this.logOutboxAckReroute({
               accountId: acc,
-              entry,
+              entry: nextEntry,
               requireAck,
               currentConnId,
               availableConnIds,
@@ -3408,11 +3443,8 @@ class BncrBridgeRuntime {
             continue;
           }
 
-          entry.retryCount = decision.nextRetryCount;
-          entry.lastAttemptAt = decision.lastAttemptAt;
-          entry.nextAttemptAt = decision.nextAttemptAt;
-          entry.lastError = decision.lastError;
-          this.outbox.set(entry.messageId, entry);
+          const nextEntry = applyBncrPushFailureDecisionToEntry(entry, decision);
+          this.outbox.set(entry.messageId, nextEntry);
           this.scheduleSave();
 
           const wait = computeOutboxRetryWait(decision.nextAttemptAt, t);
@@ -3966,9 +3998,7 @@ class BncrBridgeRuntime {
   }
 
   private fileAckKey(transferId: string, stage: string, chunkIndex?: number): string {
-    const n = Number(chunkIndex);
-    const idx = Number.isInteger(n) && n >= 0 ? String(n) : '-';
-    return `${transferId}|${stage}|${idx}`;
+    return buildFileAckKey({ transferId, stage, chunkIndex });
   }
 
   private fileAckOwnerInfo(transferId: string) {
@@ -4197,30 +4227,6 @@ class BncrBridgeRuntime {
   }
 
 
-  private buildRuntimeQueueSnapshot(accountId: string) {
-    const pending = Array.from(this.outbox.values()).filter((v) => v.accountId === accountId).length;
-    const deadLetter = this.deadLetter.filter((v) => v.accountId === accountId).length;
-    const sessionRoutesCount = Array.from(this.sessionRoutes.values()).filter(
-      (v) => v.accountId === accountId,
-    ).length;
-    return {
-      pending,
-      deadLetter,
-      sessionRoutesCount,
-      invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(accountId),
-      legacyAccountResidue: this.countLegacyAccountResidue(accountId),
-    };
-  }
-
-  private buildRuntimeEventCounters(accountId: string) {
-    return {
-      connectEvents: this.getCounter(this.connectEventsByAccount, accountId),
-      inboundEvents: this.getCounter(this.inboundEventsByAccount, accountId),
-      activityEvents: this.getCounter(this.activityEventsByAccount, accountId),
-      ackEvents: this.getCounter(this.ackEventsByAccount, accountId),
-    };
-  }
-
   private computeRecommendedAckTimeoutReason(args: {
     lateAckOkCount: number;
     recentAckTimeoutCount: number;
@@ -4230,26 +4236,15 @@ class BncrBridgeRuntime {
     recommendedAckTimeoutMs?: number;
     nowMs?: number;
   }) {
-    if (args.recentAckTimeoutCount <= 0) return 'no-timeout-evidence';
-    if (args.lateAckOkCount <= 0) return 'no-late-ack-evidence';
-    if (typeof args.lastLateAckPushLatencyMs !== 'number') return 'missing-latency';
-    const lastLateAckOkAt = typeof args.lastLateAckOkAt === 'number' ? args.lastLateAckOkAt : null;
-    const nowMs = typeof args.nowMs === 'number' ? args.nowMs : now();
-    if (
-      typeof lastLateAckOkAt === 'number' &&
-      lastLateAckOkAt > 0 &&
-      nowMs - lastLateAckOkAt > ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS
-    ) {
-      return 'late-ack-expired';
-    }
-    if (
-      typeof args.adaptiveAckRecoveryOkCount === 'number' &&
-      args.adaptiveAckRecoveryOkCount >= ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD
-    ) {
-      return 'recovered';
-    }
-    if (args.recommendedAckTimeoutMs === RECOMMENDED_ACK_TIMEOUT_MAX_MS) return 'capped-max';
-    return 'late-ack-observed';
+    return computeBncrRecommendedAckTimeoutReason({
+      ...args,
+      nowMs: typeof args.nowMs === 'number' ? args.nowMs : now(),
+      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+      minAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MIN_MS,
+      maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+      lateAckObservationTtlMs: ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS,
+      recoveryOkThreshold: ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
+    });
   }
 
   private computeRecommendedAckTimeoutMs(args: {
@@ -4260,29 +4255,15 @@ class BncrBridgeRuntime {
     adaptiveAckRecoveryOkCount?: number;
     nowMs?: number;
   }) {
-    const lastLateAckOkAt = typeof args.lastLateAckOkAt === 'number' ? args.lastLateAckOkAt : null;
-    const nowMs = typeof args.nowMs === 'number' ? args.nowMs : now();
-    const lateAckExpired =
-      typeof lastLateAckOkAt === 'number' &&
-      lastLateAckOkAt > 0 &&
-      nowMs - lastLateAckOkAt > ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS;
-    const recovered =
-      typeof args.adaptiveAckRecoveryOkCount === 'number' &&
-      args.adaptiveAckRecoveryOkCount >= ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD;
-    if (
-      args.lateAckOkCount <= 0 ||
-      args.recentAckTimeoutCount <= 0 ||
-      typeof args.lastLateAckPushLatencyMs !== 'number' ||
-      lateAckExpired ||
-      recovered
-    ) {
-      return PUSH_ACK_TIMEOUT_MS;
-    }
-    const recommended = Math.ceil(args.lastLateAckPushLatencyMs * 1.25);
-    return Math.min(
-      RECOMMENDED_ACK_TIMEOUT_MAX_MS,
-      Math.max(RECOMMENDED_ACK_TIMEOUT_MIN_MS, recommended),
-    );
+    return computeBncrRecommendedAckTimeoutMs({
+      ...args,
+      nowMs: typeof args.nowMs === 'number' ? args.nowMs : now(),
+      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+      minAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MIN_MS,
+      maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+      lateAckObservationTtlMs: ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS,
+      recoveryOkThreshold: ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
+    });
   }
 
   private maybeLogAdaptiveAckTimeout(args: {
@@ -4412,44 +4393,41 @@ class BncrBridgeRuntime {
   }
 
   private buildRuntimeAckStrategy(ackObservability: Record<string, any>) {
-    const currentMs = finiteNumberOr(ackObservability.currentAckTimeoutMs, PUSH_ACK_TIMEOUT_MS);
-    const defaultMs = finiteNumberOr(ackObservability.defaultAckTimeoutMs, PUSH_ACK_TIMEOUT_MS);
-    const reason = asString(ackObservability.recommendedAckTimeoutReason || 'unknown') || 'unknown';
-    return {
-      mode: ackObservability.adaptiveAckTimeoutEnabled === true ? 'adaptive' : 'fixed',
-      currentMs,
-      defaultMs,
-      maxMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
-      reason,
-      active: currentMs > defaultMs,
-      lastLateAckAgeMs: ackObservability.lastLateAckAgeMs ?? null,
-      lateAckObservationTtlMs: ackObservability.lateAckObservationTtlMs ?? null,
-      recovered: ackObservability.adaptiveAckRecovered === true,
-    };
-  }
-
-  private buildRuntimeActivitySnapshot(accountId: string) {
-    return {
-      activeConnections: this.activeConnectionCount(accountId),
-      lastSession: this.lastSessionByAccount.get(accountId) || null,
-      lastActivityAt: this.lastActivityByAccount.get(accountId) || null,
-      lastInboundAt: this.lastInboundByAccount.get(accountId) || null,
-      lastOutboundAt: this.lastOutboundByAccount.get(accountId) || null,
-    };
+    return buildBncrRuntimeAckStrategy({
+      ackObservability,
+      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+      maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+    });
   }
 
   private buildRuntimeStatusInput(accountId: string, overrides: { running?: boolean } = {}) {
     const acc = normalizeAccountId(accountId);
-    return {
+    const snapshots = buildRuntimeStatusSnapshots({
+      accountId: acc,
+      outboxEntries: this.outbox.values(),
+      deadLetterEntries: this.deadLetter,
+      sessionRouteEntries: this.sessionRoutes.values(),
+      countInvalidOutboxSessionKeys: (snapshotAccountId) =>
+        this.countInvalidOutboxSessionKeys(snapshotAccountId),
+      countLegacyAccountResidue: (snapshotAccountId) => this.countLegacyAccountResidue(snapshotAccountId),
+      connectEventsByAccount: this.connectEventsByAccount,
+      inboundEventsByAccount: this.inboundEventsByAccount,
+      activityEventsByAccount: this.activityEventsByAccount,
+      ackEventsByAccount: this.ackEventsByAccount,
+      activeConnectionCount: (snapshotAccountId) => this.activeConnectionCount(snapshotAccountId),
+      lastSessionByAccount: this.lastSessionByAccount,
+      lastActivityByAccount: this.lastActivityByAccount,
+      lastInboundByAccount: this.lastInboundByAccount,
+      lastOutboundByAccount: this.lastOutboundByAccount,
+    });
+    return buildBncrRuntimeStatusInput({
       accountId: acc,
       connected: this.isOnline(acc),
-      ...this.buildRuntimeQueueSnapshot(acc),
-      ...this.buildRuntimeEventCounters(acc),
-      ...this.buildRuntimeActivitySnapshot(acc),
+      ...snapshots,
       startedAt: this.startedAt,
       running: overrides.running,
       channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
-    };
+    });
   }
 
   private buildStatusMeta(accountId: string) {
@@ -4825,34 +4803,6 @@ class BncrBridgeRuntime {
     );
   }
 
-  private buildFileTransferInitPayload(args: {
-    transferId: string;
-    sessionKey: string;
-    route: BncrRoute;
-    fileName: string;
-    mimeType?: string;
-    fileSize: number;
-    chunkSize: number;
-    totalChunks: number;
-    fileSha256: string;
-  }) {
-    return {
-      transferId: args.transferId,
-      direction: 'oc2bncr' as const,
-      sessionKey: args.sessionKey,
-      platform: args.route.platform,
-      groupId: args.route.groupId,
-      userId: args.route.userId,
-      fileName: args.fileName,
-      mimeType: args.mimeType,
-      fileSize: args.fileSize,
-      chunkSize: args.chunkSize,
-      totalChunks: args.totalChunks,
-      fileSha256: args.fileSha256,
-      ts: now(),
-    };
-  }
-
   private buildInitialFileSendTransferState(args: {
     transferId: string;
     accountId: string;
@@ -5043,7 +4993,7 @@ class BncrBridgeRuntime {
 
     ctx.broadcastToConnIds(
       BNCR_FILE_INIT_EVENT,
-      this.buildFileTransferInitPayload({
+      buildFileTransferInitPayload({
         transferId,
         sessionKey: params.sessionKey,
         route: params.route,
@@ -5053,6 +5003,7 @@ class BncrBridgeRuntime {
         chunkSize,
         totalChunks,
         fileSha256,
+        ts: now(),
       }),
       connIds,
     );
@@ -5069,7 +5020,7 @@ class BncrBridgeRuntime {
       for (let attempt = 1; attempt <= 3; attempt++) {
         ctx.broadcastToConnIds(
           BNCR_FILE_CHUNK_EVENT,
-          {
+          buildFileTransferChunkPayload({
             transferId,
             chunkIndex: idx,
             offset: start,
@@ -5077,7 +5028,7 @@ class BncrBridgeRuntime {
             chunkSha256,
             base64: slice.toString('base64'),
             ts: now(),
-          },
+          }),
           connIds,
         );
 
@@ -5125,11 +5076,11 @@ class BncrBridgeRuntime {
         this.fileSendTransfers.set(transferId, st);
         ctx.broadcastToConnIds(
           BNCR_FILE_ABORT_EVENT,
-          {
+          buildFileTransferAbortPayload({
             transferId,
             reason: st.error,
             ts: now(),
-          },
+          }),
           connIds,
         );
         throw new Error(st.error);
@@ -5138,10 +5089,10 @@ class BncrBridgeRuntime {
 
     ctx.broadcastToConnIds(
       BNCR_FILE_COMPLETE_EVENT,
-      {
+      buildFileTransferCompletePayload({
         transferId,
         ts: now(),
-      },
+      }),
       connIds,
     );
 
@@ -5575,6 +5526,17 @@ class BncrBridgeRuntime {
       respond(false, { error: 'transfer not found' });
       return;
     }
+    if (st.status === 'completed') {
+      respond(true, {
+        ok: true,
+        transferId,
+        status: 'completed',
+        path: st.completedPath,
+        ignored: true,
+        terminal: true,
+      });
+      return;
+    }
     if (chunkIndex >= st.totalChunks) {
       respond(false, { error: `chunkIndex out of range index=${chunkIndex} total=${st.totalChunks}` });
       return;
@@ -5778,6 +5740,17 @@ class BncrBridgeRuntime {
       respond(true, { ok: true, transferId, message: 'not-found' });
       return;
     }
+    if (st.status === 'completed') {
+      respond(true, {
+        ok: true,
+        transferId,
+        status: 'completed',
+        path: st.completedPath,
+        ignored: true,
+        terminal: true,
+      });
+      return;
+    }
 
     const staleObserved = this.observeLease('file.abort', params ?? {});
     if (staleObserved.stale) {
@@ -5874,6 +5847,30 @@ class BncrBridgeRuntime {
             ? 'file.abort'
             : 'file.complete';
     const staleObserved = this.observeLease(staleKind, params ?? {});
+    if (st?.status === 'completed' || st?.status === 'aborted') {
+      respond(
+        true,
+        staleObserved.stale
+          ? {
+              ok: true,
+              transferId,
+              stage,
+              state: st.status,
+              stale: true,
+              ignored: true,
+              terminal: true,
+            }
+          : {
+              ok: true,
+              transferId,
+              stage,
+              state: st.status,
+              ignored: true,
+              terminal: true,
+            },
+      );
+      return;
+    }
     if (staleObserved.stale) {
       const sameConn = !!st?.ownerConnId && st.ownerConnId === connId;
       const sameClient =
@@ -6130,126 +6127,11 @@ class BncrBridgeRuntime {
   };
 
   channelStartAccount = async (ctx: any) => {
-    const accountId = normalizeAccountId(ctx.accountId);
-    this.clearChannelAccountWorker(accountId, 'start-replace');
-
-    const tick = () => {
-      const previous = ctx.getStatus?.() || {};
-      const onlineByConn = this.isOnline(accountId);
-      const recentInboundReachable = this.hasRecentInboundReachability(accountId);
-      const connected = onlineByConn || recentInboundReachable;
-      const lastActAt =
-        this.lastActivityByAccount.get(accountId) ||
-        this.lastInboundByAccount.get(accountId) ||
-        this.lastOutboundByAccount.get(accountId) ||
-        previous?.lastEventAt ||
-        null;
-      const healthSig = JSON.stringify({
-        bridge: this.bridgeId,
-        accountId,
-        connected,
-        onlineByConn,
-        recentInboundReachable,
-        activeConnectionKey: this.activeConnectionByAccount.get(accountId) || null,
-        activeConnections: Array.from(this.connections.values())
-          .filter((c) => c.accountId === accountId)
-          .map((c) => ({
-            connId: c.connId,
-            clientId: c.clientId,
-            inboundOnly: c.inboundOnly === true,
-            outboundReady: c.outboundReady === true,
-            preferredForOutbound: c.preferredForOutbound === true,
-          })),
-      });
-      const conns = Array.from(this.connections.values()).filter((c) => c.accountId === accountId).length;
-      this.logInfoDedup(
-        'health',
-        `status-tick ${accountId}|changed|${connected ? 'linked' : 'configured'}|onlineByConn=${onlineByConn}|recentInboundReachable=${recentInboundReachable}|conns=${conns}`,
-        {
-          key: `health-status-tick:${accountId}`,
-          sig: healthSig,
-        },
-      );
-      this.logInfoDedup('health', `status-tick ${healthSig}`, {
-        key: `health-status-tick-debug:${accountId}`,
-        sig: healthSig,
-        debugOnly: true,
-      });
-
-      ctx.setStatus?.({
-        ...previous,
-        accountId,
-        running: true,
-        connected,
-        lastEventAt: lastActAt,
-        // 状态映射：在线=linked，离线=configured
-        mode: connected ? 'linked' : 'configured',
-        lastError: previous?.lastError ?? null,
-        meta: this.buildStatusMeta(accountId),
-      });
-    };
-
-    tick();
-    const timer = setInterval(tick, 5_000);
-    let worker!: ChannelAccountWorkerHandle;
-    const done = new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = (reason: string) => {
-        if (settled) return;
-        settled = true;
-        const activeWorker = this.channelAccountWorkers.get(accountId);
-        if (activeWorker === worker) {
-          this.channelAccountWorkers.delete(accountId);
-        }
-        clearInterval(timer);
-        worker.cleanupAbortListener?.();
-        worker.cleanupAbortListener = undefined;
-        this.logInfo(
-          'health',
-          `status-worker finished ${JSON.stringify({ bridge: this.bridgeId, accountId, reason })}`,
-          { debugOnly: true },
-        );
-        this.logInfo('health', `status-worker finished ${accountId}|${reason}`);
-        resolve();
-      };
-
-      worker = { timer, finish };
-      this.channelAccountWorkers.set(accountId, worker);
-
-      const onAbort = () => finish('abort');
-      const abortSignal = ctx.abortSignal;
-
-      if (abortSignal?.aborted) {
-        onAbort();
-        return;
-      }
-
-      abortSignal?.addEventListener?.('abort', onAbort, { once: true });
-      if (abortSignal?.removeEventListener) {
-        worker.cleanupAbortListener = () => abortSignal.removeEventListener('abort', onAbort);
-      }
-    });
-    await done;
+    await startBncrStatusWorker(this.buildStatusWorkerRuntime(), ctx);
   };
 
   channelStopAccount = async (ctx: any) => {
-    const accountId = normalizeAccountId(ctx?.accountId);
-    const cleared = this.clearChannelAccountWorker(accountId, 'explicit-stop');
-    const previous = ctx?.getStatus?.() || {};
-    ctx?.setStatus?.({
-      ...previous,
-      accountId,
-      running: false,
-      restartPending: false,
-      lastStopAt: Date.now(),
-      meta: this.buildStatusMeta(accountId),
-    });
-    this.logInfo(
-      'health',
-      `status-stop ${JSON.stringify({ bridge: this.bridgeId, accountId, cleared })}`,
-      { debugOnly: true },
-    );
-    this.logInfo('health', `status-stop ${accountId}|cleared=${cleared}`);
+    await stopBncrStatusWorker(this.buildStatusWorkerRuntime(), ctx);
   };
 
   private logChannelSendEntry(args: {
@@ -6504,231 +6386,21 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
 
   const plugin = {
     id: CHANNEL_ID,
-    meta: {
-      id: CHANNEL_ID,
-      label: 'Bncr',
-      selectionLabel: 'Bncr Client',
-      docsPath: '/channels/bncr',
-      blurb: 'Bncr Channel.',
-      aliases: ['bncr'],
-    },
+    meta: BNCR_CHANNEL_META,
     actions: messageActions,
     message: {
-      receive: {
-        defaultAckPolicy: 'manual' as const,
-        supportedAckPolicies: ['manual'] as const,
-      },
-      send: {
-        text: async (ctx: any) => getBridge().channelMessageSendText(ctx),
-        media: async (ctx: any) => getBridge().channelMessageSendMedia(ctx),
-        payload: async (ctx: any) => getBridge().channelMessageSendPayload(ctx),
-      },
+      receive: BNCR_MESSAGE_RECEIVE_POLICY,
+      send: createBncrMessageSend(getBridge),
     },
-    capabilities: {
-      chatTypes: ['direct'] as ChatType[],
-      media: true,
-      reply: true,
-      nativeCommands: true,
-    },
-    messaging: {
-      // 接收任意标签输入；不在 normalize 阶段做格式门槛，统一下沉到发送前验证。
-      normalizeTarget: (raw: string) => {
-        const input = asString(raw).trim();
-        return input || undefined;
-      },
-      parseExplicitTarget: ({ raw, accountId, cfg }: any) => {
-        const resolvedAccountId = normalizeAccountId(
-          asString(accountId || BNCR_DEFAULT_ACCOUNT_ID),
-        );
-        const runtimeBridge = getBridge();
-        const canonicalAgentId =
-          runtimeBridge.canonicalAgentId ||
-          runtimeBridge.ensureCanonicalAgentId({ cfg, accountId: resolvedAccountId });
-        return parseExplicitTarget(asString(raw).trim(), { canonicalAgentId });
-      },
-      formatTargetDisplay: ({ target }: any) => {
-        return formatTargetDisplay(target);
-      },
-      resolveSessionTarget: ({ id, accountId, cfg }: any) => {
-        const raw = asString(id).trim();
-        if (!raw) return undefined;
-        const resolvedAccountId = normalizeAccountId(
-          asString(accountId || BNCR_DEFAULT_ACCOUNT_ID),
-        );
-        const runtimeBridge = getBridge();
-        const canonicalAgentId =
-          runtimeBridge.canonicalAgentId ||
-          runtimeBridge.ensureCanonicalAgentId({ cfg, accountId: resolvedAccountId });
-
-        let parsed = parseExplicitTarget(raw, { canonicalAgentId });
-        if (!parsed) {
-          const route = runtimeBridge.resolveRouteBySession(raw, resolvedAccountId);
-          if (route) {
-            parsed = parseExplicitTarget(formatDisplayScope(route), { canonicalAgentId });
-          }
-        }
-        return parsed?.displayScope || undefined;
-      },
-      resolveOutboundSessionRoute: (params: any) => {
-        const accountId = normalizeAccountId(
-          asString(params?.accountId || BNCR_DEFAULT_ACCOUNT_ID),
-        );
-        const runtimeBridge = getBridge();
-        const canonicalAgentId =
-          runtimeBridge.canonicalAgentId ||
-          runtimeBridge.ensureCanonicalAgentId({ cfg: params?.cfg, accountId });
-        return resolveBncrOutboundSessionRoute({
-          ...params,
-          canonicalAgentId,
-          resolveRouteBySession: (raw: string, acc: string) =>
-            runtimeBridge.resolveRouteBySession(raw, acc),
-        });
-      },
-      targetResolver: {
-        looksLikeId: (raw: string, normalized?: string) => {
-          return looksLikeBncrExplicitTarget(asString(normalized || raw).trim());
-        },
-        resolveTarget: async ({ accountId, input, normalized }) => {
-          const runtimeBridge = getBridge();
-          const resolved = resolveBncrOutboundTarget({
-            target: asString(normalized || input).trim(),
-            accountId: normalizeAccountId(asString(accountId || BNCR_DEFAULT_ACCOUNT_ID)),
-            resolveRouteBySession: (raw: string, acc: string) =>
-              runtimeBridge.resolveRouteBySession(raw, acc),
-          });
-          if (!resolved) return null;
-          return {
-            to: resolved.displayScope,
-            kind: resolved.kind,
-            display: resolved.displayScope,
-            source: 'normalized' as const,
-          };
-        },
-        hint: 'Standard to=Bncr:<platform>:<group>:<user> or Bncr:<platform>:<user>; sessionKey keeps existing strict/legacy compatibility, canonical sessionKey=agent:<agentId>:bncr:direct:<hex>',
-      },
-    },
+    capabilities: BNCR_CHANNEL_CAPABILITIES,
+    messaging: createBncrMessagingSurface(getBridge),
     configSchema: BncrConfigSchema,
-    config: {
-      listAccountIds,
-      resolveAccount,
-      setAccountEnabled: ({ cfg, accountId, enabled }: any) =>
-        setOpenClawAccountEnabledInConfigSection({
-          cfg,
-          sectionKey: CHANNEL_ID,
-          accountId,
-          enabled,
-          allowTopLevel: true,
-        }),
-      isEnabled: (account: any, cfg: any) => {
-        const policy = resolveBncrChannelPolicy(cfg?.channels?.[CHANNEL_ID] || {});
-        return policy.enabled !== false && account?.enabled !== false;
-      },
-      isConfigured: () => true,
-      describeAccount: (account: any) => {
-        const displayName = resolveDefaultDisplayName(account?.name, account?.accountId);
-        return {
-          accountId: account.accountId,
-          name: displayName,
-          enabled: account.enabled !== false,
-          configured: true,
-        };
-      },
-    },
-    setup: {
-      applyAccountName: ({ cfg, accountId, name }: any) =>
-        applyOpenClawAccountNameToChannelSection({
-          cfg,
-          channelKey: CHANNEL_ID,
-          accountId,
-          name,
-          alwaysUseAccounts: true,
-        }),
-      applyAccountConfig: ({ cfg, accountId }: any) => {
-        const next = { ...(cfg || {}) } as any;
-        next.channels = next.channels || {};
-        next.channels[CHANNEL_ID] = next.channels[CHANNEL_ID] || {};
-        next.channels[CHANNEL_ID].accounts = next.channels[CHANNEL_ID].accounts || {};
-        next.channels[CHANNEL_ID].accounts[accountId] = {
-          ...(next.channels[CHANNEL_ID].accounts[accountId] || {}),
-          enabled: true,
-        };
-        return next;
-      },
-    },
-    outbound: {
-      deliveryMode: 'gateway' as const,
-      sendText: async (ctx: any) => getBridge().channelSendText(ctx),
-      sendMedia: async (ctx: any) => getBridge().channelSendMedia(ctx),
-      replyAction: async (ctx: any) =>
-        sendBncrReplyAction({
-          accountId: normalizeAccountId(ctx?.accountId),
-          to: asString(ctx?.to || '').trim(),
-          text: asString(ctx?.text || ''),
-          replyToMessageId:
-            asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
-          sendText: async ({ accountId, to, text }) =>
-            getBridge().channelSendText({ accountId, to, text }),
-        }),
-      deleteAction: async (ctx: any) =>
-        deleteBncrMessageAction({
-          accountId: normalizeAccountId(ctx?.accountId),
-          targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
-        }),
-      reactAction: async (ctx: any) =>
-        reactBncrMessageAction({
-          accountId: normalizeAccountId(ctx?.accountId),
-          targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
-          emoji: asString(ctx?.emoji || '').trim(),
-        }),
-      editAction: async (ctx: any) =>
-        editBncrMessageAction({
-          accountId: normalizeAccountId(ctx?.accountId),
-          targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
-          text: asString(ctx?.text || ''),
-        }),
-    },
-    status: {
-      defaultRuntime: createOpenClawDefaultChannelRuntimeState(BNCR_DEFAULT_ACCOUNT_ID, {
-        mode: 'ws-offline',
-      }),
-      buildChannelSummary: async ({ defaultAccountId }: any) => {
-        return getBridge().getChannelSummary(defaultAccountId || BNCR_DEFAULT_ACCOUNT_ID);
-      },
-      buildAccountSnapshot: async ({ account, runtime }: any) => {
-        const runtimeBridge = getBridge();
-        const rt = runtime || runtimeBridge.getAccountRuntimeSnapshot(account?.accountId);
-        return buildAccountStatusSnapshot({
-          account,
-          runtime: rt,
-          healthSummary: runtimeBridge.getStatusHeadline(account?.accountId),
-          // default 名不可隐藏时，统一展示稳定默认值
-          displayName: resolveDefaultDisplayName(account?.name, account?.accountId),
-        });
-      },
-      resolveAccountState: ({ enabled, configured, account, cfg, runtime }: any) => {
-        if (!enabled) return 'disabled';
-        const resolved = resolveAccount(cfg, account?.accountId);
-        if (!(resolved.enabled && configured)) return 'not configured';
-        const rt = runtime || getBridge().getAccountRuntimeSnapshot(account?.accountId);
-        return rt?.connected ? 'linked' : 'configured';
-      },
-    },
-    gatewayMethods: [
-      'bncr.connect',
-      'bncr.inbound',
-      'bncr.activity',
-      'bncr.ack',
-      'bncr.diagnostics',
-      'bncr.file.init',
-      'bncr.file.chunk',
-      'bncr.file.complete',
-      'bncr.file.abort',
-      'bncr.file.ack',
-    ],
-    gateway: {
-      startAccount: async (ctx: any) => getBridge().channelStartAccount(ctx),
-      stopAccount: async (ctx: any) => getBridge().channelStopAccount(ctx),
-    },
+    config: BNCR_CONFIG_SURFACE,
+    setup: BNCR_SETUP_SURFACE,
+    outbound: createBncrOutboundRuntime(getBridge),
+    status: createBncrStatusSurface(getBridge),
+    gatewayMethods: BNCR_GATEWAY_METHODS,
+    gateway: createBncrGatewayRuntime(getBridge),
   };
 
   return plugin;
