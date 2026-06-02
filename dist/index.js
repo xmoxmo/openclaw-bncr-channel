@@ -251,6 +251,13 @@ var ensurePluginNodeModulesLink = (targetRoot) => {
   }
   fs.symlinkSync(targetRoot, linkPath, linkType);
 };
+var runtimeSourceDir = (() => {
+  const direct = path.join(pluginDir, "src");
+  if (fs.existsSync(path.join(direct, "channel.ts"))) return direct;
+  const parent = path.join(pluginDir, "..", "src");
+  if (fs.existsSync(path.join(parent, "channel.ts"))) return parent;
+  return direct;
+})();
 var ensureOpenClawSdkResolution = () => {
   if (canResolveSdkCore()) return;
   let lastError = "";
@@ -273,7 +280,7 @@ var loadRuntimeSync = () => {
   if (runtime) return runtime;
   ensureOpenClawSdkResolution();
   try {
-    const mod = pluginRequire("./src/channel.ts");
+    const mod = pluginRequire(path.join(runtimeSourceDir, "channel.ts"));
     runtime = {
       createBncrBridge: mod.createBncrBridge,
       createBncrChannelPlugin: mod.createBncrChannelPlugin
@@ -281,7 +288,7 @@ var loadRuntimeSync = () => {
     return runtime;
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    throw new Error(`bncr failed to load channel runtime after dependency bootstrap: ${detail}`);
+    throw new Error(`bncr failed to load channel runtime after dependency bootstrap from ${runtimeSourceDir}: ${detail}`);
   }
 };
 var getIdentityId = (obj, prefix) => {

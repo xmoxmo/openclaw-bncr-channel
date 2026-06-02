@@ -251,6 +251,16 @@ const ensurePluginNodeModulesLink = (targetRoot: string) => {
   fs.symlinkSync(targetRoot, linkPath, linkType as fs.symlink.Type);
 };
 
+const runtimeSourceDir = (() => {
+  const direct = path.join(pluginDir, 'src');
+  if (fs.existsSync(path.join(direct, 'channel.ts'))) return direct;
+
+  const parent = path.join(pluginDir, '..', 'src');
+  if (fs.existsSync(path.join(parent, 'channel.ts'))) return parent;
+
+  return direct;
+})();
+
 const ensureOpenClawSdkResolution = () => {
   if (canResolveSdkCore()) return;
 
@@ -279,7 +289,7 @@ const loadRuntimeSync = (): LoadedRuntime => {
   if (runtime) return runtime;
   ensureOpenClawSdkResolution();
   try {
-    const mod = pluginRequire('./src/channel.ts') as ChannelModule;
+    const mod = pluginRequire(path.join(runtimeSourceDir, 'channel.ts')) as ChannelModule;
     runtime = {
       createBncrBridge: mod.createBncrBridge,
       createBncrChannelPlugin: mod.createBncrChannelPlugin,
@@ -287,7 +297,7 @@ const loadRuntimeSync = (): LoadedRuntime => {
     return runtime;
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    throw new Error(`bncr failed to load channel runtime after dependency bootstrap: ${detail}`);
+    throw new Error(`bncr failed to load channel runtime after dependency bootstrap from ${runtimeSourceDir}: ${detail}`);
   }
 };
 
