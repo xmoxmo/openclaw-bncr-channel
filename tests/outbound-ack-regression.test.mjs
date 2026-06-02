@@ -105,11 +105,11 @@ test('schedulePushDrain does not register a second timer while one is already pe
   const timers = [];
 
   try {
-    global.setTimeout = ((fn, delay, ...args) => {
+    global.setTimeout = (fn, delay, ...args) => {
       const timer = { fn, delay, args, cleared: false };
       timers.push(timer);
       return timer;
-    });
+    };
 
     bridge.schedulePushDrain(1234);
     bridge.schedulePushDrain(5);
@@ -130,11 +130,11 @@ test('schedulePushDrain clamps delay into supported range', async () => {
   const timers = [];
 
   try {
-    global.setTimeout = ((fn, delay, ...args) => {
+    global.setTimeout = (fn, delay, ...args) => {
       const timer = { fn, delay, args, cleared: false };
       timers.push(timer);
       return timer;
-    });
+    };
 
     bridge.schedulePushDrain(-50);
     bridge.pushTimer = null;
@@ -208,7 +208,11 @@ test('flushPushQueue does not degrade or reroute when pushed entry leaves outbox
     bridge.isOnline = () => true;
     bridge.isOutboundAckRequired = () => true;
 
-    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'removed-after-push' });
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'removed-after-push',
+    });
 
     assert.equal(waited, true);
     assert.equal(degraded, false);
@@ -246,7 +250,11 @@ test('flushPushQueue does not wait for ack or degrade when no-ack pushed entry l
     bridge.isOnline = () => true;
     bridge.isOutboundAckRequired = () => false;
 
-    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'no-ack-removed-after-push' });
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'no-ack-removed-after-push',
+    });
 
     assert.equal(waited, false);
     assert.equal(degraded, false);
@@ -258,18 +266,33 @@ test('flushPushQueue does not wait for ack or degrade when no-ack pushed entry l
 });
 
 test('flushPushQueue skips reentrant drain for the same account', async () => {
+  const logs = [];
+  const warnings = [];
   const bridge = createBncrBridge(createApiStub());
   const pushed = [];
   let nestedReturned = false;
+  const originalConsoleLog = console.log;
+  const originalConsoleWarn = console.warn;
 
   try {
+    console.log = (...args) => {
+      logs.push(args.map((part) => String(part)).join(' '));
+    };
+    console.warn = (...args) => {
+      warnings.push(args.map((part) => String(part)).join(' '));
+    };
+    bridge.isDebugEnabled = () => true;
     const entry = makeEntry('msg-reentrant-same-account', 'same account reentry');
     entry.nextAttemptAt = Date.now() - 1_000;
     bridge.outbox.set(entry.messageId, entry);
 
     bridge.tryPushEntry = async (pushedEntry) => {
       pushed.push(pushedEntry.messageId);
-      await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'nested-same-account' });
+      await bridge.flushPushQueue({
+        accountId: 'Primary',
+        trigger: 'test',
+        reason: 'nested-same-account',
+      });
       nestedReturned = true;
       bridge.outbox.delete(pushedEntry.messageId);
       return true;
@@ -277,13 +300,77 @@ test('flushPushQueue skips reentrant drain for the same account', async () => {
     bridge.sleepMs = async () => {};
     bridge.isOutboundAckRequired = () => false;
 
-    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'outer-same-account' });
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'outer-same-account',
+    });
 
     assert.equal(nestedReturned, true);
     assert.deepEqual(pushed, ['msg-reentrant-same-account']);
     assert.equal(bridge.outbox.has(entry.messageId), false);
     assert.equal(bridge.pushDrainRunningAccounts.has('Primary'), false);
+    assert.equal(
+      warnings.some((line) => line.includes('[bncr] outbox drain stuck')),
+      false,
+    );
+    const drainSkip = logs.find(
+      (line) =>
+        line.includes('[bncr] outbox drain-skip') &&
+        line.includes('already-running') &&
+        !line.includes('msg-reentrant-same-account'),
+    );
+    assert.ok(drainSkip, 'reentrant drain skip should be observable in debug logs');
   } finally {
+    console.log = originalConsoleLog;
+    console.warn = originalConsoleWarn;
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue emits non-debug drain stuck summary after long-running account drain', async () => {
+  const logs = [];
+  const warnings = [];
+  const bridge = createBncrBridge(createApiStub());
+  const originalConsoleLog = console.log;
+  const originalConsoleWarn = console.warn;
+
+  try {
+    console.log = (...args) => {
+      logs.push(args.map((part) => String(part)).join(' '));
+    };
+    console.warn = (...args) => {
+      warnings.push(args.map((part) => String(part)).join(' '));
+    };
+    bridge.isDebugEnabled = () => true;
+    const entry = makeEntry('msg-drain-stuck', 'drain stuck');
+    bridge.outbox.set(entry.messageId, entry);
+    bridge.pushDrainRunningAccounts.add('Primary');
+    bridge.pushDrainRunningSinceByAccount.set('Primary', Date.now() - 31_000);
+
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'nested-stuck-check',
+    });
+
+    const summary = warnings.find((line) => line.includes('[bncr] outbox drain stuck'));
+    assert.ok(summary, 'drain stuck summary should be non-debug visible');
+    assert.ok(summary.includes('accountId=Primary'));
+    assert.ok(summary.includes('pending=1'));
+    assert.ok(summary.includes('runningMs='));
+    assert.ok(summary.includes('waiters=0/0'));
+
+    const detail = logs.find((line) => line.includes('[bncr] outbox drain-stuck'));
+    assert.ok(detail, 'drain stuck detail should be emitted through debug logs');
+    assert.ok(detail.includes('msg-drain-stuck'));
+    assert.ok(detail.includes('hasGatewayContext'));
+  } finally {
+    console.log = originalConsoleLog;
+    console.warn = originalConsoleWarn;
+    bridge.pushDrainRunningAccounts.delete('Primary');
+    bridge.pushDrainRunningSinceByAccount.delete('Primary');
+    bridge.pushDrainStuckWarnedAtByAccount.delete('Primary');
     cleanupBridge(bridge);
   }
 });
@@ -412,7 +499,11 @@ test('flushPushQueue marks no-ack offline pushes as unconfirmed retry without wa
       scheduled.push(delayMs);
     };
 
-    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'no-ack-offline-unconfirmed' });
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'no-ack-offline-unconfirmed',
+    });
 
     const updated = bridge.outbox.get(entry.messageId);
     assert.ok(updated, 'offline no-ack push should remain queued for retry');
@@ -430,6 +521,170 @@ test('flushPushQueue marks no-ack offline pushes as unconfirmed retry without wa
     assert.equal(scheduled.length, 1);
     assert.ok(scheduled[0] >= 0);
   } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueueBestEffort logs and reschedules drain exceptions with a retry limit', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const errors = [];
+  const scheduled = [];
+  const originalConsoleError = console.error;
+
+  try {
+    console.error = (...args) => {
+      errors.push(args.map((part) => String(part)).join(' '));
+    };
+    bridge.flushPushQueue = async () => {
+      throw new Error('synthetic drain explosion');
+    };
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    for (let i = 0; i < 4; i += 1) {
+      bridge.flushPushQueueBestEffort({
+        accountId: 'Primary',
+        trigger: 'test',
+        reason: 'drain-exception',
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    assert.equal(errors.length, 4);
+    assert.ok(errors[0].includes('[bncr] outbox drain fail'));
+    assert.ok(errors[0].includes('accountId=Primary'));
+    assert.ok(errors[0].includes('reason=drain-exception'));
+    assert.ok(errors[0].includes('synthetic drain explosion'));
+    assert.ok(errors[0].includes('retry=1'));
+    assert.ok(errors[1].includes('retry=2'));
+    assert.ok(errors[2].includes('retry=3'));
+    assert.ok(errors[3].includes('retry=false'));
+    assert.deepEqual(scheduled, [1_000, 1_000, 1_000]);
+
+    bridge.flushPushQueue = async () => {};
+    bridge.flushPushQueueBestEffort({ accountId: 'Primary', trigger: 'test', reason: 'recovered' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    bridge.flushPushQueue = async () => {
+      throw new Error('synthetic drain explosion after recovery');
+    };
+    bridge.flushPushQueueBestEffort({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'drain-exception-after-recovery',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.ok(errors[4].includes('retry=1'));
+    assert.equal(scheduled.length, 4);
+  } finally {
+    console.error = originalConsoleError;
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue logs non-debug push skip summary when text push guard rejects', async () => {
+  const logs = [];
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+  let saveCount = 0;
+  const before = Date.now();
+  const originalConsoleLog = console.log;
+
+  try {
+    console.log = (...args) => {
+      logs.push(args.map((part) => String(part)).join(' '));
+    };
+    const entry = makeEntry('msg-push-skip-no-active-connection', 'push skip no active connection');
+    entry.nextAttemptAt = before - 1_000;
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.gatewayContext = null;
+    bridge.sleepMs = async () => {};
+    bridge.scheduleSave = () => {
+      saveCount += 1;
+    };
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'push-skip-summary',
+    });
+
+    const skipSummary = logs.find(
+      (line) =>
+        line.includes('[bncr] outbox push skip') &&
+        line.includes(`mid=${entry.messageId}`) &&
+        line.includes('reason=no-gateway-context'),
+    );
+    assert.ok(skipSummary, 'push guard skip should emit non-debug summary log');
+
+    const updated = bridge.outbox.get(entry.messageId);
+    assert.ok(updated, 'entry should remain queued for retry after push skip');
+    assert.equal(updated.retryCount, 1);
+    assert.equal(updated.lastError, 'gateway context unavailable');
+    assert.ok(saveCount >= 2, 'guard reason and retry state should both be persisted');
+    assert.equal(scheduled.length, 1);
+  } finally {
+    console.log = originalConsoleLog;
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue converts tryPushEntry exceptions into retryable push failure', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const logs = [];
+  const scheduled = [];
+  let saveCount = 0;
+  const before = Date.now();
+  const originalConsoleLog = console.log;
+
+  try {
+    console.log = (...args) => {
+      logs.push(args.map((part) => String(part)).join(' '));
+    };
+    const entry = makeEntry('msg-pre-push-exception', 'pre push exception');
+    entry.nextAttemptAt = before - 1_000;
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async () => {
+      throw new Error('synthetic pre-push explosion');
+    };
+    bridge.sleepMs = async () => {};
+    bridge.scheduleSave = () => {
+      saveCount += 1;
+    };
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'pre-push-exception',
+    });
+
+    const failureSummary = logs.find(
+      (line) =>
+        line.includes('[bncr] outbox push fail') &&
+        line.includes(`mid=${entry.messageId}`) &&
+        line.includes('synthetic pre-push explosion'),
+    );
+    assert.ok(failureSummary, 'pre-push exception should emit non-debug push failure summary');
+
+    const updated = bridge.outbox.get(entry.messageId);
+    assert.ok(updated, 'entry should remain queued for retry after pre-push exception');
+    assert.equal(updated.retryCount, 1);
+    assert.equal(updated.lastError, 'synthetic pre-push explosion');
+    assert.ok(updated.nextAttemptAt >= updated.lastAttemptAt);
+    assert.equal(saveCount, 1);
+    assert.equal(scheduled.length, 1);
+  } finally {
+    console.log = originalConsoleLog;
     cleanupBridge(bridge);
   }
 });
@@ -454,7 +709,11 @@ test('flushPushQueue schedules retry after push failure without dead-lettering',
       scheduled.push(delayMs);
     };
 
-    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'push-failure-retry' });
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'push-failure-retry',
+    });
 
     const updated = bridge.outbox.get(entry.messageId);
     assert.ok(updated, 'entry should remain queued for retry');
@@ -520,11 +779,11 @@ test('sleepMs clamps invalid and oversized internal delays', async () => {
   const observedDelays = [];
 
   try {
-    globalThis.setTimeout = ((fn, delay, ...args) => {
+    globalThis.setTimeout = (fn, delay, ...args) => {
       observedDelays.push(delay);
       fn(...args);
       return { [Symbol.toPrimitive]: () => 0 };
-    });
+    };
 
     await bridge.sleepMs(Number.NaN);
     await bridge.sleepMs(Number.POSITIVE_INFINITY);
@@ -561,7 +820,10 @@ test('waitForMessageAck treats invalid timeout inputs as immediate timeout witho
 
   try {
     assert.equal(await bridge.waitForMessageAck('msg-invalid-nan-timeout', Number.NaN), 'timeout');
-    assert.equal(await bridge.waitForMessageAck('msg-invalid-infinity-timeout', Number.POSITIVE_INFINITY), 'timeout');
+    assert.equal(
+      await bridge.waitForMessageAck('msg-invalid-infinity-timeout', Number.POSITIVE_INFINITY),
+      'timeout',
+    );
     assert.equal(await bridge.waitForMessageAck('msg-invalid-negative-timeout', -1), 'timeout');
     assert.equal(await bridge.waitForMessageAck('', 1_000), 'timeout');
     assert.equal(bridge.messageAckWaiters.size, 0);
@@ -628,7 +890,9 @@ test('shutdown settles message ack waiters and clears waiter state', async () =>
     assert.equal(bridge.resolveMessageAck('msg-shutdown-1', 'acked'), false);
     assert.equal(bridge.resolveMessageAck('msg-shutdown-2', 'acked'), false);
 
-    const cleanupLog = logs.find((item) => item.scope === 'lifecycle' && item.message.startsWith('cleanup '));
+    const cleanupLog = logs.find(
+      (item) => item.scope === 'lifecycle' && item.message.startsWith('cleanup '),
+    );
     assert.ok(cleanupLog);
     const summary = JSON.parse(cleanupLog.message.slice('cleanup '.length));
     assert.equal(summary.reason, 'shutdown');
@@ -667,6 +931,49 @@ test('stopService settles message ack waiters and clears timers like shutdown', 
     assert.equal(bridge.earlyFileAcks.size, 0);
     assert.equal(bridge.resolveMessageAck('msg-stop-service', 'acked'), false);
   } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('flushPushQueue emits ack wait-start before blocking on message ack waiter', async () => {
+  const logs = [];
+  const bridge = createBncrBridge(createApiStub());
+  const originalConsoleLog = console.log;
+
+  try {
+    console.log = (...args) => {
+      logs.push(args.map((part) => String(part)).join(' '));
+    };
+    bridge.isDebugEnabled = () => true;
+    const entry = makeEntry('msg-ack-wait-start', 'ack wait start');
+    entry.nextAttemptAt = Date.now() - 1_000;
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async (pushedEntry) => {
+      pushedEntry.lastPushConnId = 'conn-wait-start';
+      pushedEntry.lastPushClientId = 'client-wait-start';
+      return true;
+    };
+    bridge.sleepMs = async () => {};
+    bridge.isOnline = () => true;
+    bridge.isOutboundAckRequired = () => true;
+    bridge.resolveMessageAckTimeoutMs = () => 5;
+
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'ack-wait-start',
+    });
+
+    const waitStart = logs.find(
+      (line) =>
+        line.includes('[bncr] outbox ack wait-start') &&
+        line.includes('msg-ack-wait-start') &&
+        line.includes('conn-wait-start'),
+    );
+    assert.ok(waitStart, 'push success should emit debug ack wait-start before waiter resolves');
+  } finally {
+    console.log = originalConsoleLog;
     cleanupBridge(bridge);
   }
 });
@@ -751,7 +1058,9 @@ test('handleAck success flushes queued outbound for the same account', async () 
       context: null,
     });
 
-    assert.deepEqual(spy.calls, [{ accountId: 'Primary', trigger: 'ack-ok', reason: 'message-acked' }]);
+    assert.deepEqual(spy.calls, [
+      { accountId: 'Primary', trigger: 'ack-ok', reason: 'message-acked' },
+    ]);
   } finally {
     spy.restore();
     cleanupBridge(bridge);
@@ -788,7 +1097,10 @@ test('handleAck retryable ack keeps entry queued and reports willRetry', async (
     assert.equal(updated.lastError, 'retryable-ack-from-test');
     assert.ok(updated.nextAttemptAt >= before + 900);
     assert.deepEqual(respondPayload, { ok: true, payload: { ok: true, willRetry: true } });
-    assert.equal(bridge.deadLetter.some((item) => item.messageId === 'msg-ack-retryable'), false);
+    assert.equal(
+      bridge.deadLetter.some((item) => item.messageId === 'msg-ack-retryable'),
+      false,
+    );
   } finally {
     cleanupBridge(bridge);
   }
@@ -818,7 +1130,10 @@ test('handleAck retryable ack does not resolve the pending message ack waiter', 
     assert.equal(await waiter, 'timeout');
     assert.equal(bridge.messageAckWaiters.size, 0);
     assert.equal(bridge.outbox.has(entry.messageId), true);
-    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), false);
+    assert.equal(
+      bridge.deadLetter.some((item) => item.messageId === entry.messageId),
+      false,
+    );
   } finally {
     cleanupBridge(bridge);
   }
@@ -849,7 +1164,10 @@ test('handleAck fatal ack moves entry to deadLetter and reports movedToDeadLette
     });
 
     assert.equal(bridge.outbox.has('msg-ack-fatal'), false);
-    assert.equal(bridge.deadLetter.some((item) => item.messageId === 'msg-ack-fatal'), true);
+    assert.equal(
+      bridge.deadLetter.some((item) => item.messageId === 'msg-ack-fatal'),
+      true,
+    );
     assert.deepEqual(respondPayload, { ok: true, payload: { ok: true, movedToDeadLetter: true } });
   } finally {
     cleanupBridge(bridge);
@@ -880,7 +1198,10 @@ test('handleAck fatal ack resolves pending message ack waiter as timeout', async
     assert.equal(await waiter, 'timeout');
     assert.equal(bridge.messageAckWaiters.size, 0);
     assert.equal(bridge.outbox.has(entry.messageId), false);
-    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), true);
+    assert.equal(
+      bridge.deadLetter.some((item) => item.messageId === entry.messageId),
+      true,
+    );
     assert.equal(bridge.resolveMessageAck(entry.messageId, 'acked'), false);
   } finally {
     cleanupBridge(bridge);
@@ -900,7 +1221,10 @@ test('moveToDeadLetter resolves pending message ack waiter as timeout', async ()
     assert.equal(await waiter, 'timeout');
     assert.equal(bridge.messageAckWaiters.size, 0);
     assert.equal(bridge.outbox.has(entry.messageId), false);
-    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), true);
+    assert.equal(
+      bridge.deadLetter.some((item) => item.messageId === entry.messageId),
+      true,
+    );
     assert.equal(bridge.resolveMessageAck(entry.messageId, 'acked'), false);
   } finally {
     cleanupBridge(bridge);
@@ -924,7 +1248,10 @@ test('collectDue retry-limit dead-letter resolves pending message ack waiter as 
     assert.equal(await waiter, 'timeout');
     assert.equal(bridge.messageAckWaiters.size, 0);
     assert.equal(bridge.outbox.has(entry.messageId), false);
-    assert.equal(bridge.deadLetter.some((item) => item.messageId === entry.messageId), true);
+    assert.equal(
+      bridge.deadLetter.some((item) => item.messageId === entry.messageId),
+      true,
+    );
     assert.equal(bridge.resolveMessageAck(entry.messageId, 'acked'), false);
   } finally {
     cleanupBridge(bridge);
@@ -941,7 +1268,10 @@ test('deadLetter memory keeps only the newest bounded entries', async () => {
     }
 
     assert.equal(bridge.deadLetter.length, 1000);
-    assert.equal(bridge.deadLetter.some((entry) => entry.messageId === 'dead-0'), false);
+    assert.equal(
+      bridge.deadLetter.some((entry) => entry.messageId === 'dead-0'),
+      false,
+    );
     assert.equal(bridge.deadLetter[0].messageId, 'dead-5');
     assert.equal(bridge.deadLetter.at(-1).messageId, 'dead-1004');
   } finally {
@@ -969,7 +1299,9 @@ test('late ok ack after fatal ack does not recreate outbox state or duplicate de
       context: null,
     });
 
-    const deadLetterCountBefore = bridge.deadLetter.filter((item) => item.messageId === 'msg-ack-fatal-late').length;
+    const deadLetterCountBefore = bridge.deadLetter.filter(
+      (item) => item.messageId === 'msg-ack-fatal-late',
+    ).length;
 
     await bridge.handleAck({
       params: {
@@ -982,7 +1314,9 @@ test('late ok ack after fatal ack does not recreate outbox state or duplicate de
       context: null,
     });
 
-    const deadLetterCountAfter = bridge.deadLetter.filter((item) => item.messageId === 'msg-ack-fatal-late').length;
+    const deadLetterCountAfter = bridge.deadLetter.filter(
+      (item) => item.messageId === 'msg-ack-fatal-late',
+    ).length;
     assert.equal(bridge.outbox.has('msg-ack-fatal-late'), false);
     assert.equal(deadLetterCountBefore, 1);
     assert.equal(deadLetterCountAfter, 1);
@@ -1052,7 +1386,10 @@ test('stale non-owner ack keeps waiter pending and leaves outbox entry intact', 
     });
 
     const waiterResult = await waiter;
-    assert.deepEqual(respondPayload, { ok: true, payload: { ok: true, stale: true, ignored: true } });
+    assert.deepEqual(respondPayload, {
+      ok: true,
+      payload: { ok: true, stale: true, ignored: true },
+    });
     assert.equal(waiterResult, 'timeout');
     assert.equal(bridge.outbox.has('msg-stale-non-owner'), true);
     assert.equal(bridge.messageAckWaiters.size, 0);
@@ -1295,8 +1632,16 @@ test('adaptive ack timeout matrix locks reasons and effective timeout bounds', a
       assert.equal(snapshot.ackObservability.recommendedAckTimeoutReason, item.reason, item.name);
       assert.equal(snapshot.ackObservability.defaultAckTimeoutMs, 30000, item.name);
       assert.equal(snapshot.ackObservability.adaptiveAckTimeoutEnabled, true, item.name);
-      assert.equal(snapshot.ackObservability.lateAckObservationExpired, item.expired === true, item.name);
-      assert.equal(snapshot.ackObservability.adaptiveAckRecovered, item.recovered === true, item.name);
+      assert.equal(
+        snapshot.ackObservability.lateAckObservationExpired,
+        item.expired === true,
+        item.name,
+      );
+      assert.equal(
+        snapshot.ackObservability.adaptiveAckRecovered,
+        item.recovered === true,
+        item.name,
+      );
       assert.equal(snapshot.ackStrategy.currentMs, item.timeoutMs, item.name);
       assert.equal(snapshot.ackStrategy.defaultMs, 30000, item.name);
       assert.equal(snapshot.ackStrategy.maxMs, 90000, item.name);
@@ -1304,7 +1649,11 @@ test('adaptive ack timeout matrix locks reasons and effective timeout bounds', a
       assert.equal(snapshot.ackStrategy.active, item.active, item.name);
       assert.equal(snapshot.ackStrategy.recovered, item.recovered === true, item.name);
       assert.equal(bridge.resolveMessageAckTimeoutMs('Primary'), item.timeoutMs, item.name);
-      assert.equal(bridge.buildRuntimeFlags('Primary').messageAckTimeoutMs, item.timeoutMs, item.name);
+      assert.equal(
+        bridge.buildRuntimeFlags('Primary').messageAckTimeoutMs,
+        item.timeoutMs,
+        item.name,
+      );
     }
   } finally {
     cleanupBridge(bridge);
@@ -1411,7 +1760,10 @@ test('adaptive ack timeout logs strategy changes with throttle', async () => {
 
     const adaptiveLogs = logs.filter((item) => item.scope === 'outbox ack timeout-adaptive');
     assert.equal(adaptiveLogs.length, 1);
-    assert.match(adaptiveLogs[0].message, /^Primary\|current=60000\|default=30000\|reason=late-ack-observed\|latePushMs=48000$/);
+    assert.match(
+      adaptiveLogs[0].message,
+      /^Primary\|current=60000\|default=30000\|reason=late-ack-observed\|latePushMs=48000$/,
+    );
   } finally {
     bridge.logInfo = originalLogInfo;
     cleanupBridge(bridge);
@@ -1528,7 +1880,9 @@ test('handleActivity flushes queued outbound for the same account', async () => 
       context: null,
     });
 
-    assert.deepEqual(spy.calls, [{ accountId: 'Primary', trigger: 'activity', reason: 'activity-heartbeat' }]);
+    assert.deepEqual(spy.calls, [
+      { accountId: 'Primary', trigger: 'activity', reason: 'activity-heartbeat' },
+    ]);
   } finally {
     spy.restore();
     cleanupBridge(bridge);
@@ -1556,13 +1910,14 @@ test('handleInbound flushes queued outbound for the same account before async di
       context: null,
     });
 
-    assert.deepEqual(spy.calls, [{ accountId: 'Primary', trigger: 'inbound', reason: 'inbound-accepted' }]);
+    assert.deepEqual(spy.calls, [
+      { accountId: 'Primary', trigger: 'inbound', reason: 'inbound-accepted' },
+    ]);
   } finally {
     spy.restore();
     cleanupBridge(bridge);
   }
 });
-
 
 test('reputation sorting prefers lower failure score and fresher ack', async () => {
   const bridge = createBncrBridge(createApiStub());
@@ -1669,7 +2024,6 @@ test('diagnostics exposes reputation details per connection', async () => {
     cleanupBridge(bridge);
   }
 });
-
 
 test('markSeen preserves capability and reputation state', async () => {
   const bridge = createBncrBridge(createApiStub());
@@ -1803,7 +2157,9 @@ test('ack timeout increments failure score and degrades capability', async () =>
     const timeoutSummary = logs.find((item) => item.scope === 'outbox ack timeout');
     assert.ok(timeoutSummary);
     assert.match(timeoutSummary.message, /waitMs=60000/);
-    const ackDebug = logs.find((item) => item.scope === 'outbox' && item.message.startsWith('ack '));
+    const ackDebug = logs.find(
+      (item) => item.scope === 'outbox' && item.message.startsWith('ack '),
+    );
     assert.ok(ackDebug);
     assert.match(ackDebug.message, /"ackTimeoutMs":60000/);
     assert.match(ackDebug.message, /"adaptiveAckTimeoutEnabled":true/);
@@ -1986,7 +2342,6 @@ test('handleFileChunk rejects out-of-range chunk indexes without mutating transf
   }
 });
 
-
 test('handleFileComplete aborts inbound transfer when chunks are missing', async () => {
   const bridge = createBncrBridge(createApiStub());
 
@@ -2088,7 +2443,6 @@ test('handleFileComplete aborts inbound transfer on sha256 mismatch', async () =
     cleanupBridge(bridge);
   }
 });
-
 
 test('handleFileChunk ignores chunks after inbound transfer is completed', async () => {
   const bridge = createBncrBridge(createApiStub());
@@ -2222,11 +2576,21 @@ test('waitChunkAck uses file ack waiter instead of polling transfer state', asyn
       updatedAt: Date.now(),
     });
 
-    const waiter = bridge.waitChunkAck({ transferId: 'transfer-event-chunk', chunkIndex: 0, timeoutMs: 1_000 });
+    const waiter = bridge.waitChunkAck({
+      transferId: 'transfer-event-chunk',
+      chunkIndex: 0,
+      timeoutMs: 1_000,
+    });
     assert.equal(bridge.fileAckWaiters.size, 1);
 
     await bridge.handleFileAck({
-      params: { accountId: 'Primary', transferId: 'transfer-event-chunk', stage: 'chunk', chunkIndex: 0, ok: true },
+      params: {
+        accountId: 'Primary',
+        transferId: 'transfer-event-chunk',
+        stage: 'chunk',
+        chunkIndex: 0,
+        ok: true,
+      },
       respond() {},
       client: { connId: 'conn-1' },
       context: null,
@@ -2261,11 +2625,20 @@ test('waitCompleteAck uses file ack waiter instead of polling transfer state', a
       updatedAt: Date.now(),
     });
 
-    const waiter = bridge.waitCompleteAck({ transferId: 'transfer-event-complete', timeoutMs: 1_000 });
+    const waiter = bridge.waitCompleteAck({
+      transferId: 'transfer-event-complete',
+      timeoutMs: 1_000,
+    });
     assert.equal(bridge.fileAckWaiters.size, 1);
 
     await bridge.handleFileAck({
-      params: { accountId: 'Primary', transferId: 'transfer-event-complete', stage: 'complete', ok: true, path: '/tmp/demo.png' },
+      params: {
+        accountId: 'Primary',
+        transferId: 'transfer-event-complete',
+        stage: 'complete',
+        ok: true,
+        path: '/tmp/demo.png',
+      },
       respond() {},
       client: { connId: 'conn-1' },
       context: null,
@@ -2367,13 +2740,25 @@ test('waitForFileAck reuses duplicate waiter for the same transfer stage key', a
       updatedAt: Date.now(),
     });
 
-    const waiter1 = bridge.waitCompleteAck({ transferId: 'transfer-event-duplicate', timeoutMs: 1_000 });
-    const waiter2 = bridge.waitCompleteAck({ transferId: 'transfer-event-duplicate', timeoutMs: 1_000 });
+    const waiter1 = bridge.waitCompleteAck({
+      transferId: 'transfer-event-duplicate',
+      timeoutMs: 1_000,
+    });
+    const waiter2 = bridge.waitCompleteAck({
+      transferId: 'transfer-event-duplicate',
+      timeoutMs: 1_000,
+    });
 
     assert.equal(bridge.fileAckWaiters.size, 1);
 
     await bridge.handleFileAck({
-      params: { accountId: 'Primary', transferId: 'transfer-event-duplicate', stage: 'complete', ok: true, path: '/tmp/demo-duplicate.png' },
+      params: {
+        accountId: 'Primary',
+        transferId: 'transfer-event-duplicate',
+        stage: 'complete',
+        ok: true,
+        path: '/tmp/demo-duplicate.png',
+      },
       respond() {},
       client: { connId: 'conn-1' },
       context: null,
@@ -2417,7 +2802,11 @@ test('file ack debug logs include transfer owner context', async () => {
       updatedAt: Date.now(),
     });
 
-    const waiter = bridge.waitChunkAck({ transferId: 'transfer-owner-logs', chunkIndex: 0, timeoutMs: 1_000 });
+    const waiter = bridge.waitChunkAck({
+      transferId: 'transfer-owner-logs',
+      chunkIndex: 0,
+      timeoutMs: 1_000,
+    });
     await bridge.handleFileAck({
       params: {
         accountId: 'Primary',
@@ -2491,8 +2880,6 @@ test('handleFileAck failure rejects waiter and clears file ack waiter state', as
     cleanupBridge(bridge);
   }
 });
-
-
 
 test('handleFileAck ignores chunk ack mutation after outbound transfer is completed', async () => {
   const bridge = createBncrBridge(createApiStub());
@@ -2612,13 +2999,15 @@ test('handleFileAck ignores complete ok mutation after outbound transfer is abor
   }
 });
 
-
 test('handleFileAck reports stale terminal completed ack as ignored without staleAccepted', async () => {
   const bridge = createBncrBridge(createApiStub());
   const originalObserveLease = bridge.observeLease;
 
   try {
-    bridge.observeLease = (...args) => ({ ...originalObserveLease.call(bridge, ...args), stale: true });
+    bridge.observeLease = (...args) => ({
+      ...originalObserveLease.call(bridge, ...args),
+      stale: true,
+    });
     bridge.fileSendTransfers.set('transfer-ack-stale-terminal-completed', {
       transferId: 'transfer-ack-stale-terminal-completed',
       accountId: 'Primary',
@@ -2685,7 +3074,10 @@ test('handleFileAck reports stale terminal aborted ack as ignored without staleA
   const originalObserveLease = bridge.observeLease;
 
   try {
-    bridge.observeLease = (...args) => ({ ...originalObserveLease.call(bridge, ...args), stale: true });
+    bridge.observeLease = (...args) => ({
+      ...originalObserveLease.call(bridge, ...args),
+      stale: true,
+    });
     bridge.fileSendTransfers.set('transfer-ack-stale-terminal-aborted', {
       transferId: 'transfer-ack-stale-terminal-aborted',
       accountId: 'Primary',
@@ -2782,7 +3174,10 @@ test('early cached complete file ack resolves later waiter immediately', async (
 
     assert.equal(bridge.fileAckWaiters.size, 0);
     assert.equal(bridge.earlyFileAcks.size, 1);
-    assert.equal(bridge.fileSendTransfers.get('transfer-event-early-complete')?.status, 'completed');
+    assert.equal(
+      bridge.fileSendTransfers.get('transfer-event-early-complete')?.status,
+      'completed',
+    );
     assert.equal(
       bridge.fileSendTransfers.get('transfer-event-early-complete')?.completedPath,
       '/tmp/early-complete.png',
@@ -2791,7 +3186,10 @@ test('early cached complete file ack resolves later waiter immediately', async (
     bridge.fileSendTransfers.get('transfer-event-early-complete').status = 'transferring';
     bridge.fileSendTransfers.get('transfer-event-early-complete').completedPath = undefined;
 
-    const result = await bridge.waitCompleteAck({ transferId: 'transfer-event-early-complete', timeoutMs: 1_000 });
+    const result = await bridge.waitCompleteAck({
+      transferId: 'transfer-event-early-complete',
+      timeoutMs: 1_000,
+    });
     assert.deepEqual(result, { path: '/tmp/early-complete.png' });
     assert.equal(bridge.fileAckWaiters.size, 0);
     assert.equal(bridge.earlyFileAcks.size, 0);
@@ -2896,9 +3294,17 @@ test('shutdown rejects file ack waiters and clears cached early file ack state',
       updatedAt: Date.now(),
     });
 
-    const waiter = bridge.waitCompleteAck({ transferId: 'transfer-event-shutdown', timeoutMs: 1_000 });
+    const waiter = bridge.waitCompleteAck({
+      transferId: 'transfer-event-shutdown',
+      timeoutMs: 1_000,
+    });
     bridge.earlyFileAcks.set('transfer-event-shutdown|complete|-', {
-      payload: { ok: false, transferId: 'transfer-event-shutdown', stage: 'complete', errorMessage: 'cached before shutdown' },
+      payload: {
+        ok: false,
+        transferId: 'transfer-event-shutdown',
+        stage: 'complete',
+        errorMessage: 'cached before shutdown',
+      },
       ok: false,
       at: Date.now(),
     });
@@ -2938,9 +3344,17 @@ test('stopService rejects file ack waiters and clears cached early file ack stat
       updatedAt: Date.now(),
     });
 
-    const waiter = bridge.waitCompleteAck({ transferId: 'transfer-event-stop-service', timeoutMs: 1_000 });
+    const waiter = bridge.waitCompleteAck({
+      transferId: 'transfer-event-stop-service',
+      timeoutMs: 1_000,
+    });
     bridge.earlyFileAcks.set('transfer-event-stop-service|complete|-', {
-      payload: { ok: false, transferId: 'transfer-event-stop-service', stage: 'complete', errorMessage: 'cached before stop' },
+      payload: {
+        ok: false,
+        transferId: 'transfer-event-stop-service',
+        stage: 'complete',
+        errorMessage: 'cached before stop',
+      },
       ok: false,
       at: Date.now(),
     });
@@ -3007,7 +3421,6 @@ test('startService reopens runtime scheduling after stopService cleanup', async 
   }
 });
 
-
 test('transferMediaToBncrClient chunk mode records init transferring and completed states', async () => {
   const bridge = createBncrBridge(createApiStub());
   const originalLoad = bridge.loadOutboundTransferMedia;
@@ -3027,7 +3440,11 @@ test('transferMediaToBncrClient chunk mode records init transferring and complet
     });
     bridge.activeConnectionByAccount.set('Primary', 'Primary:client-a');
     bridge.loadOutboundTransferMedia = async () => ({
-      loaded: { buffer: Buffer.alloc(5 * 1024 * 1024 + 1, 7), contentType: 'application/octet-stream', fileName: 'large.bin' },
+      loaded: {
+        buffer: Buffer.alloc(5 * 1024 * 1024 + 1, 7),
+        contentType: 'application/octet-stream',
+        fileName: 'large.bin',
+      },
       size: 5 * 1024 * 1024 + 1,
       mimeType: 'application/octet-stream',
       fileName: 'large.bin',
@@ -3107,7 +3524,6 @@ test('transferMediaToBncrClient chunk mode records init transferring and complet
   }
 });
 
-
 test('transferMediaToBncrClient aborts chunk mode after retry exhaustion', async () => {
   const bridge = createBncrBridge(createApiStub());
   const originalLoad = bridge.loadOutboundTransferMedia;
@@ -3128,7 +3544,11 @@ test('transferMediaToBncrClient aborts chunk mode after retry exhaustion', async
     });
     bridge.activeConnectionByAccount.set('Primary', 'Primary:client-a');
     bridge.loadOutboundTransferMedia = async () => ({
-      loaded: { buffer: Buffer.alloc(5 * 1024 * 1024 + 1, 9), contentType: 'application/octet-stream', fileName: 'retry.bin' },
+      loaded: {
+        buffer: Buffer.alloc(5 * 1024 * 1024 + 1, 9),
+        contentType: 'application/octet-stream',
+        fileName: 'retry.bin',
+      },
       size: 5 * 1024 * 1024 + 1,
       mimeType: 'application/octet-stream',
       fileName: 'retry.bin',
@@ -3204,22 +3624,47 @@ test('file transfer adopt only allows current outbound owner', async () => {
   try {
     const nowTs = Date.now();
     bridge.connections.set('Primary:owner', {
-      accountId: 'Primary', connId: 'conn-owner', clientId: 'owner', connectedAt: nowTs - 10_000, lastSeenAt: nowTs - 1_000,
-      outboundReadyUntil: nowTs + 30_000, preferredForOutboundUntil: nowTs + 10_000,
+      accountId: 'Primary',
+      connId: 'conn-owner',
+      clientId: 'owner',
+      connectedAt: nowTs - 10_000,
+      lastSeenAt: nowTs - 1_000,
+      outboundReadyUntil: nowTs + 30_000,
+      preferredForOutboundUntil: nowTs + 10_000,
     });
     bridge.connections.set('Primary:other', {
-      accountId: 'Primary', connId: 'conn-other', clientId: 'other', connectedAt: nowTs - 20_000, lastSeenAt: nowTs - 500,
-      outboundReadyUntil: nowTs + 30_000, preferredForOutboundUntil: 0,
+      accountId: 'Primary',
+      connId: 'conn-other',
+      clientId: 'other',
+      connectedAt: nowTs - 20_000,
+      lastSeenAt: nowTs - 500,
+      outboundReadyUntil: nowTs + 30_000,
+      preferredForOutboundUntil: 0,
     });
     bridge.activeConnectionByAccount.set('Primary', 'Primary:owner');
     const transfer = { ownerConnId: undefined, ownerClientId: undefined };
-    assert.equal(bridge.tryAdoptTransferOwner({ accountId: 'Primary', transfer, connId: 'conn-other', clientId: 'other' }), false);
-    assert.equal(bridge.tryAdoptTransferOwner({ accountId: 'Primary', transfer, connId: 'conn-owner', clientId: 'owner' }), false);
+    assert.equal(
+      bridge.tryAdoptTransferOwner({
+        accountId: 'Primary',
+        transfer,
+        connId: 'conn-other',
+        clientId: 'other',
+      }),
+      false,
+    );
+    assert.equal(
+      bridge.tryAdoptTransferOwner({
+        accountId: 'Primary',
+        transfer,
+        connId: 'conn-owner',
+        clientId: 'owner',
+      }),
+      false,
+    );
   } finally {
     cleanupBridge(bridge);
   }
 });
-
 
 test('push path does not depend on recent inbound helper fallback', async () => {
   const bridge = createBncrBridge(createApiStub());
@@ -3287,8 +3732,6 @@ test('handleInbound does not force inboundOnly false', async () => {
     cleanupBridge(bridge);
   }
 });
-
-
 
 test('first ack timeout fast-reroutes away from lastPushConnId when an alternative exists', async () => {
   const bridge = createBncrBridge(createApiStub());
@@ -3762,8 +4205,7 @@ test('startService caps oversized persisted deadLetter state during load', async
   const bridge = createBncrBridge(createApiStub());
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bncr-large-dead-state-'));
   try {
-    const persistedSessionKey =
-      'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031';
+    const persistedSessionKey = 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031';
     const deadLetter = Array.from({ length: 1005 }, (_, i) => {
       const entry = makeEntry(`persisted-dead-${i}`, `dead ${i}`);
       entry.sessionKey = persistedSessionKey;
@@ -3797,8 +4239,7 @@ test('startService skips malformed persisted entries without blocking valid stat
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bncr-dirty-state-'));
   try {
     const nowTs = Date.now();
-    const persistedSessionKey =
-      'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031';
+    const persistedSessionKey = 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031';
     const goodOutbox = makeEntry('persisted-good-outbox', 'good outbox');
     goodOutbox.sessionKey = persistedSessionKey;
     goodOutbox.payload.sessionKey = persistedSessionKey;
@@ -3820,10 +4261,7 @@ test('startService skips malformed persisted entries without blocking valid stat
         { messageId: 'bad-missing-session', accountId: 'Primary' },
         { ...goodOutbox, route: { malformed: true } },
       ],
-      deadLetter: [
-        { messageId: 'bad-dead-missing-session', accountId: 'Primary' },
-        goodDeadLetter,
-      ],
+      deadLetter: [{ messageId: 'bad-dead-missing-session', accountId: 'Primary' }, goodDeadLetter],
       sessionRoutes: [
         null,
         { sessionKey: 'bad-session-key', accountId: 'Primary', route: {}, updatedAt: nowTs },
@@ -3887,7 +4325,10 @@ test('startService skips malformed persisted entries without blocking valid stat
       groupId: '-1001',
       userId: '10001',
     });
-    assert.deepEqual(bridge.deadLetter.map((entry) => entry.messageId), ['persisted-good-dead']);
+    assert.deepEqual(
+      bridge.deadLetter.map((entry) => entry.messageId),
+      ['persisted-good-dead'],
+    );
     assert.equal(Number.isFinite(bridge.deadLetter[0].createdAt), true);
     assert.equal(bridge.deadLetter[0].retryCount, 0);
     assert.equal(Number.isFinite(bridge.deadLetter[0].nextAttemptAt), true);
@@ -3939,7 +4380,11 @@ test('flushPushQueue yields after per-account time budget instead of monopolizin
     bridge.isOnline = () => true;
     bridge.isOutboundAckRequired = () => false;
 
-    await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'time-budget-yield' });
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'time-budget-yield',
+    });
 
     assert.deepEqual(pushed, ['msg-time-budget-1']);
     assert.equal(bridge.outbox.size, 2);
@@ -4042,7 +4487,11 @@ test('channelStartAccount start-replace resolves the previous status worker', as
     const secondCtx = createAccountStatusCtx('Primary');
     const secondStarted = bridge.channelStartAccount(secondCtx);
 
-    await assertResolvesWithin(firstStarted, 50, 'previous channelStartAccount after start-replace');
+    await assertResolvesWithin(
+      firstStarted,
+      50,
+      'previous channelStartAccount after start-replace',
+    );
     assert.equal(bridge.channelAccountWorkers.size, 1);
 
     await bridge.channelStopAccount(secondCtx);
@@ -4072,7 +4521,7 @@ test('stopService clears and resolves running status workers', async () => {
 test('log dedupe state prunes expired and oversized keys', () => {
   const bridge = createBncrBridge(createApiStub());
   const originalNow = Date.now;
-  let fakeNow = originalNow() + 10_000_000;
+  const fakeNow = originalNow() + 10_000_000;
   Date.now = () => fakeNow;
 
   try {

@@ -4,6 +4,8 @@ import test from 'node:test';
 import {
   buildFlushDebugInfo,
   buildOutboxAckDebugInfo,
+  buildOutboxDrainSkipDebugInfo,
+  buildOutboxDrainStuckDebugInfo,
   buildOutboxPushOkDebugInfo,
   buildOutboxPushSkipDebugInfo,
   buildOutboxRouteSelectDebugInfo,
@@ -11,13 +13,13 @@ import {
   buildPushFailureDebugInfo,
   buildRetryRerouteDebugInfo,
 } from '../src/messaging/outbound/diagnostics.ts';
-import { OUTBOUND_SCHEDULE_SOURCE } from '../src/messaging/outbound/reasons.ts';
 import {
   buildOutboxOnlineDebugInfo,
   clampOutboxDrainDelay,
   computeNextOutboxDelay,
   findDueOutboxEntry,
 } from '../src/messaging/outbound/queue-selectors.ts';
+import { OUTBOUND_SCHEDULE_SOURCE } from '../src/messaging/outbound/reasons.ts';
 
 test('clampOutboxDrainDelay clamps negative, large, and invalid timer inputs', () => {
   assert.equal(clampOutboxDrainDelay(-1), 0);
@@ -131,12 +133,56 @@ test('buildOutboxPushSkipDebugInfo returns optional reachability and kind fields
       kind: 'file-transfer',
       reason: 'no-active-connection',
       recentInboundReachable: false,
+      routeReason: 'none',
+      connIds: [],
+      ownerConnId: 'conn-owner',
+      ownerClientId: 'client-owner',
+      activeConnectionCount: 1,
+      connections: [
+        {
+          accountId: 'Primary',
+          connId: 'conn-owner',
+          clientId: 'client-owner',
+          lastSeenAt: 123,
+          connectedAt: 100,
+          inboundOnly: true,
+          outboundReadyUntil: 456,
+          preferredForOutboundUntil: 789,
+          lastAckOkAt: 234,
+          lastPushTimeoutAt: 345,
+          pushFailureScore: 2,
+        },
+        {
+          accountId: 'Other',
+          connId: 'conn-other',
+          lastSeenAt: 999,
+          connectedAt: 900,
+        },
+      ],
     }),
     {
       messageId: 'mid-skip-2',
       accountId: 'Primary',
       kind: 'file-transfer',
       reason: 'no-active-connection',
+      routeReason: 'none',
+      connIds: [],
+      ownerConnId: 'conn-owner',
+      ownerClientId: 'client-owner',
+      activeConnectionCount: 1,
+      connections: [
+        {
+          connId: 'conn-owner',
+          clientId: 'client-owner',
+          lastSeenAt: 123,
+          outboundReadyUntil: 456,
+          preferredForOutboundUntil: 789,
+          inboundOnly: true,
+          lastAckOkAt: 234,
+          lastPushTimeoutAt: 345,
+          pushFailureScore: 2,
+        },
+      ],
       recentInboundReachable: false,
     },
   );
@@ -214,6 +260,116 @@ test('buildFlushDebugInfo copies target accounts and preserves flush context', (
     reason: 'scheduled-drain',
   });
   assert.notEqual(result.targetAccounts, targetAccounts);
+});
+
+test('buildOutboxDrainSkipDebugInfo captures reentrant drain skip context', () => {
+  assert.deepEqual(
+    buildOutboxDrainSkipDebugInfo({
+      bridgeId: 'bridge-drain',
+      accountId: 'Primary',
+      reason: 'already-running',
+      outboxSize: 2,
+      trigger: 'manual',
+    }),
+    {
+      bridge: 'bridge-drain',
+      accountId: 'Primary',
+      reason: 'already-running',
+      outboxSize: 2,
+      trigger: 'manual',
+    },
+  );
+});
+
+test('buildOutboxDrainStuckDebugInfo captures pending entries and connection details', () => {
+  assert.deepEqual(
+    buildOutboxDrainStuckDebugInfo({
+      bridgeId: 'bridge-stuck',
+      accountId: 'Primary',
+      reason: 'already-running',
+      trigger: 'activity',
+      outboxSize: 2,
+      pending: 1,
+      runningMs: 31_000,
+      runningSince: 1000,
+      hasGatewayContext: true,
+      activeConnectionCount: 1,
+      messageAckWaiters: 1,
+      fileAckWaiters: 0,
+      pendingEntries: [
+        {
+          messageId: 'mid-stuck',
+          retryCount: 2,
+          nextAttemptAt: 2000,
+          lastAttemptAt: 1500,
+          lastError: 'push-retry',
+          lastPushAt: 1400,
+          lastPushConnId: 'conn-1',
+          routeAttemptConnIds: ['conn-1'],
+        },
+      ],
+      connections: [
+        {
+          accountId: 'Primary',
+          connId: 'conn-1',
+          clientId: 'client-1',
+          connectedAt: 500,
+          lastSeenAt: 2500,
+          outboundReadyUntil: 3000,
+          preferredForOutboundUntil: 2800,
+          inboundOnly: false,
+          lastAckOkAt: 2400,
+          lastPushTimeoutAt: 0,
+          pushFailureScore: 0,
+        },
+        {
+          accountId: 'Other',
+          connId: 'conn-other',
+          connectedAt: 500,
+          lastSeenAt: 2500,
+        },
+      ],
+    }),
+    {
+      bridge: 'bridge-stuck',
+      accountId: 'Primary',
+      reason: 'already-running',
+      trigger: 'activity',
+      outboxSize: 2,
+      pending: 1,
+      runningMs: 31_000,
+      runningSince: 1000,
+      hasGatewayContext: true,
+      activeConnectionCount: 1,
+      waiters: { messageAck: 1, fileAck: 0 },
+      pendingEntries: [
+        {
+          messageId: 'mid-stuck',
+          retryCount: 2,
+          nextAttemptAt: 2000,
+          lastAttemptAt: 1500,
+          lastError: 'push-retry',
+          lastPushAt: 1400,
+          lastPushConnId: 'conn-1',
+          routeAttemptConnIds: ['conn-1'],
+        },
+      ],
+      connections: [
+        {
+          connId: 'conn-1',
+          clientId: 'client-1',
+          connectedAt: 500,
+          lastSeenAt: 2500,
+          outboundReadyUntil: 3000,
+          preferredForOutboundUntil: 2800,
+          inboundOnly: false,
+          lastAckOkAt: 2400,
+          lastPushTimeoutAt: 0,
+          pushFailureScore: 0,
+        },
+      ],
+    },
+  );
 });
 
 test('buildOutboxAckDebugInfo returns stable ack observability payload', () => {

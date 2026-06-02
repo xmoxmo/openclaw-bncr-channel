@@ -1,7 +1,5 @@
-import {
-  type OutboundScheduleSource,
-  OUTBOUND_TERMINAL_REASON,
-} from './reasons.ts';
+import type { BncrConnection } from '../../core/types.ts';
+import { OUTBOUND_TERMINAL_REASON, type OutboundScheduleSource } from './reasons.ts';
 import type { RetryRerouteDecision } from './retry-policy.ts';
 
 export function buildOutboxScheduleDebugInfo(args: {
@@ -33,12 +31,43 @@ export function buildOutboxPushSkipDebugInfo(args: {
   reason: string;
   recentInboundReachable?: boolean;
   kind?: string;
+  routeReason?: string;
+  connIds?: Iterable<string>;
+  ownerConnId?: string;
+  ownerClientId?: string;
+  activeConnectionCount?: number;
+  connections?: Iterable<BncrConnection>;
 }) {
   return {
     messageId: args.messageId,
     accountId: args.accountId,
     ...(args.kind ? { kind: args.kind } : {}),
     reason: args.reason,
+    ...(args.routeReason ? { routeReason: args.routeReason } : {}),
+    ...(args.connIds ? { connIds: Array.from(args.connIds) } : {}),
+    ...(args.ownerConnId ? { ownerConnId: args.ownerConnId } : {}),
+    ...(args.ownerClientId ? { ownerClientId: args.ownerClientId } : {}),
+    ...(typeof args.activeConnectionCount === 'number'
+      ? { activeConnectionCount: args.activeConnectionCount }
+      : {}),
+    ...(args.connections
+      ? {
+          connections: Array.from(args.connections)
+            .filter((c) => c.accountId === args.accountId)
+            .slice(0, 8)
+            .map((c) => ({
+              connId: c.connId,
+              clientId: c.clientId,
+              lastSeenAt: c.lastSeenAt,
+              outboundReadyUntil: (c as any).outboundReadyUntil,
+              preferredForOutboundUntil: (c as any).preferredForOutboundUntil,
+              inboundOnly: (c as any).inboundOnly,
+              lastAckOkAt: (c as any).lastAckOkAt,
+              lastPushTimeoutAt: (c as any).lastPushTimeoutAt,
+              pushFailureScore: (c as any).pushFailureScore,
+            })),
+        }
+      : {}),
     ...(typeof args.recentInboundReachable === 'boolean'
       ? { recentInboundReachable: args.recentInboundReachable }
       : {}),
@@ -106,6 +135,100 @@ export function buildFlushDebugInfo(args: {
     outboxSize: args.outboxSize,
     trigger: args.trigger,
     reason: args.reason,
+  };
+}
+
+export function buildOutboxDrainSkipDebugInfo(args: {
+  bridgeId: string;
+  accountId: string;
+  reason: string;
+  outboxSize: number;
+  trigger: string;
+}) {
+  return {
+    bridge: args.bridgeId,
+    accountId: args.accountId,
+    reason: args.reason,
+    outboxSize: args.outboxSize,
+    trigger: args.trigger,
+  };
+}
+
+export function buildOutboxDrainStuckDebugInfo(args: {
+  bridgeId: string;
+  accountId: string;
+  reason: string;
+  trigger: string;
+  outboxSize: number;
+  pending: number;
+  runningMs: number;
+  runningSince?: number | null;
+  hasGatewayContext: boolean;
+  activeConnectionCount: number;
+  messageAckWaiters: number;
+  fileAckWaiters: number;
+  pendingEntries?: Iterable<{
+    messageId?: string;
+    retryCount?: number;
+    nextAttemptAt?: number;
+    lastAttemptAt?: number;
+    lastError?: string;
+    lastPushAt?: number;
+    lastPushConnId?: string;
+    routeAttemptConnIds?: string[];
+  }>;
+  connections?: Iterable<BncrConnection>;
+}) {
+  return {
+    bridge: args.bridgeId,
+    accountId: args.accountId,
+    reason: args.reason,
+    trigger: args.trigger,
+    outboxSize: args.outboxSize,
+    pending: args.pending,
+    runningMs: args.runningMs,
+    runningSince: args.runningSince || null,
+    hasGatewayContext: args.hasGatewayContext,
+    activeConnectionCount: args.activeConnectionCount,
+    waiters: {
+      messageAck: args.messageAckWaiters,
+      fileAck: args.fileAckWaiters,
+    },
+    ...(args.pendingEntries
+      ? {
+          pendingEntries: Array.from(args.pendingEntries)
+            .slice(0, 8)
+            .map((entry) => ({
+              messageId: entry.messageId || '',
+              retryCount: entry.retryCount,
+              nextAttemptAt: entry.nextAttemptAt,
+              lastAttemptAt: entry.lastAttemptAt,
+              lastError: entry.lastError,
+              lastPushAt: entry.lastPushAt,
+              lastPushConnId: entry.lastPushConnId,
+              routeAttemptConnIds: entry.routeAttemptConnIds,
+            })),
+        }
+      : {}),
+    ...(args.connections
+      ? {
+          connections: Array.from(args.connections)
+            .filter((c) => c.accountId === args.accountId)
+            .slice(0, 8)
+            .map((c) => ({
+              connId: c.connId,
+              clientId: c.clientId,
+              connectedAt: c.connectedAt,
+              lastSeenAt: c.lastSeenAt,
+              outboundReadyUntil: (c as any).outboundReadyUntil,
+              preferredForOutboundUntil: (c as any).preferredForOutboundUntil,
+              inboundOnly: (c as any).inboundOnly,
+              lastAckOkAt: (c as any).lastAckOkAt,
+              lastPushTimeoutAt: (c as any).lastPushTimeoutAt,
+              pushFailureScore: (c as any).pushFailureScore,
+            })),
+        }
+      : {}),
   };
 }
 
@@ -207,8 +330,7 @@ export function buildPushFailureDebugInfo(args: {
     ...(typeof args.retryable === 'boolean' ? { retryable: args.retryable } : {}),
     retryCount: args.retryCount,
     error:
-      (typeof args.lastError === 'string' && args.lastError) ||
-      OUTBOUND_TERMINAL_REASON.PUSH_RETRY,
+      (typeof args.lastError === 'string' && args.lastError) || OUTBOUND_TERMINAL_REASON.PUSH_RETRY,
   };
 }
 

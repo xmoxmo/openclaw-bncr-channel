@@ -21,40 +21,6 @@ import {
   findCapabilityConnection,
 } from './core/connection-capability.ts';
 import {
-  buildFileTransferOutboxEntry as buildFileTransferOutboxEntryFromRuntime,
-  buildTextOutboxEntry as buildTextOutboxEntryFromRuntime,
-} from './core/outbox-entry-builders.ts';
-import { buildOutboxEnqueueDebugInfo } from './core/outbox-enqueue.ts';
-import {
-  appendDeadLetter,
-  buildDeadLetterEntry,
-  collectDueOutboxEntries,
-} from './core/outbox-queue.ts';
-import { resolveFileTransferGuard } from './core/outbox-file-transfer-guards.ts';
-import { prepareFileTransferRouteSelection } from './core/outbox-file-transfer-prep.ts';
-import {
-  buildFileTransferPushOkArgs,
-  buildFileTransferPushSuccessArgs,
-} from './core/outbox-file-transfer-bookkeeping.ts';
-import {
-  buildFileTransferPushFailureArgs,
-  resolveFileTransferFailureState,
-} from './core/outbox-file-transfer-failure.ts';
-import {
-  buildFileTransferBroadcastPayload,
-  buildFileTransferRouteSelectArgs,
-} from './core/outbox-file-transfer-success.ts';
-import { summarizeOutboxEntry } from './core/outbox-summary.ts';
-import { resolveTextPushGuard } from './core/outbox-text-push-guards.ts';
-import { prepareTextPushRouteSelection } from './core/outbox-text-push-prep.ts';
-import { buildTextPushFailureArgs } from './core/outbox-text-push-failure.ts';
-import {
-  buildTextPushBroadcastPayload,
-  buildTextPushOkArgs,
-  buildTextPushRouteSelectArgs,
-  buildTextPushSuccessArgs,
-} from './core/outbox-text-push-success.ts';
-import {
   getRevalidatedAttemptReason,
   hasAlternativeLiveConnection as hasAlternativeLiveConnectionFromRuntime,
   hasRecentInboundReachability as hasRecentInboundReachabilityFromRuntime,
@@ -64,8 +30,6 @@ import {
 import { buildDiagnosticsPayload } from './core/diagnostics.ts';
 import { buildDownlinkHealth as buildDownlinkHealthFromRuntime } from './core/downlink-health.ts';
 import { buildExtendedDiagnostics as buildExtendedDiagnosticsFromRuntime } from './core/extended-diagnostics.ts';
-import { observeLeaseState, matchesTransferOwner as matchesTransferOwnerFromRuntime } from './core/lease-state.ts';
-import { emitBncrLog, emitBncrLogLine } from './core/logging.ts';
 import { buildFileAckKey } from './core/file-ack.ts';
 import {
   buildFileTransferAbortPayload,
@@ -73,25 +37,46 @@ import {
   buildFileTransferCompletePayload,
   buildFileTransferInitPayload,
 } from './core/file-transfer-payloads.ts';
+import {
+  matchesTransferOwner as matchesTransferOwnerFromRuntime,
+  observeLeaseState,
+} from './core/lease-state.ts';
+import { emitBncrLog, emitBncrLogLine } from './core/logging.ts';
+import { buildOutboxEnqueueDebugInfo } from './core/outbox-enqueue.ts';
+import {
+  buildFileTransferOutboxEntry as buildFileTransferOutboxEntryFromRuntime,
+  buildTextOutboxEntry as buildTextOutboxEntryFromRuntime,
+} from './core/outbox-entry-builders.ts';
+import {
+  buildFileTransferPushOkArgs,
+  buildFileTransferPushSuccessArgs,
+} from './core/outbox-file-transfer-bookkeeping.ts';
+import {
+  buildFileTransferPushFailureArgs,
+  resolveFileTransferFailureState,
+} from './core/outbox-file-transfer-failure.ts';
+import { resolveFileTransferGuard } from './core/outbox-file-transfer-guards.ts';
+import { prepareFileTransferRouteSelection } from './core/outbox-file-transfer-prep.ts';
+import {
+  buildFileTransferBroadcastPayload,
+  buildFileTransferRouteSelectArgs,
+} from './core/outbox-file-transfer-success.ts';
+import {
+  appendDeadLetter,
+  buildDeadLetterEntry,
+  collectDueOutboxEntries,
+} from './core/outbox-queue.ts';
+import { summarizeOutboxEntry } from './core/outbox-summary.ts';
+import { buildTextPushFailureArgs } from './core/outbox-text-push-failure.ts';
+import { resolveTextPushGuard } from './core/outbox-text-push-guards.ts';
+import { prepareTextPushRouteSelection } from './core/outbox-text-push-prep.ts';
+import {
+  buildTextPushBroadcastPayload,
+  buildTextPushOkArgs,
+  buildTextPushRouteSelectArgs,
+  buildTextPushSuccessArgs,
+} from './core/outbox-text-push-success.ts';
 import { resolveBncrChannelPolicy, resolveBncrConfigWarnings } from './core/policy.ts';
-import {
-  getOpenClawRuntimeConfig,
-  getOpenClawRuntimeConfigOrDefault,
-} from './openclaw/config-runtime.ts';
-import {
-  loadOpenClawWebMedia,
-  saveOpenClawChannelMediaBuffer,
-  type OpenClawLoadedMedia,
-} from './openclaw/media-runtime.ts';
-import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
-import {
-  extractOpenClawToolSend,
-  openClawJsonResult,
-  readOpenClawBooleanParam,
-  readOpenClawJsonFileWithFallback,
-  readOpenClawStringParam,
-  writeOpenClawJsonFileAtomically,
-} from './openclaw/sdk-helpers.ts';
 import {
   appendBoundedRegisterTrace,
   buildRegisterDriftSnapshot,
@@ -130,13 +115,11 @@ import {
   sendBncrReplyAction,
 } from './messaging/outbound/actions.ts';
 import {
-  buildBncrMediaOutboundFrame,
-  resolveBncrOutboundMessageType,
-} from './messaging/outbound/media.ts';
-import {
   buildEnqueueFromReplyDebugInfo,
   buildFlushDebugInfo,
   buildOutboxAckDebugInfo,
+  buildOutboxDrainSkipDebugInfo,
+  buildOutboxDrainStuckDebugInfo,
   buildOutboxPushOkDebugInfo,
   buildOutboxPushSkipDebugInfo,
   buildOutboxRouteSelectDebugInfo,
@@ -145,6 +128,28 @@ import {
   buildReplyMediaFallbackDebugInfo,
   buildRetryRerouteDebugInfo,
 } from './messaging/outbound/diagnostics.ts';
+import {
+  buildBncrMediaOutboundFrame,
+  resolveBncrOutboundMessageType,
+} from './messaging/outbound/media.ts';
+import {
+  getOpenClawRuntimeConfig,
+  getOpenClawRuntimeConfigOrDefault,
+} from './openclaw/config-runtime.ts';
+import {
+  type OpenClawLoadedMedia,
+  loadOpenClawWebMedia,
+  saveOpenClawChannelMediaBuffer,
+} from './openclaw/media-runtime.ts';
+import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
+import {
+  extractOpenClawToolSend,
+  openClawJsonResult,
+  readOpenClawBooleanParam,
+  readOpenClawJsonFileWithFallback,
+  readOpenClawStringParam,
+  writeOpenClawJsonFileAtomically,
+} from './openclaw/sdk-helpers.ts';
 
 function buildInboundAcceptedLifecycleDebugInfo(args: {
   stage: 'accepted';
@@ -278,33 +283,13 @@ function buildInboundResponsePayload(
       };
   }
 }
+import { buildBncrDurableQueuedResult } from './messaging/outbound/durable-queue-adapter.ts';
 import {
-  buildMediaTextFallback,
   type MediaDedupeCacheEntry,
+  buildMediaTextFallback,
   normalizeMessageText,
   normalizeReplyToId,
 } from './messaging/outbound/media-dedupe.ts';
-import {
-  buildReplyTextOutboxEntry,
-  enqueueNormalizedReplyPayload,
-  enqueueReplyMediaFallbackTextEntry,
-  enqueueReplyMediaFileTransferEntry,
-  enqueueSingleReplyMediaEntry,
-  enqueueReplyTextEntry,
-  hasReplyMediaEntries,
-  normalizeReplyPayload,
-  type NormalizedReplyPayload,
-  type ReplyMediaEntriesParams,
-  type ReplyMediaFileTransferParams,
-  type ReplyPayloadInput,
-} from './messaging/outbound/reply-enqueue.ts';
-import {
-  OUTBOUND_DEGRADE_REASON,
-  OUTBOUND_FLUSH_REASON,
-  OUTBOUND_FLUSH_TRIGGER,
-  OUTBOUND_SCHEDULE_SOURCE,
-  OUTBOUND_TERMINAL_REASON,
-} from './messaging/outbound/reasons.ts';
 import {
   buildOutboxOnlineDebugInfo,
   clampOutboxDrainDelay,
@@ -318,29 +303,46 @@ import {
   updateMinOutboxDelay,
 } from './messaging/outbound/queue-selectors.ts';
 import {
+  OUTBOUND_DEGRADE_REASON,
+  OUTBOUND_FLUSH_REASON,
+  OUTBOUND_FLUSH_TRIGGER,
+  OUTBOUND_SCHEDULE_SOURCE,
+  OUTBOUND_TERMINAL_REASON,
+} from './messaging/outbound/reasons.ts';
+import {
+  type NormalizedReplyPayload,
+  type ReplyMediaEntriesParams,
+  type ReplyMediaFileTransferParams,
+  type ReplyPayloadInput,
+  buildReplyTextOutboxEntry,
+  enqueueNormalizedReplyPayload,
+  enqueueReplyMediaFallbackTextEntry,
+  enqueueReplyMediaFileTransferEntry,
+  enqueueReplyTextEntry,
+  enqueueSingleReplyMediaEntry,
+  hasReplyMediaEntries,
+  normalizeReplyPayload,
+} from './messaging/outbound/reply-enqueue.ts';
+import {
   computePushFailureDecision,
   computeRetryRerouteDecision,
 } from './messaging/outbound/retry-policy.ts';
 import { sendBncrMedia, sendBncrText } from './messaging/outbound/send.ts';
-import { buildBncrDurableQueuedResult } from './messaging/outbound/durable-queue-adapter.ts';
 import { BNCR_CHANNEL_CAPABILITIES } from './plugin/capabilities.ts';
 import { BNCR_CONFIG_SURFACE } from './plugin/config.ts';
-import { createBncrGatewayRuntime } from './plugin/gateway-runtime.ts';
 import { BNCR_GATEWAY_METHODS } from './plugin/gateway-methods.ts';
-import { BNCR_CHANNEL_META } from './plugin/meta.ts';
-import { createBncrMessagingSurface } from './plugin/messaging.ts';
-import { createBncrMessageSend } from './plugin/message-send.ts';
+import { createBncrGatewayRuntime } from './plugin/gateway-runtime.ts';
 import { BNCR_MESSAGE_RECEIVE_POLICY } from './plugin/message-policy.ts';
+import { createBncrMessageSend } from './plugin/message-send.ts';
+import { createBncrMessagingSurface } from './plugin/messaging.ts';
+import { BNCR_CHANNEL_META } from './plugin/meta.ts';
 import { createBncrOutboundRuntime } from './plugin/outbound.ts';
 import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
 import { createBncrStatusSurface } from './plugin/status.ts';
 import {
-  clearAllBncrStatusWorkers,
-  clearBncrStatusWorker,
-  startBncrStatusWorker,
-  stopBncrStatusWorker,
-  type ChannelAccountWorkerHandle,
-} from './runtime/status-worker.ts';
+  pruneLogDedupeState as pruneLogDedupeStateFromRuntime,
+  shouldEmitDedupLog as shouldEmitDedupLogFromRuntime,
+} from './runtime/log-dedupe.ts';
 import {
   buildBncrRuntimeAckStrategy,
   computeBncrRecommendedAckTimeoutMs,
@@ -351,7 +353,6 @@ import {
   buildBncrRuntimeStatusInput,
   resolveBncrOutboundAckRequired,
 } from './runtime/outbound-flags.ts';
-import { buildRuntimeStatusSnapshots } from './runtime/status-snapshots.ts';
 import {
   applyBncrPushFailureDecisionToEntry,
   applyBncrRetryRerouteDecisionToEntry,
@@ -360,10 +361,14 @@ import {
   buildBncrOutboxFailureEntryPatch,
   buildBncrOutboxPushSuccessEntryPatch,
 } from './runtime/outbox-transitions.ts';
+import { buildRuntimeStatusSnapshots } from './runtime/status-snapshots.ts';
 import {
-  pruneLogDedupeState as pruneLogDedupeStateFromRuntime,
-  shouldEmitDedupLog as shouldEmitDedupLogFromRuntime,
-} from './runtime/log-dedupe.ts';
+  type ChannelAccountWorkerHandle,
+  clearAllBncrStatusWorkers,
+  clearBncrStatusWorker,
+  startBncrStatusWorker,
+  stopBncrStatusWorker,
+} from './runtime/status-worker.ts';
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'plugin.bncr.push';
 const BNCR_FILE_INIT_EVENT = 'plugin.bncr.file.init';
@@ -379,6 +384,9 @@ const MAX_ACCOUNT_ACTIVITY_ENTRIES = 1000;
 const PUSH_DRAIN_INTERVAL_MS = 500;
 const PUSH_DRAIN_ACCOUNT_BUDGET = 5;
 const PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS = 2_000;
+const PUSH_DRAIN_EXCEPTION_RETRY_LIMIT = 3;
+const PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS = 1_000;
+const PUSH_DRAIN_STUCK_WARN_MS = 30_000;
 const PUSH_ACK_TIMEOUT_MS = 30_000;
 const ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED = true;
 const RECOMMENDED_ACK_TIMEOUT_MIN_MS = PUSH_ACK_TIMEOUT_MS;
@@ -392,7 +400,8 @@ const FILE_FORCE_CHUNK = true; // 统一走 WS 分块，保留 base64 仅作兜�
 const FILE_INLINE_THRESHOLD = 5 * 1024 * 1024; // fallback 阈值（仅 FILE_FORCE_CHUNK=false 时生效）
 const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
 const INBOUND_FILE_TRANSFER_MAX_BYTES = 50 * 1024 * 1024;
-const INBOUND_FILE_TRANSFER_MAX_CHUNKS = Math.ceil(INBOUND_FILE_TRANSFER_MAX_BYTES / FILE_CHUNK_SIZE) + 1;
+const INBOUND_FILE_TRANSFER_MAX_CHUNKS =
+  Math.ceil(INBOUND_FILE_TRANSFER_MAX_BYTES / FILE_CHUNK_SIZE) + 1;
 const FILE_CHUNK_RETRY = 3;
 const FILE_ACK_TIMEOUT_MS = 30_000;
 const FILE_TRANSFER_ACK_TTL_MS = 30_000;
@@ -557,7 +566,6 @@ function normalizeBncrSendParams(input: {
     audioAsVoice,
   };
 }
-
 
 function now() {
   return Date.now();
@@ -755,7 +763,10 @@ class BncrBridgeRuntime {
   private lastLateAckQueueLatencyMsByAccount = new Map<string, number>();
   private lastLateAckPushLatencyMsByAccount = new Map<string, number>();
   private adaptiveAckRecoveryOkCountByAccount = new Map<string, number>();
-  private adaptiveAckTimeoutLogStateByAccount = new Map<string, { at: number; timeoutMs: number; reason: string }>();
+  private adaptiveAckTimeoutLogStateByAccount = new Map<
+    string,
+    { at: number; timeoutMs: number; reason: string }
+  >();
   private channelAccountWorkers = new Map<string, ChannelAccountWorkerHandle>();
   private logDedupeState = new Map<string, { at: number; sig: string }>();
   private canonicalAgentId: string | null = null;
@@ -773,6 +784,9 @@ class BncrBridgeRuntime {
   private saveTimer: NodeJS.Timeout | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
   private pushDrainRunningAccounts = new Set<string>();
+  private pushDrainRunningSinceByAccount = new Map<string, number>();
+  private pushDrainStuckWarnedAtByAccount = new Map<string, number>();
+  private pushDrainExceptionRetryCount = 0;
   private messageAckWaiters = new Map<
     // Refactor boundary note (message ACK runtime):
     // These waiters are part of the outbound message-ack lifecycle, not just a utility map.
@@ -1803,7 +1817,9 @@ class BncrBridgeRuntime {
     const primaryKey = this.activeConnectionByAccount.get(acc);
     const primary = primaryKey ? this.connections.get(primaryKey) : null;
 
-    const isEligible = (conn: BncrConnection | null | undefined): conn is BncrConnection & {
+    const isEligible = (
+      conn: BncrConnection | null | undefined,
+    ): conn is BncrConnection & {
       outboundReadyUntil?: number;
       preferredForOutboundUntil?: number;
       inboundOnly?: boolean;
@@ -1848,10 +1864,13 @@ class BncrBridgeRuntime {
         const sb = candidateScore(b);
         if (sb.preferred !== sa.preferred) return sb.preferred - sa.preferred;
         if (sb.ready !== sa.ready) return sb.ready - sa.ready;
-        if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty) return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
-        if (sa.pushFailureScore !== sb.pushFailureScore) return sa.pushFailureScore - sb.pushFailureScore;
+        if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty)
+          return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
+        if (sa.pushFailureScore !== sb.pushFailureScore)
+          return sa.pushFailureScore - sb.pushFailureScore;
         if (sb.lastAckOkAt !== sa.lastAckOkAt) return sb.lastAckOkAt - sa.lastAckOkAt;
-        if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt) return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
+        if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt)
+          return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
         if (sb.recentInbound !== sa.recentInbound) return sb.recentInbound - sa.recentInbound;
         if (sb.lastSeenAt !== sa.lastSeenAt) return sb.lastSeenAt - sa.lastSeenAt;
         return sb.connectedAt - sa.connectedAt;
@@ -1899,7 +1918,9 @@ class BncrBridgeRuntime {
     const t = now();
     const connIds = new Set<string>();
 
-    const isEligible = (conn: BncrConnection | null | undefined): conn is BncrConnection & {
+    const isEligible = (
+      conn: BncrConnection | null | undefined,
+    ): conn is BncrConnection & {
       outboundReadyUntil?: number;
       preferredForOutboundUntil?: number;
       inboundOnly?: boolean;
@@ -1947,10 +1968,13 @@ class BncrBridgeRuntime {
         const sb = candidateScore(b);
         if (sb.preferred !== sa.preferred) return sb.preferred - sa.preferred;
         if (sb.ready !== sa.ready) return sb.ready - sa.ready;
-        if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty) return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
-        if (sa.pushFailureScore !== sb.pushFailureScore) return sa.pushFailureScore - sb.pushFailureScore;
+        if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty)
+          return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
+        if (sa.pushFailureScore !== sb.pushFailureScore)
+          return sa.pushFailureScore - sb.pushFailureScore;
         if (sb.lastAckOkAt !== sa.lastAckOkAt) return sb.lastAckOkAt - sa.lastAckOkAt;
-        if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt) return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
+        if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt)
+          return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
         if (sb.recentInbound !== sa.recentInbound) return sb.recentInbound - sa.recentInbound;
         if (sb.lastSeenAt !== sa.lastSeenAt) return sb.lastSeenAt - sa.lastSeenAt;
         return sb.connectedAt - sa.connectedAt;
@@ -2034,10 +2058,7 @@ class BncrBridgeRuntime {
 
   private tryAdoptTransferOwner(args: {
     accountId: string;
-    transfer:
-      | FileSendTransferState
-      | FileRecvTransferState
-      | undefined;
+    transfer: FileSendTransferState | FileRecvTransferState | undefined;
     connId: string;
     clientId?: string;
   }): boolean {
@@ -2169,6 +2190,7 @@ class BncrBridgeRuntime {
     this.recordOutboxPrePushFailure({
       entry: args.entry,
       lastError: args.guard.lastError,
+      persist: true,
     });
     if (args.guard.reason === 'media-url-missing') {
       this.logOutboxPushFailure({
@@ -2184,9 +2206,12 @@ class BncrBridgeRuntime {
       messageId: args.entry.messageId,
       accountId: args.entry.accountId,
       kind: 'file-transfer',
-      reason: args.guard.reason === 'no-gateway-context' ? 'no-gateway-context' : 'no-active-connection',
+      reason:
+        args.guard.reason === 'no-gateway-context' ? 'no-gateway-context' : 'no-active-connection',
       recentInboundReachable:
-        args.guard.reason === 'no-active-connection' ? args.guard.recentInboundReachable : undefined,
+        args.guard.reason === 'no-active-connection'
+          ? args.guard.recentInboundReachable
+          : undefined,
     });
   }
 
@@ -2479,12 +2504,24 @@ class BncrBridgeRuntime {
       routeSelection: selection,
     });
     if (!guard.ok) {
+      this.recordOutboxPrePushFailure({
+        entry,
+        lastError:
+          guard.reason === 'no-gateway-context'
+            ? 'gateway context unavailable'
+            : 'no active bncr client',
+        persist: true,
+      });
       this.logOutboxPushSkip({
         messageId: entry.messageId,
         accountId: entry.accountId,
         reason: guard.reason,
         recentInboundReachable:
           guard.reason === 'no-active-connection' ? guard.recentInboundReachable : undefined,
+        routeReason: selection.routeReason,
+        connIds: selection.connIds,
+        ownerConnId: selection.ownerConnId,
+        ownerClientId: owner?.clientId,
       });
       return false;
     }
@@ -2516,10 +2553,24 @@ class BncrBridgeRuntime {
     kind?: 'file-transfer';
     reason: string;
     recentInboundReachable?: boolean;
+    routeReason?: string;
+    connIds?: Iterable<string>;
+    ownerConnId?: string;
+    ownerClientId?: string;
   }) {
     this.logInfo(
+      'outbox push skip',
+      `mid=${args.messageId}|q=${this.outbox.size}|reason=${args.reason}${args.kind ? `|kind=${args.kind}` : ''}`,
+    );
+    this.logInfo(
       'outbox',
-      `push-skip ${JSON.stringify(buildOutboxPushSkipDebugInfo(args))}`,
+      `push-skip ${JSON.stringify(
+        buildOutboxPushSkipDebugInfo({
+          ...args,
+          activeConnectionCount: this.activeConnectionCount(args.accountId),
+          connections: this.connections.values(),
+        }),
+      )}`,
       { debugOnly: true },
     );
   }
@@ -2550,11 +2601,9 @@ class BncrBridgeRuntime {
     retryable?: boolean;
     lastError?: string;
   }) {
-    this.logInfo(
-      'outbox',
-      `push-fail ${JSON.stringify(buildPushFailureDebugInfo(args))}`,
-      { debugOnly: true },
-    );
+    this.logInfo('outbox', `push-fail ${JSON.stringify(buildPushFailureDebugInfo(args))}`, {
+      debugOnly: true,
+    });
   }
 
   private logOutboxPushOkSummary(messageId: string) {
@@ -2607,14 +2656,18 @@ class BncrBridgeRuntime {
           sessionKey: args.entry.sessionKey,
           to: formatDisplayScope(args.entry.route),
           kind:
-            isPlainObject(args.entry.payload?._meta) && args.entry.payload?._meta?.kind === 'file-transfer'
+            isPlainObject(args.entry.payload?._meta) &&
+            args.entry.payload?._meta?.kind === 'file-transfer'
               ? 'file-transfer'
               : undefined,
           requireAck: args.requireAck,
           ackResult: args.ackResult,
           ackStage: 'message',
           ackOutcome: args.ackResult,
-          reason: args.ackResult === 'timeout' ? OUTBOUND_TERMINAL_REASON.PUSH_ACK_TIMEOUT : 'message-acked',
+          reason:
+            args.ackResult === 'timeout'
+              ? OUTBOUND_TERMINAL_REASON.PUSH_ACK_TIMEOUT
+              : 'message-acked',
           ackTimeoutMs: typeof args.ackTimeoutMs === 'number' ? args.ackTimeoutMs : undefined,
           adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
           onlineNow: args.onlineNow,
@@ -2639,16 +2692,13 @@ class BncrBridgeRuntime {
     localNextDelay: number | null;
     ackTimeoutMs?: number | null;
   }) {
-    this.logOutboxAckSummary(
-      args.requireAck ? 'outbox ack timeout' : 'outbox ack retry',
-      {
-        messageId: args.entry.messageId,
-        connId: args.entry.lastPushConnId,
-        clientId: args.entry.lastPushClientId,
-        err: args.requireAck ? undefined : args.entry.lastError,
-        waitMs: args.requireAck ? args.ackTimeoutMs : undefined,
-      },
-    );
+    this.logOutboxAckSummary(args.requireAck ? 'outbox ack timeout' : 'outbox ack retry', {
+      messageId: args.entry.messageId,
+      connId: args.entry.lastPushConnId,
+      clientId: args.entry.lastPushClientId,
+      err: args.requireAck ? undefined : args.entry.lastError,
+      waitMs: args.requireAck ? args.ackTimeoutMs : undefined,
+    });
     this.logInfo(
       'outbox',
       `retry-reroute ${JSON.stringify(
@@ -2684,12 +2734,7 @@ class BncrBridgeRuntime {
     stale: boolean,
     result: { ok: true; movedToDeadLetter?: true; willRetry?: true },
   ) {
-    respond(
-      true,
-      stale
-        ? { ...result, stale: true, staleAccepted: true }
-        : result,
-    );
+    respond(true, stale ? { ...result, stale: true, staleAccepted: true } : result);
   }
 
   private prepareAckHandling(args: {
@@ -2896,7 +2941,7 @@ class BncrBridgeRuntime {
         entry,
       });
       this.respondAckResult(respond, staleObserved.stale, { ok: true });
-      this.flushPushQueue({
+      this.flushPushQueueBestEffort({
         accountId,
         trigger: OUTBOUND_FLUSH_TRIGGER.ACK_OK,
         reason: OUTBOUND_FLUSH_REASON.MESSAGE_ACKED,
@@ -3037,7 +3082,15 @@ class BncrBridgeRuntime {
     inboundOnly: boolean;
     context: GatewayRequestHandlerOptions['context'];
   }) {
-    const { accountId, connId, clientId, outboundReady, preferredForOutbound, inboundOnly, context } = args;
+    const {
+      accountId,
+      connId,
+      clientId,
+      outboundReady,
+      preferredForOutbound,
+      inboundOnly,
+      context,
+    } = args;
     this.refreshAcceptedFileTransferLiveState({
       accountId,
       connId,
@@ -3076,16 +3129,15 @@ class BncrBridgeRuntime {
     recentInboundReachable: boolean;
     event: string;
   }) {
-    this.logInfo(
-      'outbox',
-      `push ${JSON.stringify(buildOutboxPushOkDebugInfo(args))}`,
-      { debugOnly: true },
-    );
+    this.logInfo('outbox', `push ${JSON.stringify(buildOutboxPushOkDebugInfo(args))}`, {
+      debugOnly: true,
+    });
   }
 
   private recordOutboxPrePushFailure(args: {
     entry: OutboxEntry;
     lastError: string;
+    persist?: boolean;
   }) {
     const nextEntry = buildBncrOutboxFailureEntryPatch({
       entry: args.entry,
@@ -3093,6 +3145,7 @@ class BncrBridgeRuntime {
     });
     Object.assign(args.entry, nextEntry);
     this.outbox.set(nextEntry.messageId, args.entry);
+    if (args.persist) this.scheduleSave();
   }
 
   private recordOutboxPushFailure(args: {
@@ -3156,11 +3209,37 @@ class BncrBridgeRuntime {
     this.pushTimer = setTimeout(() => {
       this.pushTimer = null;
       if (this.stopped) return;
-      void this.flushPushQueue({
+      this.flushPushQueueBestEffort({
         trigger: OUTBOUND_FLUSH_TRIGGER.TIMER,
         reason: OUTBOUND_FLUSH_REASON.SCHEDULED_DRAIN,
       });
     }, delay);
+  }
+
+  private flushPushQueueBestEffort(args?: {
+    accountId?: string;
+    trigger?: string;
+    reason?: string;
+  }) {
+    void this.flushPushQueue(args)
+      .then(() => {
+        this.pushDrainExceptionRetryCount = 0;
+      })
+      .catch((error) => {
+        const accountId = args?.accountId ? normalizeAccountId(args.accountId) : '';
+        const reason = asString(args?.reason || args?.trigger || 'flush-error');
+        const err = asString((error as any)?.message || error || 'flush-error');
+        const nextRetryCount = this.pushDrainExceptionRetryCount + 1;
+        const willRetry = nextRetryCount <= PUSH_DRAIN_EXCEPTION_RETRY_LIMIT;
+        this.pushDrainExceptionRetryCount = nextRetryCount;
+        this.logError(
+          'outbox drain fail',
+          `accountId=${accountId || '-'}|reason=${reason}|err=${err}|retry=${willRetry ? nextRetryCount : 'false'}|limit=${PUSH_DRAIN_EXCEPTION_RETRY_LIMIT}`,
+        );
+        if (willRetry) {
+          this.schedulePushDrain(PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS);
+        }
+      });
   }
 
   private isOutboundAckRequired(accountId?: string) {
@@ -3177,6 +3256,60 @@ class BncrBridgeRuntime {
       fileAckTimeoutMs: FILE_ACK_TIMEOUT_MS,
       debugVerbose: BNCR_DEBUG_VERBOSE,
     });
+  }
+
+  private getAccountPendingOutboxEntries(accountId: string) {
+    const acc = normalizeAccountId(accountId);
+    return Array.from(this.outbox.values()).filter((entry) => entry.accountId === acc);
+  }
+
+  private maybeLogOutboxDrainStuck(args: {
+    accountId: string;
+    trigger: string;
+    reason: string;
+  }) {
+    const acc = normalizeAccountId(args.accountId);
+    const startedAt = this.pushDrainRunningSinceByAccount.get(acc) || 0;
+    if (!startedAt) return;
+
+    const t = now();
+    const runningMs = Math.max(0, t - startedAt);
+    if (runningMs < PUSH_DRAIN_STUCK_WARN_MS) return;
+
+    const lastWarnedAt = this.pushDrainStuckWarnedAtByAccount.get(acc) || 0;
+    if (lastWarnedAt && t - lastWarnedAt < PUSH_DRAIN_STUCK_WARN_MS) return;
+
+    const pendingEntries = this.getAccountPendingOutboxEntries(acc);
+    const pending = pendingEntries.length;
+    if (!pending) return;
+
+    this.pushDrainStuckWarnedAtByAccount.set(acc, t);
+    this.logWarn(
+      'outbox drain stuck',
+      `accountId=${acc}|pending=${pending}|runningMs=${runningMs}|waiters=${this.messageAckWaiters.size}/${this.fileAckWaiters.size}`,
+    );
+    this.logInfo(
+      'outbox',
+      `drain-stuck ${JSON.stringify(
+        buildOutboxDrainStuckDebugInfo({
+          bridgeId: this.bridgeId,
+          accountId: acc,
+          reason: args.reason,
+          trigger: args.trigger,
+          outboxSize: this.outbox.size,
+          pending,
+          runningMs,
+          runningSince: startedAt,
+          hasGatewayContext: Boolean(this.gatewayContext),
+          activeConnectionCount: this.activeConnectionCount(acc),
+          messageAckWaiters: this.messageAckWaiters.size,
+          fileAckWaiters: this.fileAckWaiters.size,
+          pendingEntries,
+          connections: this.connections.values(),
+        }),
+      )}`,
+      { debugOnly: true },
+    );
   }
 
   private async flushPushQueue(args?: {
@@ -3236,7 +3369,28 @@ class BncrBridgeRuntime {
     let globalNextDelay: number | null = null;
 
     for (const acc of targetAccounts) {
-      if (!acc || this.pushDrainRunningAccounts.has(acc)) continue;
+      if (!acc) continue;
+      if (this.pushDrainRunningAccounts.has(acc)) {
+        this.logInfo(
+          'outbox',
+          `drain-skip ${JSON.stringify(
+            buildOutboxDrainSkipDebugInfo({
+              bridgeId: this.bridgeId,
+              accountId: acc,
+              reason: 'already-running',
+              outboxSize: this.outbox.size,
+              trigger,
+            }),
+          )}`,
+          { debugOnly: true },
+        );
+        this.maybeLogOutboxDrainStuck({
+          accountId: acc,
+          trigger,
+          reason: reason || 'already-running',
+        });
+        continue;
+      }
       const online = this.isOnline(acc);
       const recentInboundReachable = this.hasRecentInboundReachability(acc);
       this.logInfo(
@@ -3253,6 +3407,8 @@ class BncrBridgeRuntime {
         { debugOnly: true },
       );
       this.pushDrainRunningAccounts.add(acc);
+      this.pushDrainRunningSinceByAccount.set(acc, now());
+      this.pushDrainStuckWarnedAtByAccount.delete(acc);
       try {
         let localNextDelay: number | null = null;
         let processedThisRun = 0;
@@ -3260,7 +3416,10 @@ class BncrBridgeRuntime {
 
         while (true) {
           if (this.stopped) break;
-          if (processedThisRun > 0 && now() - accountDrainStartedAt >= PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS) {
+          if (
+            processedThisRun > 0 &&
+            now() - accountDrainStartedAt >= PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS
+          ) {
             localNextDelay = updateMinOutboxDelay(localNextDelay, 0);
             this.logInfo(
               'outbox',
@@ -3327,14 +3486,63 @@ class BncrBridgeRuntime {
 
           const onlineNow = this.isOnline(acc);
           const recentInboundReachable = this.hasRecentInboundReachability(acc);
-          const pushed = await this.tryPushEntry(entry);
+          let pushed = false;
+          try {
+            pushed = await this.tryPushEntry(entry);
+          } catch (error) {
+            const meta = isPlainObject(entry.payload?._meta) ? entry.payload._meta : null;
+            if (meta?.kind === 'file-transfer') {
+              this.handleFileTransferPushFailure({
+                entry,
+                error,
+              });
+            } else {
+              this.handleTextPushFailure({
+                entry,
+                error,
+              });
+            }
+            pushed = false;
+          }
           processedThisRun += 1;
           if (pushed) {
             const requireAck = this.isOutboundAckRequired(acc);
             const ackTimeoutMs = requireAck ? this.resolveMessageAckTimeoutMs(acc) : null;
             let ackResult: 'acked' | 'timeout' = requireAck ? 'timeout' : 'acked';
             if (onlineNow && requireAck) {
-              ackResult = await this.waitForMessageAck(entry.messageId, ackTimeoutMs || PUSH_ACK_TIMEOUT_MS);
+              this.logInfo(
+                'outbox',
+                `ack wait-start ${JSON.stringify(
+                  buildOutboxAckDebugInfo({
+                    messageId: entry.messageId,
+                    accountId: entry.accountId,
+                    sessionKey: entry.sessionKey,
+                    to: formatDisplayScope(entry.route),
+                    kind:
+                      isPlainObject(entry.payload?._meta) &&
+                      entry.payload?._meta?.kind === 'file-transfer'
+                        ? 'file-transfer'
+                        : undefined,
+                    requireAck,
+                    ackResult: 'timeout',
+                    ackStage: 'message',
+                    ackOutcome: 'waiting',
+                    ackTimeoutMs: ackTimeoutMs || PUSH_ACK_TIMEOUT_MS,
+                    adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+                    onlineNow,
+                    recentInboundReachable,
+                    connIds: entry.lastPushConnId ? [entry.lastPushConnId] : [],
+                    ownerConnId: entry.lastPushConnId,
+                    ownerClientId: entry.lastPushClientId,
+                    event: BNCR_PUSH_EVENT,
+                  }),
+                )}`,
+                { debugOnly: true },
+              );
+              ackResult = await this.waitForMessageAck(
+                entry.messageId,
+                ackTimeoutMs || PUSH_ACK_TIMEOUT_MS,
+              );
             }
 
             this.logOutboxAckWait({
@@ -3484,6 +3692,8 @@ class BncrBridgeRuntime {
         }
       } finally {
         this.pushDrainRunningAccounts.delete(acc);
+        this.pushDrainRunningSinceByAccount.delete(acc);
+        this.pushDrainStuckWarnedAtByAccount.delete(acc);
       }
     }
 
@@ -3506,12 +3716,7 @@ class BncrBridgeRuntime {
 
   private async waitForMessageAck(messageId: string, waitMs: number): Promise<'acked' | 'timeout'> {
     const key = asString(messageId).trim();
-    const timeoutMs = clampFiniteNumber(
-      waitMs,
-      0,
-      0,
-      RECOMMENDED_ACK_TIMEOUT_MAX_MS,
-    );
+    const timeoutMs = clampFiniteNumber(waitMs, 0, 0, RECOMMENDED_ACK_TIMEOUT_MAX_MS);
     if (!key || !timeoutMs) return 'timeout';
 
     const existing = this.messageAckWaiters.get(key);
@@ -3613,7 +3818,9 @@ class BncrBridgeRuntime {
     const t = now();
     const prev = this.connections.get(key);
     const previousActiveKey = this.activeConnectionByAccount.get(acc) || null;
-    const previousActiveConn = previousActiveKey ? this.connections.get(previousActiveKey) || null : null;
+    const previousActiveConn = previousActiveKey
+      ? this.connections.get(previousActiveKey) || null
+      : null;
 
     const nextConn = {
       accountId: acc,
@@ -4033,8 +4240,9 @@ class BncrBridgeRuntime {
           ackStage: stage,
           ackOutcome: cached.ok ? 'acked' : 'failed',
           waiterReused: false,
-          chunkIndex:
-            Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
+          chunkIndex: Number.isFinite(Number(params.chunkIndex))
+            ? Number(params.chunkIndex)
+            : undefined,
           key,
           ...ownerInfo,
           ok: cached.ok,
@@ -4061,8 +4269,9 @@ class BncrBridgeRuntime {
           ackStage: stage,
           ackOutcome: 'waiter-reused',
           waiterReused: true,
-          chunkIndex:
-            Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
+          chunkIndex: Number.isFinite(Number(params.chunkIndex))
+            ? Number(params.chunkIndex)
+            : undefined,
           key,
           ...ownerInfo,
         }),
@@ -4080,8 +4289,9 @@ class BncrBridgeRuntime {
         ackStage: stage,
         ackOutcome: 'waiting',
         waiterReused: false,
-        chunkIndex:
-          Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
+        chunkIndex: Number.isFinite(Number(params.chunkIndex))
+          ? Number(params.chunkIndex)
+          : undefined,
         key,
         ...ownerInfo,
         timeoutMs,
@@ -4106,8 +4316,9 @@ class BncrBridgeRuntime {
             ackStage: stage,
             ackOutcome: 'timeout',
             waiterReused: false,
-            chunkIndex:
-              Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
+            chunkIndex: Number.isFinite(Number(params.chunkIndex))
+              ? Number(params.chunkIndex)
+              : undefined,
             key,
             ...ownerInfo,
             timeoutMs,
@@ -4153,8 +4364,9 @@ class BncrBridgeRuntime {
           ackStage: stage,
           ackOutcome: params.ok ? 'early-acked' : 'early-failed',
           waiterReused: false,
-          chunkIndex:
-            Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
+          chunkIndex: Number.isFinite(Number(params.chunkIndex))
+            ? Number(params.chunkIndex)
+            : undefined,
           key,
           ...ownerInfo,
           ok: params.ok,
@@ -4176,8 +4388,9 @@ class BncrBridgeRuntime {
         ackStage: stage,
         ackOutcome: params.ok ? 'acked' : 'failed',
         waiterReused: false,
-        chunkIndex:
-          Number.isFinite(Number(params.chunkIndex)) ? Number(params.chunkIndex) : undefined,
+        chunkIndex: Number.isFinite(Number(params.chunkIndex))
+          ? Number(params.chunkIndex)
+          : undefined,
         key,
         ...ownerInfo,
         ok: params.ok,
@@ -4225,7 +4438,6 @@ class BncrBridgeRuntime {
     if (mt.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/.test(fn)) return 'audio';
     return mt || 'file';
   }
-
 
   private computeRecommendedAckTimeoutReason(args: {
     lateAckOkCount: number;
@@ -4308,7 +4520,10 @@ class BncrBridgeRuntime {
     const recentAckTimeoutCount = this.getCounter(this.ackTimeoutCountByAccount, acc);
     const lastLateAckPushLatencyMs = this.lastLateAckPushLatencyMsByAccount.get(acc) || null;
     const lastLateAckOkAt = this.lastLateAckOkByAccount.get(acc) || null;
-    const adaptiveAckRecoveryOkCount = this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, acc);
+    const adaptiveAckRecoveryOkCount = this.getCounter(
+      this.adaptiveAckRecoveryOkCountByAccount,
+      acc,
+    );
     const nowMs = now();
     const timeoutMs = this.computeRecommendedAckTimeoutMs({
       lateAckOkCount,
@@ -4345,12 +4560,18 @@ class BncrBridgeRuntime {
     const lastLateAckOkAt = this.lastLateAckOkByAccount.get(acc) || null;
     const nowMs = now();
     const lastLateAckAgeMs =
-      typeof lastLateAckOkAt === 'number' && lastLateAckOkAt > 0 ? Math.max(0, nowMs - lastLateAckOkAt) : null;
+      typeof lastLateAckOkAt === 'number' && lastLateAckOkAt > 0
+        ? Math.max(0, nowMs - lastLateAckOkAt)
+        : null;
     const lateAckObservationTtlMs = ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS;
     const lateAckObservationExpired =
       typeof lastLateAckAgeMs === 'number' && lastLateAckAgeMs > lateAckObservationTtlMs;
-    const adaptiveAckRecoveryOkCount = this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, acc);
-    const adaptiveAckRecovered = adaptiveAckRecoveryOkCount >= ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD;
+    const adaptiveAckRecoveryOkCount = this.getCounter(
+      this.adaptiveAckRecoveryOkCountByAccount,
+      acc,
+    );
+    const adaptiveAckRecovered =
+      adaptiveAckRecoveryOkCount >= ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD;
     const recommendedAckTimeoutMs = this.computeRecommendedAckTimeoutMs({
       lateAckOkCount,
       recentAckTimeoutCount,
@@ -4409,7 +4630,8 @@ class BncrBridgeRuntime {
       sessionRouteEntries: this.sessionRoutes.values(),
       countInvalidOutboxSessionKeys: (snapshotAccountId) =>
         this.countInvalidOutboxSessionKeys(snapshotAccountId),
-      countLegacyAccountResidue: (snapshotAccountId) => this.countLegacyAccountResidue(snapshotAccountId),
+      countLegacyAccountResidue: (snapshotAccountId) =>
+        this.countLegacyAccountResidue(snapshotAccountId),
       connectEventsByAccount: this.connectEventsByAccount,
       inboundEventsByAccount: this.inboundEventsByAccount,
       activityEventsByAccount: this.activityEventsByAccount,
@@ -4435,7 +4657,9 @@ class BncrBridgeRuntime {
   }
 
   getAccountRuntimeSnapshot(accountId: string) {
-    const snapshot = buildAccountRuntimeSnapshot(this.buildRuntimeStatusInput(accountId, { running: true }));
+    const snapshot = buildAccountRuntimeSnapshot(
+      this.buildRuntimeStatusInput(accountId, { running: true }),
+    );
     const ackObservability = this.buildRuntimeAckObservability(accountId);
     const ackStrategy = this.buildRuntimeAckStrategy(ackObservability);
     return {
@@ -4509,7 +4733,7 @@ class BncrBridgeRuntime {
     this.logOutboundSummary(entry);
     this.outbox.set(entry.messageId, entry);
     this.scheduleSave();
-    this.flushPushQueue(entry.accountId);
+    this.flushPushQueueBestEffort({ accountId: entry.accountId });
   }
 
   private moveToDeadLetter(entry: OutboxEntry, reason: string) {
@@ -5281,7 +5505,7 @@ class BncrBridgeRuntime {
     });
 
     // WS 一旦在线，立即尝试把离线期间积压队列直推出去
-    this.flushPushQueue({
+    this.flushPushQueueBestEffort({
       accountId,
       trigger: OUTBOUND_FLUSH_TRIGGER.CONNECT,
       reason: OUTBOUND_FLUSH_REASON.WS_ONLINE,
@@ -5363,7 +5587,7 @@ class BncrBridgeRuntime {
       deadLetter: this.deadLetter.filter((v) => v.accountId === accountId).length,
       now: now(),
     });
-    this.flushPushQueue({
+    this.flushPushQueueBestEffort({
       accountId,
       trigger: OUTBOUND_FLUSH_TRIGGER.ACTIVITY,
       reason: OUTBOUND_FLUSH_REASON.ACTIVITY_HEARTBEAT,
@@ -5538,7 +5762,9 @@ class BncrBridgeRuntime {
       return;
     }
     if (chunkIndex >= st.totalChunks) {
-      respond(false, { error: `chunkIndex out of range index=${chunkIndex} total=${st.totalChunks}` });
+      respond(false, {
+        error: `chunkIndex out of range index=${chunkIndex} total=${st.totalChunks}`,
+      });
       return;
     }
 
@@ -6097,7 +6323,7 @@ class BncrBridgeRuntime {
         taskKey: extracted.taskKey ?? null,
       }),
     );
-    this.flushPushQueue({
+    this.flushPushQueueBestEffort({
       accountId,
       trigger: OUTBOUND_FLUSH_TRIGGER.INBOUND,
       reason: OUTBOUND_FLUSH_REASON.INBOUND_ACCEPTED,
@@ -6262,7 +6488,9 @@ class BncrBridgeRuntime {
       payload,
       mediaLocalRoots: ctx.mediaLocalRoots,
     });
-    const entries = Array.from(this.outbox.values()).filter((entry) => !before.has(entry.messageId));
+    const entries = Array.from(this.outbox.values()).filter(
+      (entry) => !before.has(entry.messageId),
+    );
     if (!entries.length) {
       throw new Error('bncr channel.message handoff did not enqueue an outbox entry');
     }
@@ -6303,7 +6531,9 @@ class BncrBridgeRuntime {
       asVoice: payload.asVoice === true,
       audioAsVoice: payload.audioAsVoice === true,
       kind: payload.kind,
-      replyToId: asString(payload.replyToId || ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined,
+      replyToId:
+        asString(payload.replyToId || ctx?.replyToId || ctx?.replyToMessageId || '').trim() ||
+        undefined,
     });
     return buildBncrDurableQueuedResult({ entry });
   };
@@ -6342,7 +6572,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
       };
     },
     supportsAction: ({ action }) => action === 'send',
-    extractToolSend: ({ args })  => extractOpenClawToolSend(args, 'sendMessage'),
+    extractToolSend: ({ args }) => extractOpenClawToolSend(args, 'sendMessage'),
     handleAction: async ({ action, params, accountId, mediaLocalRoots }) => {
       if (action !== 'send')
         throw new Error(`Action ${action} is not supported for provider ${CHANNEL_ID}.`);
