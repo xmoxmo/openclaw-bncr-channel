@@ -1,6 +1,6 @@
 {
   "name": "@xmoxmo/bncr",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -21,9 +21,11 @@
     "README.md",
     "LICENSE",
     "src/**/*.ts",
-    "scripts/**/*.mjs"
+    "scripts/**/*.mjs",
+    "dist/**/*.js"
   ],
   "scripts": {
+    "build": "npx -y esbuild@0.28.0 index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/index.js",
     "selfcheck": "node ./scripts/selfcheck.mjs",
     "test": "node --import ./tests/register-ts-hooks.mjs --test ./tests/*.test.mjs",
     "check-register-drift": "node ./scripts/check-register-drift.mjs",
@@ -38,7 +40,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
-    "openclaw": ">=2026.5.27"
+    "openclaw": ">=2026.5.27",
+    "esbuild": "^0.28.0"
   },
   "openclaw": {
     "extensions": [
@@ -51,6 +54,9 @@
     "build": {
       "openclawVersion": "2026.5.28",
       "pluginSdkVersion": "2026.5.28"
-    }
+    },
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ]
   }
 }
