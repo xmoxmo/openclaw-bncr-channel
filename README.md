@@ -193,6 +193,20 @@ openclaw gateway call message.action --params '{
 
 后续如果在其他 OpenClaw 版本上完成验证，应继续在本节追加对应版本的验证过程与结论，不直接外推复用 `2026.5.18` 的验证口径。
 
+### 2026.6.1 验证说明
+
+以下口径已在 OpenClaw `2026.6.1` 与 bncr `0.3.2` 上完成基础验证：
+
+1. 普通文本入站与 assistant 文本回复正常。
+2. Agent 回复中的图片附件可通过 `MEDIA:<path>` 投递。
+3. Agent 回复中的 `ogg(opus)` voice 附件可通过 `MEDIA:<path>` 搭配 voice 发送提示投递。
+4. 入站 prompt 中只出现 OpenClaw 官方 `Conversation info` / `Sender` untrusted metadata，未重复注入 bncr 自定义 context block。
+
+仍需分开判断：
+
+- `MEDIA:<path>` 成功代表宿主 reply-media / attachment 链路和 bncr 下行媒体投递在该场景下可用。
+- `message.action` / `send` 仍应作为显式目标发送链单独验证，特别是跨会话、跨账号、文件传输 ACK 与 outbox 重试场景。
+
 ---
 
 ## 8. 状态与诊断
@@ -257,7 +271,7 @@ npm pack
 用途：
 
 - `npm test`：跑回归测试
-- `npm run selfcheck`：检查插件骨架是否完整
+- `npm run selfcheck`：检查插件骨架是否完整，并验证关键 OpenClaw SDK subpath 可解析
 - `npm run check-pack`：执行 `npm pack --dry-run --json`，确认发布包包含关键入口与 OpenClaw adapter 文件
 - `npm pack`：确认当前版本可正常打包
 - `npm run check-register-drift -- --duration-sec 300 --interval-sec 15`：静置采样 `bncr.diagnostics`，观察 `registerCount / apiGeneration / postWarmupRegisterCount` 是否在 warmup 后继续增长

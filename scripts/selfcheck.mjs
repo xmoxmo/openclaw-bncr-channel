@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, '..');
+const require = createRequire(import.meta.url);
 
 const requiredFiles = [
   'index.ts',
@@ -43,6 +45,29 @@ const readPackageVersion = () => {
   return typeof pkg?.version === 'string' ? pkg.version.trim() : '';
 };
 
+const requiredOpenClawSdkSubpaths = [
+  'openclaw/plugin-sdk/channel-outbound',
+  'openclaw/plugin-sdk/channel-message',
+  'openclaw/plugin-sdk/routing',
+  'openclaw/plugin-sdk/conversation-runtime',
+  'openclaw/plugin-sdk/session-store-runtime',
+  'openclaw/plugin-sdk/core',
+];
+
+const resolveOpenClawSdkSubpaths = () => {
+  return requiredOpenClawSdkSubpaths.map((specifier) => {
+    try {
+      return { specifier, ok: true, path: require.resolve(specifier) };
+    } catch (err) {
+      return {
+        specifier,
+        ok: false,
+        error: err && typeof err === 'object' && 'code' in err ? err.code : String(err),
+      };
+    }
+  });
+};
+
 const validateVersionPolicy = (version) => {
   const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
   if (!match) {
@@ -68,14 +93,17 @@ const validateVersionPolicy = (version) => {
 const missing = requiredFiles.filter((rel) => !fs.existsSync(path.join(root, rel)));
 const version = readPackageVersion();
 const versionPolicy = validateVersionPolicy(version);
+const sdkSubpaths = resolveOpenClawSdkSubpaths();
+const missingSdkSubpaths = sdkSubpaths.filter((entry) => !entry.ok);
 const result = {
-  ok: missing.length === 0 && versionPolicy.ok,
+  ok: missing.length === 0 && versionPolicy.ok && missingSdkSubpaths.length === 0,
   checkedRoot: root,
   requiredCount: requiredFiles.length,
   missing,
   version,
   versionPolicy,
+  sdkSubpaths,
 };
 
 console.log(JSON.stringify(result, null, 2));
-if (missing.length > 0 || !versionPolicy.ok) process.exit(1);
+if (missing.length > 0 || !versionPolicy.ok || missingSdkSubpaths.length > 0) process.exit(1);

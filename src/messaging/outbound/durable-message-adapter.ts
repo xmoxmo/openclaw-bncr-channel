@@ -1,11 +1,11 @@
-import { defineChannelMessageAdapter } from 'openclaw/plugin-sdk/channel-outbound';
+import { defineChannelMessageAdapter } from 'openclaw/plugin-sdk/channel-message';
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageSendMediaContext,
   ChannelMessageSendPayloadContext,
   ChannelMessageSendResult,
   ChannelMessageSendTextContext,
-} from 'openclaw/plugin-sdk/channel-outbound';
+} from 'openclaw/plugin-sdk/channel-message';
 
 import { buildFileTransferOutboxEntry, buildTextOutboxEntry } from '../../core/outbox-entry-builders.ts';
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
