@@ -19,7 +19,9 @@ function resetBncrGlobals() {
 }
 
 function createApi(overrides = {}) {
-  const currentConfig = overrides.currentConfig ?? { channels: { bncr: { debug: { verbose: false } } } };
+  const currentConfig = overrides.currentConfig ?? {
+    channels: { bncr: { debug: { verbose: false } } },
+  };
   const mutateCalls = [];
   const writeCalls = [];
   return {
@@ -33,7 +35,10 @@ function createApi(overrides = {}) {
         },
         async mutateConfigFile(params) {
           mutateCalls.push(params);
-          return { changed: true, result: await params.mutate(currentConfig, { snapshot: {}, previousHash: null }) };
+          return {
+            changed: true,
+            result: await params.mutate(currentConfig, { snapshot: {}, previousHash: null }),
+          };
         },
         async writeConfigFile(...args) {
           writeCalls.push(args);
@@ -97,7 +102,10 @@ test('bncr README documents channel handoff rather than final platform delivery 
 
 test('bncr channel routes OpenClaw SDK helper imports through the local adapter', () => {
   const channelSource = fs.readFileSync(new URL('../src/channel.ts', import.meta.url), 'utf8');
-  const adapterSource = fs.readFileSync(new URL('../src/openclaw/sdk-helpers.ts', import.meta.url), 'utf8');
+  const adapterSource = fs.readFileSync(
+    new URL('../src/openclaw/sdk-helpers.ts', import.meta.url),
+    'utf8',
+  );
 
   for (const specifier of CHANNEL_SDK_HELPER_IMPORTS) {
     assert.equal(channelSource.includes(specifier), false, specifier);
@@ -106,8 +114,14 @@ test('bncr channel routes OpenClaw SDK helper imports through the local adapter'
 });
 
 test('bncr gate routes OpenClaw ingress runtime through the local adapter', () => {
-  const gateSource = fs.readFileSync(new URL('../src/messaging/inbound/gate.ts', import.meta.url), 'utf8');
-  const adapterSource = fs.readFileSync(new URL('../src/openclaw/ingress-runtime.ts', import.meta.url), 'utf8');
+  const gateSource = fs.readFileSync(
+    new URL('../src/messaging/inbound/gate.ts', import.meta.url),
+    'utf8',
+  );
+  const adapterSource = fs.readFileSync(
+    new URL('../src/openclaw/ingress-runtime.ts', import.meta.url),
+    'utf8',
+  );
 
   assert.equal(gateSource.includes(INGRESS_RUNTIME_IMPORT), false);
   assert.equal(adapterSource.includes(INGRESS_RUNTIME_IMPORT), true);

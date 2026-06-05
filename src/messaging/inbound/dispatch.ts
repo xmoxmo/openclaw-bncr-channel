@@ -6,14 +6,12 @@ import {
   normalizeInboundSessionKey,
   withTaskSessionKey,
 } from '../../core/targets.ts';
-import { handleBncrNativeCommand } from './commands.ts';
 import {
-  buildBncrPromptVisibleContextFacts,
-  buildBncrStructuredContextFactsFromInboundParts,
-} from './context-facts.ts';
-import { buildBncrReplyConfig } from './reply-config.ts';
-import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
-import { wrapBncrInboundRecordSessionLabelCorrection } from './session-label.ts';
+  readBncrSessionUpdatedAt,
+  recordBncrInboundSession,
+  resolveBncrInboundSessionStorePath,
+  resolveBncrPinnedMainDmOwnerFromAllowlist,
+} from '../../openclaw/inbound-session-runtime.ts';
 import { saveOpenClawChannelMediaBuffer } from '../../openclaw/media-runtime.ts';
 import {
   dispatchOpenClawReplyWithBufferedBlockDispatcher,
@@ -24,12 +22,14 @@ import {
   resolveOpenClawAgentRoute,
   resolveOpenClawInboundLastRouteSessionKey,
 } from '../../openclaw/routing-runtime.ts';
+import { handleBncrNativeCommand } from './commands.ts';
 import {
-  readBncrSessionUpdatedAt,
-  recordBncrInboundSession,
-  resolveBncrInboundSessionStorePath,
-  resolveBncrPinnedMainDmOwnerFromAllowlist,
-} from '../../openclaw/inbound-session-runtime.ts';
+  buildBncrPromptVisibleContextFacts,
+  buildBncrStructuredContextFactsFromInboundParts,
+} from './context-facts.ts';
+import { buildBncrReplyConfig } from './reply-config.ts';
+import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
+import { wrapBncrInboundRecordSessionLabelCorrection } from './session-label.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
@@ -68,10 +68,7 @@ export function estimateBase64DecodedBytes(value: string): number {
   return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
 }
 
-export function assertInboundMediaBase64Size(
-  value: string,
-  maxBytes = INBOUND_MEDIA_MAX_BYTES,
-) {
+export function assertInboundMediaBase64Size(value: string, maxBytes = INBOUND_MEDIA_MAX_BYTES) {
   const estimatedBytes = estimateBase64DecodedBytes(value);
   if (estimatedBytes > maxBytes) {
     throw new Error(
@@ -161,7 +158,8 @@ async function prepareBncrInboundSessionContext(args: {
     groupId,
     userId,
   } = parsed;
-  const { accountId, route, resolvedRoute, baseSessionKey, taskSessionKey, dispatchSessionKey } = resolution;
+  const { accountId, route, resolvedRoute, baseSessionKey, taskSessionKey, dispatchSessionKey } =
+    resolution;
 
   rememberSessionRoute(baseSessionKey, accountId, route);
   if (taskSessionKey && taskSessionKey !== baseSessionKey) {
@@ -444,7 +442,7 @@ export async function dispatchBncrInbound(params: {
     resolution,
     rememberSessionRoute,
   });
-  const { storePath, mediaPath, rawBody, body } = prepared;
+  const { storePath, mediaPath, rawBody } = prepared;
   const replyRouteFact = buildBncrInboundReplyRouteFact(resolution);
   if (!clientId) {
     emitBncrLogLine(

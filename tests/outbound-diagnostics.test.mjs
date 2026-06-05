@@ -13,12 +13,7 @@ import {
   buildPushFailureDebugInfo,
   buildRetryRerouteDebugInfo,
 } from '../src/messaging/outbound/diagnostics.ts';
-import {
-  buildOutboxOnlineDebugInfo,
-  clampOutboxDrainDelay,
-  computeNextOutboxDelay,
-  findDueOutboxEntry,
-} from '../src/messaging/outbound/queue-selectors.ts';
+import { clampOutboxDrainDelay } from '../src/messaging/outbound/queue-selectors.ts';
 import { OUTBOUND_SCHEDULE_SOURCE } from '../src/messaging/outbound/reasons.ts';
 
 test('clampOutboxDrainDelay clamps negative, large, and invalid timer inputs', () => {

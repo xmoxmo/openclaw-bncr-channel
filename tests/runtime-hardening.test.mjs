@@ -720,7 +720,6 @@ test('stale file chunk from non-owner should stay ignored', async () => {
   assert.equal(bridge.fileRecvTransfers.get('tf-2').receivedChunks.size, 0);
 });
 
-
 test('status worker marks linked from recent inbound reachability when no live connection remains', async () => {
   resetBncrGlobals();
   const mod = await import('../index.ts');
@@ -851,7 +850,11 @@ test('gcTransientState clears active connection pointer only after that connecti
 
     bridge.gcTransientState();
 
-    assert.equal(bridge.connections.has(key), false, 'stale connection should be deleted by existing GC');
+    assert.equal(
+      bridge.connections.has(key),
+      false,
+      'stale connection should be deleted by existing GC',
+    );
     assert.equal(
       bridge.activeConnectionByAccount.has('Primary'),
       false,
@@ -900,8 +903,16 @@ test('resolveOutboxPushOwner can recover to a live connection after gc removes s
     bridge.activeConnectionByAccount.set('Primary', staleKey);
 
     bridge.gcTransientState();
-    assert.equal(bridge.connections.has(staleKey), false, 'stale active owner should be deleted by GC');
-    assert.equal(bridge.activeConnectionByAccount.has('Primary'), false, 'stale active pointer should be cleared');
+    assert.equal(
+      bridge.connections.has(staleKey),
+      false,
+      'stale active owner should be deleted by GC',
+    );
+    assert.equal(
+      bridge.activeConnectionByAccount.has('Primary'),
+      false,
+      'stale active pointer should be cleared',
+    );
 
     const owner = bridge.resolveOutboxPushOwner('Primary');
     assert.ok(owner, 'expected live owner after stale active pointer cleanup');

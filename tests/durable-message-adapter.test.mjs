@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildTextOutboxEntry, buildFileTransferOutboxEntry } from '../src/core/outbox-entry-builders.ts';
-import { resolveBncrOutboundSessionRoute } from '../src/messaging/outbound/session-route.ts';
-import { resolveBncrOutboundTarget } from '../src/messaging/outbound/target-resolver.ts';
+import {
+  buildFileTransferOutboxEntry,
+  buildTextOutboxEntry,
+} from '../src/core/outbox-entry-builders.ts';
 import {
   createBncrDurableMessageQueuedAdapter,
   createBncrDurableMessageQueuedAdapterFromBuilders,
 } from '../src/messaging/outbound/durable-message-adapter.ts';
+import { resolveBncrOutboundSessionRoute } from '../src/messaging/outbound/session-route.ts';
+import { resolveBncrOutboundTarget } from '../src/messaging/outbound/target-resolver.ts';
 
 const route = {
   platform: 'tgBot',
@@ -141,7 +144,11 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows media context in
     normalizeAccountId: (value) => value || 'Primary',
     normalizeReplyToId: (value) => value || '',
     filePushEvent: 'bncr.file.push',
-    resolveTarget: () => ({ route, sessionKey: 'agent:orion:bncr:direct:demo', accountId: 'Primary' }),
+    resolveTarget: () => ({
+      route,
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      accountId: 'Primary',
+    }),
   });
 
   const result = await adapter.send.media({
@@ -197,7 +204,10 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows standard target 
 
   assert.equal(result.messageId, 'shadow-real-resolver-1');
   assert.deepEqual(result.receipt.raw[0].meta.route, route);
-  assert.equal(result.receipt.raw[0].meta.sessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030333737363031343630313a36323738323835313932');
+  assert.equal(
+    result.receipt.raw[0].meta.sessionKey,
+    'agent:orion:bncr:direct:7467426f743a2d313030333737363031343630313a36323738323835313932',
+  );
   assert.equal(result.receipt.raw[0].meta.deliveryStage, 'queued');
 });
 
@@ -235,12 +245,13 @@ test('createBncrDurableMessageQueuedAdapter propagates enqueue failures instead 
   });
 
   await assert.rejects(
-    () => adapter.send.text({
-      cfg: {},
-      to: 'Bncr:tgBot:-1003776014601:6278285192',
-      text: 'must not be acknowledged',
-      accountId: 'Primary',
-    }),
+    () =>
+      adapter.send.text({
+        cfg: {},
+        to: 'Bncr:tgBot:-1003776014601:6278285192',
+        text: 'must not be acknowledged',
+        accountId: 'Primary',
+      }),
     /bncr outbox unavailable/,
   );
 });
@@ -254,12 +265,13 @@ test('createBncrDurableMessageQueuedAdapter propagates payload enqueue failures 
   });
 
   await assert.rejects(
-    () => adapter.send.payload({
-      cfg: {},
-      to: 'Bncr:tgBot:-1003776014601:6278285192',
-      payload: { type: 'custom-test-payload' },
-      accountId: 'Primary',
-    }),
+    () =>
+      adapter.send.payload({
+        cfg: {},
+        to: 'Bncr:tgBot:-1003776014601:6278285192',
+        payload: { type: 'custom-test-payload' },
+        accountId: 'Primary',
+      }),
     /bncr payload outbox unavailable/,
   );
 });
@@ -282,17 +294,22 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders rejects legacy target fo
         target: ctx.to,
       });
       if (!sessionRoute) throw new Error('cannot resolve bncr session route for durable handoff');
-      return { route: target.route, sessionKey: sessionRoute.sessionKey, accountId: sessionRoute.accountId };
+      return {
+        route: target.route,
+        sessionKey: sessionRoute.sessionKey,
+        accountId: sessionRoute.accountId,
+      };
     },
   });
 
   await assert.rejects(
-    () => adapter.send.text({
-      cfg: {},
-      to: 'bncr:tgBot:6278285192',
-      text: 'legacy target must not be queued',
-      accountId: 'Primary',
-    }),
+    () =>
+      adapter.send.text({
+        cfg: {},
+        to: 'bncr:tgBot:6278285192',
+        text: 'legacy target must not be queued',
+        accountId: 'Primary',
+      }),
     /cannot resolve bncr target for durable handoff/,
   );
 });
@@ -309,12 +326,13 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders propagates target resolu
   });
 
   await assert.rejects(
-    () => adapter.send.text({
-      cfg: {},
-      to: 'Bncr:unknown',
-      text: 'must not be queued',
-      accountId: 'Primary',
-    }),
+    () =>
+      adapter.send.text({
+        cfg: {},
+        to: 'Bncr:unknown',
+        text: 'must not be queued',
+        accountId: 'Primary',
+      }),
     /cannot resolve bncr target/,
   );
 });
@@ -325,7 +343,11 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders does not invent a payloa
     now: () => 1_790_003_000_000,
     normalizeAccountId: (value) => value || 'Primary',
     normalizeReplyToId: (value) => value || '',
-    resolveTarget: () => ({ route, sessionKey: 'agent:orion:bncr:direct:demo', accountId: 'Primary' }),
+    resolveTarget: () => ({
+      route,
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      accountId: 'Primary',
+    }),
   });
 
   assert.equal(adapter.send.payload, undefined);

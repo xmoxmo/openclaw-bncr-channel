@@ -625,12 +625,46 @@ test('flushPushQueue logs non-debug push skip summary when text push guard rejec
 
     const updated = bridge.outbox.get(entry.messageId);
     assert.ok(updated, 'entry should remain queued for retry after push skip');
-    assert.equal(updated.retryCount, 1);
+    assert.equal(updated.retryCount, 0);
     assert.equal(updated.lastError, 'gateway context unavailable');
-    assert.ok(saveCount >= 2, 'guard reason and retry state should both be persisted');
-    assert.equal(scheduled.length, 1);
+    assert.ok(saveCount >= 1, 'guard reason should be persisted');
+    assert.deepEqual(scheduled, [1_000]);
   } finally {
     console.log = originalConsoleLog;
+    cleanupBridge(bridge);
+  }
+});
+
+test('pre-push guard skip does not consume retry budget or dead-letter queued entry', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+  const before = Date.now();
+
+  try {
+    const entry = makeEntry('msg-push-skip-retry-budget', 'push skip retry budget');
+    entry.retryCount = 10;
+    entry.nextAttemptAt = before - 1_000;
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.gatewayContext = null;
+    bridge.sleepMs = async () => {};
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'pre-push-guard-retry-budget',
+    });
+
+    const updated = bridge.outbox.get(entry.messageId);
+    assert.ok(updated, 'pre-push guard skip should keep entry queued');
+    assert.equal(updated.retryCount, 10);
+    assert.equal(updated.lastError, 'gateway context unavailable');
+    assert.equal(bridge.deadLetter.length, 0);
+    assert.deepEqual(scheduled, [1_000]);
+  } finally {
     cleanupBridge(bridge);
   }
 });
@@ -1994,6 +2028,53 @@ test('route candidate scoring treats invalid reputation numbers as neutral', asy
 
     assert.equal(connIds[0], 'conn-good');
     assert.ok(connIds.includes('conn-bad'));
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('diagnostics exposes outbound enqueue and pre-push guard context observability', async () => {
+  const bridge = createBncrBridge(createApiStub());
+  const scheduled = [];
+
+  try {
+    const entry = makeEntry('msg-diagnostics-pre-push-context', 'diagnostics context gap');
+    bridge.gatewayContext = null;
+    bridge.sleepMs = async () => {};
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    bridge.enqueueOutbound(entry);
+
+    const diagnostics = bridge.buildExtendedDiagnostics('Primary');
+    assert.equal(diagnostics.connection.hasGatewayContext, false);
+    assert.equal(diagnostics.connection.lastGatewayContextAt, null);
+    assert.equal(diagnostics.outbound.pending, 1);
+    assert.equal(diagnostics.outbound.enqueueCount, 1);
+    assert.equal(typeof diagnostics.outbound.lastEnqueueAt, 'number');
+    assert.equal(diagnostics.outbound.prePushGuardSkipCount, 1);
+    assert.equal(diagnostics.outbound.lastPrePushGuardSkipReason, 'no-gateway-context');
+    assert.equal(typeof diagnostics.outbound.lastPrePushGuardSkipAt, 'number');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('rememberGatewayContext exposes current gateway context state in diagnostics', async () => {
+  const bridge = createBncrBridge(createApiStub());
+
+  try {
+    bridge.rememberGatewayContext({ broadcastToConnIds() {} });
+
+    const diagnostics = bridge.buildExtendedDiagnostics('Primary');
+    assert.equal(diagnostics.connection.hasGatewayContext, true);
+    assert.equal(typeof diagnostics.connection.lastGatewayContextAt, 'number');
+    assert.equal(diagnostics.outbound.hasGatewayContext, true);
+    assert.equal(
+      diagnostics.outbound.lastGatewayContextAt,
+      diagnostics.connection.lastGatewayContextAt,
+    );
   } finally {
     cleanupBridge(bridge);
   }

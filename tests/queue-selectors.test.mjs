@@ -83,19 +83,13 @@ test('findDueOutboxEntry returns first due entry in created order', () => {
 });
 
 test('computeNextOutboxDelay returns wait until earliest future entry when none are due', () => {
-  const entries = [
-    makeEntry('m1', 'Primary', 10, 400),
-    makeEntry('m2', 'Primary', 20, 700),
-  ];
+  const entries = [makeEntry('m1', 'Primary', 10, 400), makeEntry('m2', 'Primary', 20, 700)];
 
   assert.equal(computeNextOutboxDelay(entries, 250), 150);
 });
 
 test('computeNextOutboxDelay returns zero when a due entry already exists', () => {
-  const entries = [
-    makeEntry('m1', 'Primary', 10, 200),
-    makeEntry('m2', 'Primary', 20, 500),
-  ];
+  const entries = [makeEntry('m1', 'Primary', 10, 200), makeEntry('m2', 'Primary', 20, 500)];
 
   assert.equal(computeNextOutboxDelay(entries, 250), 0);
 });

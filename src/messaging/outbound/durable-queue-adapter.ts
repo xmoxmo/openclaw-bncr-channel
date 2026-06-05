@@ -74,7 +74,9 @@ export function buildBncrDurableQueuedResult(args: {
 }): BncrDurableQueuedResult {
   const sentAt = Number.isFinite(args.sentAt) ? Number(args.sentAt) : args.entry.createdAt;
   const platformMessageId = args.entry.messageId;
-  const replyToId = normalizeOutboundReplyToId({ replyToId: args.replyToId ?? extractReplyToId(args.entry) }) || undefined;
+  const replyToId =
+    normalizeOutboundReplyToId({ replyToId: args.replyToId ?? extractReplyToId(args.entry) }) ||
+    undefined;
   const chatId = formatQueuedReceiptChatId(args.entry.route);
   const meta: BncrDurableQueuedReceiptMeta = {
     status: 'accepted',

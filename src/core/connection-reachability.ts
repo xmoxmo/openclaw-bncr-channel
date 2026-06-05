@@ -142,7 +142,12 @@ export function getRevalidatedAttemptReason(args: {
       lastPushTimeoutAt <= lastAttemptAt &&
       lastSeenAt > lastPushTimeoutAt;
 
-    if (!revalidatedByPreferred && !revalidatedByReady && !revalidatedByAck && !revalidatedByFreshReachability) {
+    if (
+      !revalidatedByPreferred &&
+      !revalidatedByReady &&
+      !revalidatedByAck &&
+      !revalidatedByFreshReachability
+    ) {
       return null;
     }
 

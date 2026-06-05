@@ -45,4 +45,3 @@ export function resolveOpenClawInboundLastRouteSessionKey(params: {
 }): string {
   return resolveInboundLastRouteSessionKey(params as any);
 }
-

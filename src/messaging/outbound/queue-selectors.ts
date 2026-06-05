@@ -34,7 +34,10 @@ export function computeOutboxRetryWait(nextAttemptAt: number, nowMs: number): nu
   return Math.max(0, finiteNumberOr(nextAttemptAt, 0) - finiteNumberOr(nowMs, 0));
 }
 
-export function updateMinOutboxDelay(currentDelay: number | null, candidateDelay: number | null): number | null {
+export function updateMinOutboxDelay(
+  currentDelay: number | null,
+  candidateDelay: number | null,
+): number | null {
   if (candidateDelay == null) return currentDelay;
   return currentDelay == null ? candidateDelay : Math.min(currentDelay, candidateDelay);
 }
@@ -51,7 +54,9 @@ export function selectOutboxTargetAccounts(args: {
   const filterAcc = args.accountId ? args.normalizeAccountId(args.accountId) : null;
   if (filterAcc) return [filterAcc];
   return Array.from(
-    new Set(Array.from(args.outboxEntries).map((entry) => args.normalizeAccountId(entry.accountId))),
+    new Set(
+      Array.from(args.outboxEntries).map((entry) => args.normalizeAccountId(entry.accountId)),
+    ),
   );
 }
 
@@ -112,7 +117,11 @@ export function selectOutboxFileTransferRouteCandidates(args: {
   );
   const ownerConnId =
     args.ownerConnId && !attemptedConnIds.has(args.ownerConnId) ? args.ownerConnId : undefined;
-  let connIds = ownerConnId ? [ownerConnId] : filteredCandidates.length > 0 ? filteredCandidates : routeCandidates;
+  let connIds = ownerConnId
+    ? [ownerConnId]
+    : filteredCandidates.length > 0
+      ? filteredCandidates
+      : routeCandidates;
   let routeReason: OutboxFileTransferRouteSelection['routeReason'] = ownerConnId
     ? 'owner'
     : connIds.length > 0
@@ -128,7 +137,8 @@ export function selectOutboxFileTransferRouteCandidates(args: {
     const filteredRecentInboundConnIds = recentInboundConnIds.filter(
       (connId) => !attemptedConnIds.has(connId),
     );
-    connIds = filteredRecentInboundConnIds.length > 0 ? filteredRecentInboundConnIds : recentInboundConnIds;
+    connIds =
+      filteredRecentInboundConnIds.length > 0 ? filteredRecentInboundConnIds : recentInboundConnIds;
     routeReason = connIds.length > 0 ? 'recent-inbound-fallback' : 'none';
   }
 
@@ -154,9 +164,12 @@ export function selectOutboxRouteCandidates(args: {
   const revalidatedCandidates = routeCandidates.filter(
     (connId) => attemptedConnIds.has(connId) && args.isRevalidatedAttemptedConn(connId),
   );
-  const preferredCandidates = unattemptedCandidates.length > 0 ? unattemptedCandidates : routeCandidates;
+  const preferredCandidates =
+    unattemptedCandidates.length > 0 ? unattemptedCandidates : routeCandidates;
   const ownerConnId =
-    args.ownerConnId && preferredCandidates.includes(args.ownerConnId) ? args.ownerConnId : undefined;
+    args.ownerConnId && preferredCandidates.includes(args.ownerConnId)
+      ? args.ownerConnId
+      : undefined;
   let connIds = ownerConnId ? [ownerConnId] : preferredCandidates;
   let routeReason: OutboxRouteSelection['routeReason'] = ownerConnId
     ? 'owner'

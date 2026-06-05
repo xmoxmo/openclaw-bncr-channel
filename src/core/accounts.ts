@@ -53,4 +53,4 @@ export function listAccountIds(cfg: any): string[] {
   return ids.length ? ids : [BNCR_DEFAULT_ACCOUNT_ID];
 }
 
-export { CHANNEL_ID, BNCR_DEFAULT_ACCOUNT_ID };
+export { BNCR_DEFAULT_ACCOUNT_ID, CHANNEL_ID };

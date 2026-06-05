@@ -5,6 +5,16 @@ import {
   normalizeInboundSessionKey,
   withTaskSessionKey,
 } from '../../core/targets.ts';
+import {
+  recordBncrInboundSession,
+  resolveBncrInboundSessionStorePath,
+  resolveBncrPinnedMainDmOwnerFromAllowlist,
+} from '../../openclaw/inbound-session-runtime.ts';
+import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
+import {
+  resolveOpenClawAgentRoute,
+  resolveOpenClawInboundLastRouteSessionKey,
+} from '../../openclaw/routing-runtime.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import {
@@ -12,16 +22,6 @@ import {
   recordAndPatchBncrInboundSessionEntry,
   wrapBncrInboundRecordSessionLabelCorrection,
 } from './session-label.ts';
-import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
-import {
-  resolveOpenClawAgentRoute,
-  resolveOpenClawInboundLastRouteSessionKey,
-} from '../../openclaw/routing-runtime.ts';
-import {
-  recordBncrInboundSession,
-  resolveBncrInboundSessionStorePath,
-  resolveBncrPinnedMainDmOwnerFromAllowlist,
-} from '../../openclaw/inbound-session-runtime.ts';
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
@@ -39,14 +39,22 @@ type NativeVerboseCommand = {
 
 function resolveBncrNativeVerboseCommand(command: NativeCommand): NativeVerboseCommand | null {
   if (command.command !== 'verbose') return null;
-  const rawLevel = String(command.raw.slice('/verbose'.length) || '').trim().toLowerCase();
+  const rawLevel = String(command.raw.slice('/verbose'.length) || '')
+    .trim()
+    .toLowerCase();
   if (!rawLevel || rawLevel === 'status') {
     return { handled: true, text: 'Current verbose level is unchanged.' };
   }
-  if (rawLevel === 'on') return { handled: true, verboseLevel: 'on', text: 'Verbose logging enabled.' };
-  if (rawLevel === 'off') return { handled: true, verboseLevel: 'off', text: 'Verbose logging disabled.' };
-  if (rawLevel === 'full') return { handled: true, verboseLevel: 'full', text: 'Verbose logging set to full.' };
-  return { handled: true, text: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on, full.` };
+  if (rawLevel === 'on')
+    return { handled: true, verboseLevel: 'on', text: 'Verbose logging enabled.' };
+  if (rawLevel === 'off')
+    return { handled: true, verboseLevel: 'off', text: 'Verbose logging disabled.' };
+  if (rawLevel === 'full')
+    return { handled: true, verboseLevel: 'full', text: 'Verbose logging set to full.' };
+  return {
+    handled: true,
+    text: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on, full.`,
+  };
 }
 
 function logBncrNativeCommandEvent(
@@ -93,17 +101,18 @@ export async function handleBncrNativeCommand(params: {
   | { handled: false }
   | { handled: true; command: string; sessionKey: string; fallbackToAgent?: boolean }
 > {
+  const { api, channelId, cfg, parsed, canonicalAgentId, rememberSessionRoute, enqueueFromReply } =
+    params;
   const {
-    api,
-    channelId,
-    cfg,
-    parsed,
-    canonicalAgentId,
-    rememberSessionRoute,
-    enqueueFromReply,
-    logger,
-  } = params;
-  const { accountId, route, peer, sessionKeyfromroute, providedOriginatingTo, clientId, extracted, msgId } = parsed;
+    accountId,
+    route,
+    peer,
+    sessionKeyfromroute,
+    providedOriginatingTo,
+    clientId,
+    extracted,
+    msgId,
+  } = parsed;
   const command = parseBncrNativeCommand(extracted.text);
   if (!command) return { handled: false };
   const nativeCommandDebugEnabled = cfg?.channels?.[channelId]?.debug?.verbose === true;

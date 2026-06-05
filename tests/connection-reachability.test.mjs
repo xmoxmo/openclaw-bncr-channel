@@ -123,10 +123,7 @@ test('hasAlternativeLiveConnection ignores current and invalid live candidates',
       now,
       connectTtlMs: 10_000,
       currentConnId: 'conn-a',
-      connections: [
-        conn({ connId: 'conn-a' }),
-        conn({ connId: 'bad', lastSeenAt: Number.NaN }),
-      ],
+      connections: [conn({ connId: 'conn-a' }), conn({ connId: 'bad', lastSeenAt: Number.NaN })],
     }),
     false,
   );

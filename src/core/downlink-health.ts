@@ -28,10 +28,10 @@ export function buildDownlinkHealth(input: DownlinkHealthInput) {
     ? Math.max(0, input.now - oldestPendingCreatedAt)
     : 0;
   const lastSignalAt =
-    Math.max(finiteNumberOr(input.lastInboundAt, 0), finiteNumberOr(input.lastActivityAt, 0)) || null;
+    Math.max(finiteNumberOr(input.lastInboundAt, 0), finiteNumberOr(input.lastActivityAt, 0)) ||
+    null;
   const inboundHealthy = !!lastSignalAt && input.now - lastSignalAt <= 5 * 60 * 1000;
-  const ackRecentlyHealthy =
-    !!input.lastAckOkAt && input.now - input.lastAckOkAt <= 5 * 60 * 1000;
+  const ackRecentlyHealthy = !!input.lastAckOkAt && input.now - input.lastAckOkAt <= 5 * 60 * 1000;
   const ackTimeoutRecent =
     !!input.lastAckTimeoutAt && input.now - input.lastAckTimeoutAt <= 5 * 60 * 1000;
   const ackStalled =

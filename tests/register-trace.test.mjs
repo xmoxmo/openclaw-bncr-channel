@@ -63,7 +63,10 @@ test('appendBoundedRegisterTrace keeps only the newest bounded entries', () => {
   const entries = [trace(1_000), trace(2_000), trace(3_000)];
   appendBoundedRegisterTrace(entries, trace(4_000), 2);
 
-  assert.deepEqual(entries.map((entry) => entry.ts), [3_000, 4_000]);
+  assert.deepEqual(
+    entries.map((entry) => entry.ts),
+    [3_000, 4_000],
+  );
 });
 
 test('buildRegisterDriftSnapshot copies summary buckets and trace entries', () => {

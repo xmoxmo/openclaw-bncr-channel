@@ -1,4 +1,3 @@
-import { buildOpenClawChannelOutboundSessionRoute } from '../../openclaw/session-route-runtime.ts';
 import {
   buildCanonicalBncrSessionKey,
   formatDisplayScope,
@@ -7,6 +6,7 @@ import {
   routeScopeToHex,
 } from '../../core/targets.ts';
 import type { BncrRoute } from '../../core/types.ts';
+import { buildOpenClawChannelOutboundSessionRoute } from '../../openclaw/session-route-runtime.ts';
 
 type ResolveBncrOutboundSessionRouteParams = {
   cfg: any;

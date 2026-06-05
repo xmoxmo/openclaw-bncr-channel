@@ -38,6 +38,8 @@ export const OUTBOUND_SCHEDULE_SOURCE = {
   RETRY_REROUTE_WAIT: 'retry-reroute-wait',
   // Direct push failure kept entry in outbox and scheduled backoff.
   PUSH_FAIL_WAIT: 'push-fail-wait',
+  // Pre-push guard deferred delivery before an actual send attempt.
+  PRE_PUSH_GUARD_WAIT: 'pre-push-guard-wait',
   // Per-account flush processed its single-run item budget and yielded to the next drain.
   ACCOUNT_BUDGET_YIELD: 'account-budget-yield',
   // Per-account flush spent its single-run time budget and yielded to the next drain.

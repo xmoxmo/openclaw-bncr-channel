@@ -44,10 +44,7 @@ function resolveReplyApi(api: RuntimeApiHolder): RuntimeReplyApi {
   return reply;
 }
 
-export function resolveOpenClawEnvelopeFormatOptions(
-  api: RuntimeApiHolder,
-  cfg: unknown,
-): unknown {
+export function resolveOpenClawEnvelopeFormatOptions(api: RuntimeApiHolder, cfg: unknown): unknown {
   const reply = resolveReplyApi(api);
   if (typeof reply.resolveEnvelopeFormatOptions !== 'function') {
     throw new Error('OpenClaw channel reply resolveEnvelopeFormatOptions API is unavailable');
@@ -98,7 +95,9 @@ export async function dispatchOpenClawReplyWithBufferedBlockDispatcher(
 ): Promise<unknown> {
   const reply = resolveReplyApi(api);
   if (typeof reply.dispatchReplyWithBufferedBlockDispatcher !== 'function') {
-    throw new Error('OpenClaw channel reply dispatchReplyWithBufferedBlockDispatcher API is unavailable');
+    throw new Error(
+      'OpenClaw channel reply dispatchReplyWithBufferedBlockDispatcher API is unavailable',
+    );
   }
   return reply.dispatchReplyWithBufferedBlockDispatcher(params);
 }

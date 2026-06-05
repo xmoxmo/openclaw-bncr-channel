@@ -146,7 +146,11 @@ export function enqueueReplyTextEntry(
 export function enqueueReplyMediaFallbackTextEntry(
   params: ReplyMediaFallbackTextEntryParams,
   helpers: {
-    logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) => void;
+    logInfo: (
+      scope: string | undefined,
+      message: string,
+      options?: { debugOnly?: boolean },
+    ) => void;
     enqueueOutbound: (entry: OutboxEntry) => void;
     buildTextOutboxEntry: (args: {
       accountId: string;

@@ -17,7 +17,9 @@ import { setBncrInboundSessionRuntimeForTest } from '../src/openclaw/inbound-ses
 
 function createInboundApiStub(options = {}) {
   const currentConfig = {};
-  const storePath = options.storePath || path.join(os.tmpdir(), `bncr-test-store-${Date.now()}-${Math.random()}.json`);
+  const storePath =
+    options.storePath ||
+    path.join(os.tmpdir(), `bncr-test-store-${Date.now()}-${Math.random()}.json`);
   const nativeCommandProducesReply = options.nativeCommandProducesReply ?? true;
   const calls = {
     builtContextArgs: [],
@@ -183,7 +185,6 @@ function cleanupBridge(bridge) {
   bridge.messageAckWaiters?.clear?.();
 }
 
-
 test('estimateBase64DecodedBytes accounts for padding and whitespace before inbound media guard', () => {
   assert.equal(estimateBase64DecodedBytes('TWFu'), 3);
   assert.equal(estimateBase64DecodedBytes('TWE='), 2);
@@ -282,10 +283,7 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
 
 test('resolveChatType keeps inbound bncr conversations locked to direct compatibility mode', () => {
   assert.equal(resolveChatType({ platform: 'tgBot', groupId: '0', userId: '10001' }), 'direct');
-  assert.equal(
-    resolveChatType({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
-    'direct',
-  );
+  assert.equal(resolveChatType({ platform: 'tgBot', groupId: '-1001', userId: '10001' }), 'direct');
 
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
@@ -329,8 +327,14 @@ test('resolveBncrInboundConversation returns canonical target and dispatch sessi
   assert.equal(resolution.rawTo, 'Bncr:tgBot:-1001:10001');
   assert.equal(resolution.canonicalTo, 'Bncr:tgBot:-1001:10001');
   assert.equal(resolution.originatingTo, resolution.rawTo);
-  assert.equal(resolution.baseSessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
-  assert.equal(resolution.dispatchSessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
+  assert.equal(
+    resolution.baseSessionKey,
+    'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+  );
+  assert.equal(
+    resolution.dispatchSessionKey,
+    'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+  );
 });
 
 test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbound context', async () => {
@@ -464,7 +468,10 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
   });
   assert.equal(enqueueCalls.length, 1);
   assert.equal(enqueueCalls[0].accountId, 'Primary');
-  assert.equal(enqueueCalls[0].sessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
+  assert.equal(
+    enqueueCalls[0].sessionKey,
+    'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+  );
   assert.deepEqual(enqueueCalls[0].route, {
     platform: 'tgBot',
     groupId: '-1001',
@@ -599,7 +606,10 @@ test('dispatchBncrInbound keeps canonical to/session identity locked while prese
   assert.equal(calls.recorded[0].ctx.ConversationLabel, 'Bncr:tgBot:-1001:10001');
 
   assert.equal(enqueueCalls.length, 1);
-  assert.equal(enqueueCalls[0].sessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
+  assert.equal(
+    enqueueCalls[0].sessionKey,
+    'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+  );
   assert.deepEqual(enqueueCalls[0].route, {
     platform: 'tgBot',
     groupId: '-1001',
@@ -772,7 +782,10 @@ test('slash command with no native reply falls back to normal bncr agent inbound
     calls.turnRuns[1].ctxPayload.StructuredContextFacts.message.commandBody,
     '/unknown-native-command',
   );
-  assert.equal(calls.turnRuns[1].ctxPayload.StructuredContextFacts.reply.to, 'Bncr:tgBot:-1001:10001');
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.reply.to,
+    'Bncr:tgBot:-1001:10001',
+  );
   assert.deepEqual(calls.turnRuns[1].ctxPayload.UntrustedStructuredContext, []);
   assert.equal(calls.turnRuns[1].ctxPayload.To, 'Bncr:tgBot:-1001:10001');
   assert.equal(calls.turnRuns[1].ctxPayload.OriginatingTo, 'Bncr:tgBot:-1001:10001');
@@ -797,12 +810,24 @@ test('slash command with no native reply falls back to normal bncr agent inbound
     'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
   );
   assert.equal(
-    logLines.some((line) => line.includes('[bncr] native-command') && line.includes('"event":"detected"')),
+    logLines.some(
+      (line) => line.includes('[bncr] native-command') && line.includes('"event":"detected"'),
+    ),
     false,
   );
-  assert.ok(logLines.some((line) => line.includes('[bncr] native-command') && line.includes('"event":"no-payload-fallback-to-agent"') && line.includes('"fallbackToAgent":true')));
+  assert.ok(
+    logLines.some(
+      (line) =>
+        line.includes('[bncr] native-command') &&
+        line.includes('"event":"no-payload-fallback-to-agent"') &&
+        line.includes('"fallbackToAgent":true'),
+    ),
+  );
   assert.equal(enqueueCalls.length, 1);
-  assert.equal(enqueueCalls[0].sessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
+  assert.equal(
+    enqueueCalls[0].sessionKey,
+    'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+  );
   assert.deepEqual(enqueueCalls[0].route, {
     platform: 'tgBot',
     groupId: '-1001',
@@ -874,7 +899,10 @@ test('slash command without clientId still falls back to normal bncr agent inbou
     'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
   );
   assert.equal(enqueueCalls.length, 1);
-  assert.equal(enqueueCalls[0].sessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
+  assert.equal(
+    enqueueCalls[0].sessionKey,
+    'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+  );
   assert.deepEqual(enqueueCalls[0].route, {
     platform: 'tgBot',
     groupId: '-1001',

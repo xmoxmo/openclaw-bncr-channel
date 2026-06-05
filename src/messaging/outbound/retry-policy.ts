@@ -1,5 +1,3 @@
-import type { BncrRoute } from '../../channel.ts';
-
 function finiteNonNegativeIntegerOr(value: unknown, fallback: number): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return fallback;
@@ -48,14 +46,18 @@ export function computeRetryRerouteDecision(
     ? input.attemptedConnIds.filter((v): v is string => typeof v === 'string' && !!v)
     : [];
   const currentConnId = `${input.currentConnId || ''}`.trim();
-  if (currentConnId && !attemptedConnIds.includes(currentConnId)) attemptedConnIds.push(currentConnId);
+  if (currentConnId && !attemptedConnIds.includes(currentConnId))
+    attemptedConnIds.push(currentConnId);
 
   const availableConnIds = Array.isArray(input.availableConnIds)
     ? input.availableConnIds.filter((v): v is string => typeof v === 'string' && !!v)
     : [];
   const revalidatedConnIds = attemptedConnIds.filter((connId) => availableConnIds.includes(connId));
-  const hasUntriedAlternative = availableConnIds.some((connId) => !attemptedConnIds.includes(connId));
-  const shouldFastReroute = input.requireAck && input.currentFastReroutePending !== true && hasUntriedAlternative;
+  const hasUntriedAlternative = availableConnIds.some(
+    (connId) => !attemptedConnIds.includes(connId),
+  );
+  const shouldFastReroute =
+    input.requireAck && input.currentFastReroutePending !== true && hasUntriedAlternative;
 
   const currentRetryCount = finiteNonNegativeIntegerOr(input.currentRetryCount, 0);
   const currentRouteAttemptRound = finiteNonNegativeIntegerOr(input.currentRouteAttemptRound, 0);
@@ -73,10 +75,16 @@ export function computeRetryRerouteDecision(
     };
   }
 
-  const nextAttemptAt = shouldFastReroute ? input.nowMs + 1_000 : input.nowMs + deps.backoffMs(nextRetryCount);
+  const nextAttemptAt = shouldFastReroute
+    ? input.nowMs + 1_000
+    : input.nowMs + deps.backoffMs(nextRetryCount);
   const lastError = input.requireAck ? 'push-ack-timeout' : 'push-delivery-unconfirmed';
-  const routeAttemptRound = hasUntriedAlternative ? currentRouteAttemptRound : currentRouteAttemptRound + 1;
-  const fastReroutePending = hasUntriedAlternative ? shouldFastReroute || input.currentFastReroutePending === true : false;
+  const routeAttemptRound = hasUntriedAlternative
+    ? currentRouteAttemptRound
+    : currentRouteAttemptRound + 1;
+  const fastReroutePending = hasUntriedAlternative
+    ? shouldFastReroute || input.currentFastReroutePending === true
+    : false;
 
   return {
     kind: 'retry',

@@ -49,9 +49,9 @@ export function parseBncrInboundParams(params: any) {
   const groupId = asString(params?.groupId || '0').trim() || '0';
   const userId = asString(params?.userId || '').trim();
   const sessionKeyfromroute = asString(params?.sessionKey || '').trim();
-  const providedOriginatingTo = asString(
-    params?.originatingTo || params?.providedOriginatingTo || params?.to || '',
-  ).trim() || undefined;
+  const providedOriginatingTo =
+    asString(params?.originatingTo || params?.providedOriginatingTo || params?.to || '').trim() ||
+    undefined;
   const clientId = asString(params?.clientId || '').trim() || undefined;
 
   const route: BncrRoute = {

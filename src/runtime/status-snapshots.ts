@@ -15,7 +15,9 @@ export function buildRuntimeQueueSnapshot(args: {
 }) {
   const accountId = normalizeAccountId(args.accountId);
   const pending = Array.from(args.outboxEntries).filter((v) => v.accountId === accountId).length;
-  const deadLetter = Array.from(args.deadLetterEntries).filter((v) => v.accountId === accountId).length;
+  const deadLetter = Array.from(args.deadLetterEntries).filter(
+    (v) => v.accountId === accountId,
+  ).length;
   const sessionRoutesCount = Array.from(args.sessionRouteEntries).filter(
     (v) => v.accountId === accountId,
   ).length;

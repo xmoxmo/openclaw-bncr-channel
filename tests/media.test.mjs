@@ -77,7 +77,9 @@ test('loadOpenClawWebMedia prefers channel readRemoteMediaBuffer for remote http
     { localRoots: ['/tmp'], maxBytes: 1234 },
   );
 
-  assert.deepEqual(calls, [['readRemoteMediaBuffer', { url: 'https://example.com/remote.png', maxBytes: 1234 }]]);
+  assert.deepEqual(calls, [
+    ['readRemoteMediaBuffer', { url: 'https://example.com/remote.png', maxBytes: 1234 }],
+  ]);
   assert.equal(loaded.buffer.toString(), 'remote');
   assert.equal(loaded.contentType, 'image/png');
   assert.equal(loaded.fileName, 'remote.png');
@@ -342,11 +344,7 @@ test('file-transfer waits until final push is emitted before waiting for message
   try {
     await bridge.flushPushQueue('Primary');
 
-    assert.deepEqual(order, [
-      'transfer-done',
-      'broadcast:plugin.bncr.push',
-      'wait-message-ack',
-    ]);
+    assert.deepEqual(order, ['transfer-done', 'broadcast:plugin.bncr.push', 'wait-message-ack']);
   } finally {
     cleanupBridge(bridge);
   }

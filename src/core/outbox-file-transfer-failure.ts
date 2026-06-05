@@ -1,5 +1,5 @@
-import type { OutboxEntry } from './types.ts';
 import { buildPushFailureArgs } from './outbox-push-args.ts';
+import type { OutboxEntry } from './types.ts';
 
 export function resolveFileTransferFailureState(args: {
   entry: OutboxEntry;
@@ -13,10 +13,7 @@ export function resolveFileTransferFailureState(args: {
   };
 }
 
-export function buildFileTransferPushFailureArgs(args: {
-  entry: OutboxEntry;
-  retryable: boolean;
-}) {
+export function buildFileTransferPushFailureArgs(args: { entry: OutboxEntry; retryable: boolean }) {
   return buildPushFailureArgs({
     entry: args.entry,
     retryable: args.retryable,

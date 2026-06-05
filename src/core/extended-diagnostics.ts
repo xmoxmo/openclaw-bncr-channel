@@ -22,6 +22,7 @@ type ExtendedDiagnosticsInput = {
     traceSummary: Record<string, any>;
     lastDriftSnapshot: any;
   };
+  outbound?: Record<string, any>;
   connection: {
     active: number;
     primaryLeaseId: string | null;
@@ -66,6 +67,7 @@ export function buildExtendedDiagnostics(input: ExtendedDiagnosticsInput) {
       ...input.connection,
       recent: input.connection.recent.map((entry) => ({ ...entry })),
     },
+    outbound: input.outbound ? { ...input.outbound } : undefined,
     protocol: {
       ...input.protocol,
       features: { ...input.protocol.features },

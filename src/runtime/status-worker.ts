@@ -60,7 +60,10 @@ export function clearAllBncrStatusWorkers(runtime: StatusWorkerRuntime, reason: 
   }
 }
 
-export async function startBncrStatusWorker(runtime: StatusWorkerRuntime, ctx: StatusWorkerContext) {
+export async function startBncrStatusWorker(
+  runtime: StatusWorkerRuntime,
+  ctx: StatusWorkerContext,
+) {
   const accountId = normalizeAccountId(ctx.accountId);
   clearBncrStatusWorker(runtime, accountId, 'start-replace');
 
@@ -151,7 +154,10 @@ export async function startBncrStatusWorker(runtime: StatusWorkerRuntime, ctx: S
   await done;
 }
 
-export async function stopBncrStatusWorker(runtime: StatusWorkerRuntime, ctx: Partial<StatusWorkerContext>) {
+export async function stopBncrStatusWorker(
+  runtime: StatusWorkerRuntime,
+  ctx: Partial<StatusWorkerContext>,
+) {
   const accountId = normalizeAccountId(ctx?.accountId);
   const cleared = clearBncrStatusWorker(runtime, accountId, 'explicit-stop');
   const previous = ctx?.getStatus?.() || {};

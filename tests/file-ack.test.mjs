@@ -15,7 +15,10 @@ test('buildFileAckKey preserves valid non-negative integer chunk indexes', () =>
 });
 
 test('buildFileAckKey maps missing invalid and non-integer chunk indexes to stage-level key', () => {
-  assert.equal(buildFileAckKey({ transferId: 'transfer-1', stage: 'complete' }), 'transfer-1|complete|-');
+  assert.equal(
+    buildFileAckKey({ transferId: 'transfer-1', stage: 'complete' }),
+    'transfer-1|complete|-',
+  );
   assert.equal(
     buildFileAckKey({ transferId: 'transfer-1', stage: 'chunk', chunkIndex: -1 }),
     'transfer-1|chunk|-',

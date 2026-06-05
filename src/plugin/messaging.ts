@@ -1,9 +1,5 @@
 import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
-import {
-  formatDisplayScope,
-  formatTargetDisplay,
-  parseExplicitTarget,
-} from '../core/targets.ts';
+import { formatDisplayScope, formatTargetDisplay, parseExplicitTarget } from '../core/targets.ts';
 import { resolveBncrOutboundSessionRoute } from '../messaging/outbound/session-route.ts';
 import {
   looksLikeBncrExplicitTarget,
@@ -38,10 +34,7 @@ function resolveMessagingCanonicalAgentId(
   cfg: any,
   accountId: string,
 ) {
-  return (
-    runtimeBridge.canonicalAgentId ||
-    runtimeBridge.ensureCanonicalAgentId({ cfg, accountId })
-  );
+  return runtimeBridge.canonicalAgentId || runtimeBridge.ensureCanonicalAgentId({ cfg, accountId });
 }
 
 export function createBncrMessagingExplicitTargetParser(

@@ -66,7 +66,8 @@ export function buildBncrMediaOutboundFrame(params: {
     messageId: params.messageId,
     idempotencyKey: params.messageId,
     sessionKey: params.sessionKey,
-    replyToId: normalizeOutboundReplyToId({ kind: params.kind, replyToId: params.replyToId }) || undefined,
+    replyToId:
+      normalizeOutboundReplyToId({ kind: params.kind, replyToId: params.replyToId }) || undefined,
     message: {
       platform: params.route.platform,
       groupId: params.route.groupId,

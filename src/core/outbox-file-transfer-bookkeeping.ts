@@ -1,5 +1,5 @@
-import type { BncrConnection, OutboxEntry } from './types.ts';
 import { buildPushOkArgs } from './outbox-push-args.ts';
+import type { BncrConnection, OutboxEntry } from './types.ts';
 
 export function buildFileTransferPushSuccessArgs(args: {
   entry: OutboxEntry;

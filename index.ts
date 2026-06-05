@@ -111,7 +111,6 @@ type BncrGatewayRuntime = {
 };
 
 let runtime: LoadedRuntime | null = null;
-let activeServiceStop: (() => Promise<void>) | null = null;
 const identityIds = new WeakMap<object, string>();
 let identitySeq = 0;
 
@@ -297,7 +296,9 @@ const loadRuntimeSync = (): LoadedRuntime => {
     return runtime;
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    throw new Error(`bncr failed to load channel runtime after dependency bootstrap from ${runtimeSourceDir}: ${detail}`);
+    throw new Error(
+      `bncr failed to load channel runtime after dependency bootstrap from ${runtimeSourceDir}: ${detail}`,
+    );
   }
 };
 
@@ -365,14 +366,9 @@ const getGatewayRuntime = (): BncrGatewayRuntime => {
 };
 
 const getProcessOwnerApiInstanceId = (gatewayRuntime: BncrGatewayRuntime) =>
-  gatewayRuntime.serviceOwnerApiInstanceId ||
-  gatewayRuntime.channelOwnerApiInstanceId ||
-  undefined;
+  gatewayRuntime.serviceOwnerApiInstanceId || gatewayRuntime.channelOwnerApiInstanceId || undefined;
 
-const shouldAdoptProcessOwner = (
-  apiInstanceId: string,
-  gatewayRuntime: BncrGatewayRuntime,
-) => {
+const shouldAdoptProcessOwner = (apiInstanceId: string, gatewayRuntime: BncrGatewayRuntime) => {
   const existingOwnerApiInstanceId = getProcessOwnerApiInstanceId(gatewayRuntime);
   const hasSingletonOwner =
     Boolean(gatewayRuntime.serviceRegistered) || Boolean(gatewayRuntime.channelRegistered);
@@ -845,7 +841,6 @@ const plugin = {
         },
         stop: serviceStopHandler,
       });
-      activeServiceStop = serviceStopHandler;
       gatewayRuntime.serviceRegistered = true;
       gatewayRuntime.serviceOwnerApiInstanceId = apiInstanceId;
       meta.service = true;

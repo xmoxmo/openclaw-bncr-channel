@@ -61,10 +61,7 @@ export function buildFileTransferAbortPayload(args: {
   };
 }
 
-export function buildFileTransferCompletePayload(args: {
-  transferId: string;
-  ts: number;
-}) {
+export function buildFileTransferCompletePayload(args: { transferId: string; ts: number }) {
   return {
     transferId: args.transferId,
     ts: args.ts,

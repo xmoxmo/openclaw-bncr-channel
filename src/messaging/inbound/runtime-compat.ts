@@ -20,8 +20,14 @@ export function resolveBncrChannelInboundRuntime(api: any): ChannelRuntimeCompat
   if (legacyTurnRuntime?.buildContext && legacyTurnRuntime?.run) {
     if (!warnedLegacyTurnRuntime) {
       warnedLegacyTurnRuntime = true;
-      const channelRuntimeKeys = Object.keys(channelRuntime ?? {}).sort().join(',') || 'none';
-      const inboundRuntimeKeys = Object.keys(inboundRuntime ?? {}).sort().join(',') || 'none';
+      const channelRuntimeKeys =
+        Object.keys(channelRuntime ?? {})
+          .sort()
+          .join(',') || 'none';
+      const inboundRuntimeKeys =
+        Object.keys(inboundRuntime ?? {})
+          .sort()
+          .join(',') || 'none';
       emitBncrLogLine(
         'warn',
         `[bncr] inbound runtime fallback=turn|preferred=inbound|channelKeys=${channelRuntimeKeys}|inboundKeys=${inboundRuntimeKeys}`,

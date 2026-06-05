@@ -1,4 +1,4 @@
-import { CHANNEL_ID, BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
+import { BNCR_DEFAULT_ACCOUNT_ID, CHANNEL_ID, normalizeAccountId } from '../core/accounts.ts';
 import { getOpenClawRuntimeConfig } from '../openclaw/config-runtime.ts';
 
 type RuntimeApiHolder = { api: unknown };

@@ -1,4 +1,3 @@
-import { defineChannelMessageAdapter } from 'openclaw/plugin-sdk/channel-message';
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageSendMediaContext,
@@ -6,15 +5,23 @@ import type {
   ChannelMessageSendResult,
   ChannelMessageSendTextContext,
 } from 'openclaw/plugin-sdk/channel-message';
+import { defineChannelMessageAdapter } from 'openclaw/plugin-sdk/channel-message';
 
-import { buildFileTransferOutboxEntry, buildTextOutboxEntry } from '../../core/outbox-entry-builders.ts';
+import {
+  buildFileTransferOutboxEntry,
+  buildTextOutboxEntry,
+} from '../../core/outbox-entry-builders.ts';
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
 import { buildBncrDurableQueuedResult } from './durable-queue-adapter.ts';
 
 export type BncrDurableMessageQueuedAdapterDeps<TConfig = unknown> = {
   enqueueText: (ctx: ChannelMessageSendTextContext<TConfig>) => Promise<OutboxEntry> | OutboxEntry;
-  enqueueMedia?: (ctx: ChannelMessageSendMediaContext<TConfig>) => Promise<OutboxEntry> | OutboxEntry;
-  enqueuePayload?: (ctx: ChannelMessageSendPayloadContext<TConfig>) => Promise<OutboxEntry> | OutboxEntry;
+  enqueueMedia?: (
+    ctx: ChannelMessageSendMediaContext<TConfig>,
+  ) => Promise<OutboxEntry> | OutboxEntry;
+  enqueuePayload?: (
+    ctx: ChannelMessageSendPayloadContext<TConfig>,
+  ) => Promise<OutboxEntry> | OutboxEntry;
   now?: () => number;
 };
 
@@ -97,7 +104,10 @@ export function createBncrDurableMessageQueuedAdapterFromBuilders<TConfig = unkn
   });
 }
 
-function toChannelMessageSendResult(entry: OutboxEntry | undefined, now?: () => number): ChannelMessageSendResult {
+function toChannelMessageSendResult(
+  entry: OutboxEntry | undefined,
+  now?: () => number,
+): ChannelMessageSendResult {
   if (!entry) throw new Error('bncr durable message adapter did not receive an outbox entry');
   const queued = buildBncrDurableQueuedResult({ entry, sentAt: now?.() });
   return {

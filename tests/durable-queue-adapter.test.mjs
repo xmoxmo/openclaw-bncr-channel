@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildTextOutboxEntry, buildFileTransferOutboxEntry } from '../src/core/outbox-entry-builders.ts';
+import {
+  buildFileTransferOutboxEntry,
+  buildTextOutboxEntry,
+} from '../src/core/outbox-entry-builders.ts';
 import { buildBncrDurableQueuedResult } from '../src/messaging/outbound/durable-queue-adapter.ts';
 
 const route = {

@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import type {
   GatewayRequestHandlerOptions,
@@ -92,28 +91,18 @@ import {
 import {
   buildCanonicalBncrSessionKey,
   formatDisplayScope,
-  isLowerHex,
   normalizeInboundSessionKey,
   normalizeStoredSessionKey,
   parseRouteFromDisplayScope,
-  parseRouteFromHexScope,
-  parseRouteFromScope,
   parseRouteLike,
   parseStrictBncrSessionKey,
   routeKey,
-  routeScopeToHex,
   withTaskSessionKey,
 } from './core/targets.ts';
 import type { BncrConnection, BncrRoute, OutboxEntry } from './core/types.ts';
 import { dispatchBncrInbound } from './messaging/inbound/dispatch.ts';
 import { checkBncrMessageGate } from './messaging/inbound/gate.ts';
 import { parseBncrInboundParams } from './messaging/inbound/parse.ts';
-import {
-  deleteBncrMessageAction,
-  editBncrMessageAction,
-  reactBncrMessageAction,
-  sendBncrReplyAction,
-} from './messaging/outbound/actions.ts';
 import {
   buildEnqueueFromReplyDebugInfo,
   buildFlushDebugInfo,
@@ -125,20 +114,16 @@ import {
   buildOutboxRouteSelectDebugInfo,
   buildOutboxScheduleDebugInfo,
   buildPushFailureDebugInfo,
-  buildReplyMediaFallbackDebugInfo,
   buildRetryRerouteDebugInfo,
 } from './messaging/outbound/diagnostics.ts';
-import {
-  buildBncrMediaOutboundFrame,
-  resolveBncrOutboundMessageType,
-} from './messaging/outbound/media.ts';
+import { buildBncrMediaOutboundFrame } from './messaging/outbound/media.ts';
 import {
   getOpenClawRuntimeConfig,
   getOpenClawRuntimeConfigOrDefault,
 } from './openclaw/config-runtime.ts';
 import {
-  type OpenClawLoadedMedia,
   loadOpenClawWebMedia,
+  type OpenClawLoadedMedia,
   saveOpenClawChannelMediaBuffer,
 } from './openclaw/media-runtime.ts';
 import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
@@ -283,10 +268,11 @@ function buildInboundResponsePayload(
       };
   }
 }
+
 import { buildBncrDurableQueuedResult } from './messaging/outbound/durable-queue-adapter.ts';
 import {
-  type MediaDedupeCacheEntry,
   buildMediaTextFallback,
+  type MediaDedupeCacheEntry,
   normalizeMessageText,
   normalizeReplyToId,
 } from './messaging/outbound/media-dedupe.ts';
@@ -310,18 +296,16 @@ import {
   OUTBOUND_TERMINAL_REASON,
 } from './messaging/outbound/reasons.ts';
 import {
-  type NormalizedReplyPayload,
-  type ReplyMediaEntriesParams,
-  type ReplyMediaFileTransferParams,
-  type ReplyPayloadInput,
-  buildReplyTextOutboxEntry,
   enqueueNormalizedReplyPayload,
   enqueueReplyMediaFallbackTextEntry,
   enqueueReplyMediaFileTransferEntry,
   enqueueReplyTextEntry,
   enqueueSingleReplyMediaEntry,
   hasReplyMediaEntries,
+  type NormalizedReplyPayload,
   normalizeReplyPayload,
+  type ReplyMediaEntriesParams,
+  type ReplyPayloadInput,
 } from './messaging/outbound/reply-enqueue.ts';
 import {
   computePushFailureDecision,
@@ -339,10 +323,7 @@ import { BNCR_CHANNEL_META } from './plugin/meta.ts';
 import { createBncrOutboundRuntime } from './plugin/outbound.ts';
 import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
 import { createBncrStatusSurface } from './plugin/status.ts';
-import {
-  pruneLogDedupeState as pruneLogDedupeStateFromRuntime,
-  shouldEmitDedupLog as shouldEmitDedupLogFromRuntime,
-} from './runtime/log-dedupe.ts';
+import { shouldEmitDedupLog as shouldEmitDedupLogFromRuntime } from './runtime/log-dedupe.ts';
 import {
   buildBncrRuntimeAckStrategy,
   computeBncrRecommendedAckTimeoutMs,
@@ -365,10 +346,10 @@ import { buildRuntimeStatusSnapshots } from './runtime/status-snapshots.ts';
 import {
   type ChannelAccountWorkerHandle,
   clearAllBncrStatusWorkers,
-  clearBncrStatusWorker,
   startBncrStatusWorker,
   stopBncrStatusWorker,
 } from './runtime/status-worker.ts';
+
 const BRIDGE_VERSION = 2;
 const BNCR_PUSH_EVENT = 'plugin.bncr.push';
 const BNCR_FILE_INIT_EVENT = 'plugin.bncr.file.init';
@@ -387,6 +368,7 @@ const PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS = 2_000;
 const PUSH_DRAIN_EXCEPTION_RETRY_LIMIT = 3;
 const PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS = 1_000;
 const PUSH_DRAIN_STUCK_WARN_MS = 30_000;
+const PRE_PUSH_GUARD_RETRY_DELAY_MS = 1_000;
 const PUSH_ACK_TIMEOUT_MS = 30_000;
 const ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED = true;
 const RECOMMENDED_ACK_TIMEOUT_MIN_MS = PUSH_ACK_TIMEOUT_MS;
@@ -402,7 +384,6 @@ const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
 const INBOUND_FILE_TRANSFER_MAX_BYTES = 50 * 1024 * 1024;
 const INBOUND_FILE_TRANSFER_MAX_CHUNKS =
   Math.ceil(INBOUND_FILE_TRANSFER_MAX_BYTES / FILE_CHUNK_SIZE) + 1;
-const FILE_CHUNK_RETRY = 3;
 const FILE_ACK_TIMEOUT_MS = 30_000;
 const FILE_TRANSFER_ACK_TTL_MS = 30_000;
 const MAX_EARLY_FILE_ACKS = 1000;
@@ -461,8 +442,6 @@ type FileAckPayloadState = {
   ok: boolean;
   at: number;
 };
-
-type ChatType = 'direct' | 'group' | (string & {});
 
 type ChannelMessageActionAdapter = {
   describeMessageTool: (ctx: { cfg: any }) => { actions: string[]; capabilities: unknown[] } | null;
@@ -770,8 +749,6 @@ class BncrBridgeRuntime {
   private channelAccountWorkers = new Map<string, ChannelAccountWorkerHandle>();
   private logDedupeState = new Map<string, { at: number; sig: string }>();
   private canonicalAgentId: string | null = null;
-  private canonicalAgentSource: 'startup' | 'runtime' | 'fallback-main' | null = null;
-  private canonicalAgentResolvedAt: number | null = null;
 
   // 内置健康/回归计数（替代独立脚本）
   private startedAt = now();
@@ -787,6 +764,12 @@ class BncrBridgeRuntime {
   private pushDrainRunningSinceByAccount = new Map<string, number>();
   private pushDrainStuckWarnedAtByAccount = new Map<string, number>();
   private pushDrainExceptionRetryCount = 0;
+  private lastGatewayContextAt: number | null = null;
+  private outboundEnqueueCountByAccount = new Map<string, number>();
+  private lastOutboundEnqueueAtByAccount = new Map<string, number>();
+  private prePushGuardSkipCountByAccount = new Map<string, number>();
+  private lastPrePushGuardSkipAtByAccount = new Map<string, number>();
+  private lastPrePushGuardSkipReasonByAccount = new Map<string, string>();
   private messageAckWaiters = new Map<
     // Refactor boundary note (message ACK runtime):
     // These waiters are part of the outbound message-ack lifecycle, not just a utility map.
@@ -862,28 +845,6 @@ class BncrBridgeRuntime {
     this.logInfo(scope, this.buildDebugJsonMessage(event, payload), options);
   }
 
-  private logWarnJson(
-    scope: string | undefined,
-    event: string,
-    payload: Record<string, unknown>,
-    options?: { debugOnly?: boolean },
-  ) {
-    this.logWarn(scope, this.buildDebugJsonMessage(event, payload), options);
-  }
-
-  private logErrorJson(
-    scope: string | undefined,
-    event: string,
-    payload: Record<string, unknown>,
-    options?: { debugOnly?: boolean },
-  ) {
-    this.logError(scope, this.buildDebugJsonMessage(event, payload), options);
-  }
-
-  private pruneLogDedupeState(currentTime = now()) {
-    pruneLogDedupeStateFromRuntime(this.logDedupeState, currentTime);
-  }
-
   private shouldEmitDedupLog(key: string, sig: string, windowMs = 5 * 60 * 1000) {
     return shouldEmitDedupLogFromRuntime({
       state: this.logDedupeState,
@@ -903,24 +864,6 @@ class BncrBridgeRuntime {
     this.logInfo(scope, message, { debugOnly: options.debugOnly });
   }
 
-  private logWarnDedup(
-    scope: string | undefined,
-    message: string,
-    options: { key: string; sig: string; debugOnly?: boolean; windowMs?: number },
-  ) {
-    if (!this.shouldEmitDedupLog(options.key, options.sig, options.windowMs)) return;
-    this.logWarn(scope, message, { debugOnly: options.debugOnly });
-  }
-
-  private logErrorDedup(
-    scope: string | undefined,
-    message: string,
-    options: { key: string; sig: string; debugOnly?: boolean; windowMs?: number },
-  ) {
-    if (!this.shouldEmitDedupLog(options.key, options.sig, options.windowMs)) return;
-    this.logError(scope, message, { debugOnly: options.debugOnly });
-  }
-
   private logInfoDedupJson(
     scope: string | undefined,
     event: string,
@@ -929,26 +872,6 @@ class BncrBridgeRuntime {
   ) {
     if (!this.shouldEmitDedupLog(options.key, options.sig, options.windowMs)) return;
     this.logInfoJson(scope, event, payload, { debugOnly: options.debugOnly });
-  }
-
-  private logWarnDedupJson(
-    scope: string | undefined,
-    event: string,
-    payload: Record<string, unknown>,
-    options: { key: string; sig: string; debugOnly?: boolean; windowMs?: number },
-  ) {
-    if (!this.shouldEmitDedupLog(options.key, options.sig, options.windowMs)) return;
-    this.logWarnJson(scope, event, payload, { debugOnly: options.debugOnly });
-  }
-
-  private logErrorDedupJson(
-    scope: string | undefined,
-    event: string,
-    payload: Record<string, unknown>,
-    options: { key: string; sig: string; debugOnly?: boolean; windowMs?: number },
-  ) {
-    if (!this.shouldEmitDedupLog(options.key, options.sig, options.windowMs)) return;
-    this.logErrorJson(scope, event, payload, { debugOnly: options.debugOnly });
   }
 
   private summarizeTextPreview(raw: string, limit = 8) {
@@ -1024,10 +947,6 @@ class BncrBridgeRuntime {
         ) => this.logInfoDedup(scope, message, options),
       },
     };
-  }
-
-  private clearChannelAccountWorker(accountId: string, reason: string) {
-    return clearBncrStatusWorker(this.buildStatusWorkerRuntime(), accountId, reason);
   }
 
   private clearAllChannelAccountWorkers(reason: string) {
@@ -1250,6 +1169,8 @@ class BncrBridgeRuntime {
         lastActivityAt: this.lastActivityAtGlobal,
         lastInboundAt: this.lastInboundAtGlobal,
         lastAckAt: this.lastAckAtGlobal,
+        hasGatewayContext: Boolean(this.gatewayContext),
+        lastGatewayContextAt: this.lastGatewayContextAt,
         recent: Array.from(this.recentConnections.entries()).map(([leaseId, entry]) => ({
           leaseId,
           epoch: entry.epoch,
@@ -1257,6 +1178,16 @@ class BncrBridgeRuntime {
           lastActivityAt: entry.lastActivityAt,
           isPrimary: entry.isPrimary,
         })),
+      },
+      outbound: {
+        pending: Array.from(this.outbox.values()).filter((entry) => entry.accountId === acc).length,
+        enqueueCount: this.getCounter(this.outboundEnqueueCountByAccount, acc),
+        lastEnqueueAt: this.lastOutboundEnqueueAtByAccount.get(acc) || null,
+        prePushGuardSkipCount: this.getCounter(this.prePushGuardSkipCountByAccount, acc),
+        lastPrePushGuardSkipAt: this.lastPrePushGuardSkipAtByAccount.get(acc) || null,
+        lastPrePushGuardSkipReason: this.lastPrePushGuardSkipReasonByAccount.get(acc) || null,
+        hasGatewayContext: Boolean(this.gatewayContext),
+        lastGatewayContextAt: this.lastGatewayContextAt,
       },
       protocol: {
         bridgeVersion: BRIDGE_VERSION,
@@ -1423,8 +1354,6 @@ class BncrBridgeRuntime {
     });
     if (!agentId) return;
     this.canonicalAgentId = agentId;
-    this.canonicalAgentSource = 'startup';
-    this.canonicalAgentResolvedAt = now();
   }
 
   private ensureCanonicalAgentId(args: {
@@ -1438,14 +1367,10 @@ class BncrBridgeRuntime {
     const agentId = this.tryResolveBindingAgentId(args);
     if (agentId) {
       this.canonicalAgentId = agentId;
-      this.canonicalAgentSource = 'runtime';
-      this.canonicalAgentResolvedAt = now();
       return agentId;
     }
 
     this.canonicalAgentId = 'main';
-    this.canonicalAgentSource = 'fallback-main';
-    this.canonicalAgentResolvedAt = now();
     this.logWarn(
       'target',
       'binding agent unresolved; fallback to main for current process lifetime',
@@ -1808,7 +1733,9 @@ class BncrBridgeRuntime {
   }
 
   private rememberGatewayContext(context: GatewayRequestHandlerOptions['context']) {
-    if (context) this.gatewayContext = context;
+    if (!context) return;
+    this.gatewayContext = context;
+    this.lastGatewayContextAt = now();
   }
 
   private resolveOutboxPushOwner(accountId: string): BncrConnection | null {
@@ -2156,10 +2083,7 @@ class BncrBridgeRuntime {
     );
   }
 
-  private handleFileTransferPushFailure(args: {
-    entry: OutboxEntry;
-    error: unknown;
-  }) {
+  private handleFileTransferPushFailure(args: { entry: OutboxEntry; error: unknown }) {
     this.recordOutboxPushFailure({
       entry: args.entry,
       error: args.error,
@@ -2473,10 +2397,7 @@ class BncrBridgeRuntime {
     );
   }
 
-  private handleTextPushFailure(args: {
-    entry: OutboxEntry;
-    error: unknown;
-  }) {
+  private handleTextPushFailure(args: { entry: OutboxEntry; error: unknown }) {
     this.recordOutboxPushFailure({
       entry: args.entry,
       error: args.error,
@@ -2558,6 +2479,7 @@ class BncrBridgeRuntime {
     ownerConnId?: string;
     ownerClientId?: string;
   }) {
+    this.recordPrePushGuardSkip({ accountId: args.accountId, reason: args.reason });
     this.logInfo(
       'outbox push skip',
       `mid=${args.messageId}|q=${this.outbox.size}|reason=${args.reason}${args.kind ? `|kind=${args.kind}` : ''}`,
@@ -3148,6 +3070,25 @@ class BncrBridgeRuntime {
     if (args.persist) this.scheduleSave();
   }
 
+  private isPrePushGuardReason(reason: string) {
+    return reason === 'no-gateway-context' || reason === 'no-active-connection';
+  }
+
+  private recordPrePushGuardSkip(args: { accountId: string; reason: string }) {
+    if (!this.isPrePushGuardReason(args.reason)) return;
+    const acc = normalizeAccountId(args.accountId);
+    this.incrementCounter(this.prePushGuardSkipCountByAccount, acc);
+    this.lastPrePushGuardSkipAtByAccount.set(acc, now());
+    this.lastPrePushGuardSkipReasonByAccount.set(acc, args.reason);
+  }
+
+  private isPrePushGuardDeferral(entry: OutboxEntry) {
+    return (
+      entry.lastError === 'gateway context unavailable' ||
+      entry.lastError === 'no active bncr client'
+    );
+  }
+
   private recordOutboxPushFailure(args: {
     entry: OutboxEntry;
     error: unknown;
@@ -3263,11 +3204,7 @@ class BncrBridgeRuntime {
     return Array.from(this.outbox.values()).filter((entry) => entry.accountId === acc);
   }
 
-  private maybeLogOutboxDrainStuck(args: {
-    accountId: string;
-    trigger: string;
-    reason: string;
-  }) {
+  private maybeLogOutboxDrainStuck(args: { accountId: string; trigger: string; reason: string }) {
     const acc = normalizeAccountId(args.accountId);
     const startedAt = this.pushDrainRunningSinceByAccount.get(acc) || 0;
     if (!startedAt) return;
@@ -3635,6 +3572,26 @@ class BncrBridgeRuntime {
           if (!this.outbox.has(entry.messageId)) {
             await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
             continue;
+          }
+
+          if (this.isPrePushGuardDeferral(entry)) {
+            const wait = PRE_PUSH_GUARD_RETRY_DELAY_MS;
+            localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
+            this.logInfo(
+              'outbox',
+              `schedule ${JSON.stringify(
+                buildOutboxScheduleDebugInfo({
+                  bridgeId: this.bridgeId,
+                  accountId: acc,
+                  messageId: entry.messageId,
+                  source: OUTBOUND_SCHEDULE_SOURCE.PRE_PUSH_GUARD_WAIT,
+                  wait,
+                  localNextDelay,
+                }),
+              )}`,
+              { debugOnly: true },
+            );
+            break;
           }
 
           const decision = computePushFailureDecision(
@@ -4408,37 +4365,6 @@ class BncrBridgeRuntime {
     return true;
   }
 
-  private pushFileEventToAccount(
-    accountId: string,
-    event: string,
-    payload: Record<string, unknown>,
-  ) {
-    const connIds = this.resolvePushConnIds(accountId);
-    if (!connIds.size || !this.gatewayContext) {
-      throw new Error(`no active bncr connection for account=${accountId}`);
-    }
-    const normalizedEvent =
-      event === 'bncr.file.init'
-        ? BNCR_FILE_INIT_EVENT
-        : event === 'bncr.file.chunk'
-          ? BNCR_FILE_CHUNK_EVENT
-          : event === 'bncr.file.complete'
-            ? BNCR_FILE_COMPLETE_EVENT
-            : event === 'bncr.file.abort'
-              ? BNCR_FILE_ABORT_EVENT
-              : event;
-    this.gatewayContext.broadcastToConnIds(normalizedEvent, payload, connIds);
-  }
-
-  private resolveInboundFileType(mimeType: string, fileName: string): string {
-    const mt = asString(mimeType).toLowerCase();
-    const fn = asString(fileName).toLowerCase();
-    if (mt.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/.test(fn)) return 'image';
-    if (mt.startsWith('video/') || /\.(mp4|mov|mkv|avi|webm)$/.test(fn)) return 'video';
-    if (mt.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/.test(fn)) return 'audio';
-    return mt || 'file';
-  }
-
   private computeRecommendedAckTimeoutReason(args: {
     lateAckOkCount: number;
     recentAckTimeoutCount: number;
@@ -4731,6 +4657,9 @@ class BncrBridgeRuntime {
       { debugOnly: true },
     );
     this.logOutboundSummary(entry);
+    const accountId = normalizeAccountId(entry.accountId);
+    this.incrementCounter(this.outboundEnqueueCountByAccount, accountId);
+    this.lastOutboundEnqueueAtByAccount.set(accountId, now());
     this.outbox.set(entry.messageId, entry);
     this.scheduleSave();
     this.flushPushQueueBestEffort({ accountId: entry.accountId });
@@ -4757,7 +4686,7 @@ class BncrBridgeRuntime {
     this.scheduleSave();
   }
 
-  private collectDue(accountId: string, maxBatch: number): Array<Record<string, unknown>> {
+  collectDue(accountId: string, maxBatch: number): Array<Record<string, unknown>> {
     const key = normalizeAccountId(accountId);
     const result = collectDueOutboxEntries({
       outbox: this.outbox.values(),
@@ -4777,21 +4706,6 @@ class BncrBridgeRuntime {
 
     if (result.duePayloads.length) this.scheduleSave();
     return result.duePayloads;
-  }
-
-  private async payloadMediaToBase64(
-    mediaUrl: string,
-    mediaLocalRoots?: readonly string[],
-  ): Promise<{ mediaBase64: string; mimeType?: string; fileName?: string }> {
-    const loaded = await loadOpenClawWebMedia(this.api, mediaUrl, {
-      localRoots: mediaLocalRoots,
-      maxBytes: 20 * 1024 * 1024,
-    });
-    return {
-      mediaBase64: loaded.buffer.toString('base64'),
-      mimeType: loaded.contentType,
-      fileName: loaded.fileName,
-    };
   }
 
   private async loadOutboundTransferMedia(params: {
@@ -6194,24 +6108,7 @@ class BncrBridgeRuntime {
     // versus "scheduled retry" versus "ACK-driven continuation".
     await this.syncDebugFlag();
     const parsed = parseBncrInboundParams(params);
-    const {
-      accountId,
-      platform,
-      groupId,
-      userId,
-      sessionKeyfromroute,
-      route,
-      text,
-      msgType,
-      mediaBase64,
-      mediaPathFromTransfer,
-      mimeType,
-      fileName,
-      msgId,
-      dedupKey,
-      peer,
-      extracted,
-    } = parsed;
+    const { accountId, platform, route, msgType, msgId, peer, extracted } = parsed;
     const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
     const clientId = asString((params as any)?.clientId || '').trim() || undefined;
     const outboundReady = (params as any)?.outboundReady === true;

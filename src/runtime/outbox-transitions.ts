@@ -103,9 +103,7 @@ export function buildBncrAckOkTelemetryPatch(args: {
   const defaultAckTimeoutMs = Math.max(0, finiteNumberOr(args.defaultAckTimeoutMs, 0));
   const ackQueueLatencyMs = Math.max(0, ackAt - finiteNumberOr(args.entry.createdAt, ackAt));
   const ackPushLatencyMs =
-    typeof args.entry.lastPushAt === 'number'
-      ? Math.max(0, ackAt - args.entry.lastPushAt)
-      : null;
+    typeof args.entry.lastPushAt === 'number' ? Math.max(0, ackAt - args.entry.lastPushAt) : null;
   const lateAccepted = args.entry.awaitingRetryPush === true;
   return {
     ackAt,
@@ -114,6 +112,8 @@ export function buildBncrAckOkTelemetryPatch(args: {
     lateAccepted,
     shouldResetAdaptiveAckRecovery: lateAccepted,
     shouldIncrementAdaptiveAckRecovery:
-      !lateAccepted && typeof ackPushLatencyMs === 'number' && ackPushLatencyMs <= defaultAckTimeoutMs,
+      !lateAccepted &&
+      typeof ackPushLatencyMs === 'number' &&
+      ackPushLatencyMs <= defaultAckTimeoutMs,
   };
 }

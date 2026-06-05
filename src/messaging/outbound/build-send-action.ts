@@ -56,8 +56,7 @@ export function buildBncrMessageAction(input: MinimalBncrSendInput): BuiltBncrMe
 
   const channel = asString(input.channel || 'bncr').trim() || 'bncr';
   const action = asString(input.action || 'send').trim() || 'send';
-  const idempotencyKey =
-    asString(input.idempotencyKey || '').trim() || `bncr-${randomUUID()}`;
+  const idempotencyKey = asString(input.idempotencyKey || '').trim() || `bncr-${randomUUID()}`;
   const accountId =
     asString(pickFirstString(paramsObj.accountId, input.accountId) || '').trim() || undefined;
 

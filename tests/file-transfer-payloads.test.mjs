@@ -68,8 +68,8 @@ test('buildFileTransferAbortPayload and complete payload preserve terminal frame
     buildFileTransferAbortPayload({ transferId: 'transfer-1', reason: 'chunk failed', ts: 44 }),
     { transferId: 'transfer-1', reason: 'chunk failed', ts: 44 },
   );
-  assert.deepEqual(
-    buildFileTransferCompletePayload({ transferId: 'transfer-1', ts: 45 }),
-    { transferId: 'transfer-1', ts: 45 },
-  );
+  assert.deepEqual(buildFileTransferCompletePayload({ transferId: 'transfer-1', ts: 45 }), {
+    transferId: 'transfer-1',
+    ts: 45,
+  });
 });

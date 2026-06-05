@@ -1,9 +1,9 @@
-import type { BncrConnection, OutboxEntry } from './types.ts';
 import {
   buildPushBroadcastPayload,
   buildPushOkArgs,
   buildPushRouteSelectArgs,
 } from './outbox-push-args.ts';
+import type { BncrConnection, OutboxEntry } from './types.ts';
 
 export function buildTextPushBroadcastPayload(args: {
   payload: Record<string, unknown>;

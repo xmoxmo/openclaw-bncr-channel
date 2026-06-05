@@ -1,4 +1,8 @@
-import { BNCR_DEFAULT_ACCOUNT_ID, resolveAccount, resolveDefaultDisplayName } from '../core/accounts.ts';
+import {
+  BNCR_DEFAULT_ACCOUNT_ID,
+  resolveAccount,
+  resolveDefaultDisplayName,
+} from '../core/accounts.ts';
 import { buildAccountStatusSnapshot } from '../core/status.ts';
 import { createOpenClawDefaultChannelRuntimeState } from '../openclaw/sdk-helpers.ts';
 
