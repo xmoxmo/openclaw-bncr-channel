@@ -22,13 +22,19 @@ export function createBncrStatusSurface(getBridge: () => BncrStatusBridge) {
     },
     buildAccountSnapshot: async ({ account, runtime }: any) => {
       const runtimeBridge = getBridge();
-      const rt = runtime || runtimeBridge.getAccountRuntimeSnapshot(account?.accountId);
+      const accountId = account?.accountId || BNCR_DEFAULT_ACCOUNT_ID;
+      const snapshotAccount = {
+        accountId,
+        name: account?.name,
+        enabled: account?.enabled,
+      };
+      const rt = runtime || runtimeBridge.getAccountRuntimeSnapshot(accountId);
       return buildAccountStatusSnapshot({
-        account,
+        account: snapshotAccount,
         runtime: rt,
-        healthSummary: runtimeBridge.getStatusHeadline(account?.accountId),
+        healthSummary: runtimeBridge.getStatusHeadline(accountId),
         // default 名不可隐藏时，统一展示稳定默认值
-        displayName: resolveDefaultDisplayName(account?.name, account?.accountId),
+        displayName: resolveDefaultDisplayName(account?.name, accountId),
       });
     },
     resolveAccountState: ({ enabled, configured, account, cfg, runtime }: any) => {

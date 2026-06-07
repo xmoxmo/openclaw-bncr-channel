@@ -5,6 +5,10 @@ function finiteNumberOr(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
+  return Math.max(0, finiteNumberOr(value, fallback));
+}
+
 type DownlinkHealthInput = {
   accountId: string;
   now: number;
@@ -24,9 +28,8 @@ export function buildDownlinkHealth(input: DownlinkHealthInput) {
   const oldestPendingCreatedAt = pending.length
     ? Math.min(...pending.map((entry) => finiteNumberOr(entry.createdAt, input.now)))
     : null;
-  const oldestPendingAgeMs = oldestPendingCreatedAt
-    ? Math.max(0, input.now - oldestPendingCreatedAt)
-    : 0;
+  const oldestPendingAgeMs =
+    oldestPendingCreatedAt !== null ? Math.max(0, input.now - oldestPendingCreatedAt) : 0;
   const lastSignalAt =
     Math.max(finiteNumberOr(input.lastInboundAt, 0), finiteNumberOr(input.lastActivityAt, 0)) ||
     null;
@@ -34,12 +37,14 @@ export function buildDownlinkHealth(input: DownlinkHealthInput) {
   const ackRecentlyHealthy = !!input.lastAckOkAt && input.now - input.lastAckOkAt <= 5 * 60 * 1000;
   const ackTimeoutRecent =
     !!input.lastAckTimeoutAt && input.now - input.lastAckTimeoutAt <= 5 * 60 * 1000;
+  const recentAckTimeoutCount = nonNegativeFiniteNumberOr(input.recentAckTimeoutCount, 0);
+  const activeConnectionCount = nonNegativeFiniteNumberOr(input.activeConnectionCount, 0);
   const ackStalled =
     pendingCount > 0 &&
-    input.activeConnectionCount === 1 &&
+    activeConnectionCount === 1 &&
     inboundHealthy &&
     ackTimeoutRecent &&
-    input.recentAckTimeoutCount > 0 &&
+    recentAckTimeoutCount > 0 &&
     !ackRecentlyHealthy;
 
   return {
@@ -48,8 +53,8 @@ export function buildDownlinkHealth(input: DownlinkHealthInput) {
     oldestPendingAgeMs,
     lastAckOkAt: input.lastAckOkAt,
     lastAckTimeoutAt: input.lastAckTimeoutAt,
-    recentAckTimeoutCount: input.recentAckTimeoutCount,
-    activeConnectionCount: input.activeConnectionCount,
+    recentAckTimeoutCount,
+    activeConnectionCount,
     recentInboundReachable: inboundHealthy,
     onlineByConn: input.onlineByConn,
     ackStalled,

@@ -5,8 +5,10 @@ import {
   getRevalidatedAttemptReason,
   hasAlternativeLiveConnection,
   hasRecentInboundReachability,
+  isEligibleOutboundPushConnection,
   isRecentlyReachableConn,
   resolveRecentInboundConnIds,
+  selectOrderedOutboundPushConnections,
 } from '../src/core/connection-reachability.ts';
 
 const now = 100_000;
@@ -148,4 +150,88 @@ test('getRevalidatedAttemptReason treats invalid connection numbers as neutral',
   });
 
   assert.equal(result, null);
+});
+
+test('isEligibleOutboundPushConnection filters stale inbound-only and missing connections', () => {
+  assert.equal(
+    isEligibleOutboundPushConnection({ connection: conn(), now, connectTtlMs: 10_000 }),
+    true,
+  );
+  assert.equal(
+    isEligibleOutboundPushConnection({
+      connection: conn({ lastSeenAt: now - 20_000 }),
+      now,
+      connectTtlMs: 10_000,
+    }),
+    false,
+  );
+  assert.equal(
+    isEligibleOutboundPushConnection({
+      connection: conn({ inboundOnly: true }),
+      now,
+      connectTtlMs: 10_000,
+    }),
+    false,
+  );
+  assert.equal(
+    isEligibleOutboundPushConnection({ connection: null, now, connectTtlMs: 10_000 }),
+    false,
+  );
+});
+
+test('selectOrderedOutboundPushConnections preserves outbound candidate priority order', () => {
+  const ordered = selectOrderedOutboundPushConnections({
+    accountId: 'Primary',
+    now,
+    connectTtlMs: 10_000,
+    recentInboundConnIds: new Set(['recent-inbound']),
+    connections: [
+      conn({
+        connId: 'stale',
+        clientId: 'stale',
+        lastSeenAt: now - 20_000,
+        preferredForOutboundUntil: now + 10_000,
+      }),
+      conn({
+        connId: 'inbound-only',
+        clientId: 'inbound-only',
+        inboundOnly: true,
+        preferredForOutboundUntil: now + 10_000,
+      }),
+      conn({
+        connId: 'fresh-ack',
+        clientId: 'fresh-ack',
+        connectedAt: now - 9_000,
+        lastAckOkAt: now - 100,
+      }),
+      conn({
+        connId: 'penalized-preferred',
+        clientId: 'penalized-preferred',
+        preferredForOutboundUntil: now + 10_000,
+        lastPushTimeoutAt: now - 100,
+      }),
+      conn({
+        connId: 'preferred',
+        clientId: 'preferred',
+        preferredForOutboundUntil: now + 10_000,
+        lastPushTimeoutAt: now - 40_000,
+      }),
+      conn({
+        connId: 'recent-inbound',
+        clientId: 'recent-inbound',
+        connectedAt: now - 8_000,
+      }),
+      conn({
+        connId: 'other-account',
+        clientId: 'other-account',
+        accountId: 'Other',
+        preferredForOutboundUntil: now + 10_000,
+      }),
+    ],
+  });
+
+  assert.deepEqual(
+    ordered.map((item) => item.connId),
+    ['preferred', 'penalized-preferred', 'fresh-ack', 'recent-inbound'],
+  );
 });

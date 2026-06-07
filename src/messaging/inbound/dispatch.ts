@@ -18,15 +18,14 @@ import {
   formatOpenClawAgentEnvelope,
   resolveOpenClawEnvelopeFormatOptions,
 } from '../../openclaw/reply-runtime.ts';
-import {
-  resolveOpenClawAgentRoute,
-  resolveOpenClawInboundLastRouteSessionKey,
-} from '../../openclaw/routing-runtime.ts';
+import { resolveOpenClawAgentRoute } from '../../openclaw/routing-runtime.ts';
+import type { OutboundReplyTargetPolicy } from '../outbound/reply-target-policy.ts';
 import { handleBncrNativeCommand } from './commands.ts';
 import {
   buildBncrPromptVisibleContextFacts,
   buildBncrStructuredContextFactsFromInboundParts,
 } from './context-facts.ts';
+import { buildBncrInboundRecordUpdateLastRoute } from './last-route.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import { wrapBncrInboundRecordSessionLabelCorrection } from './session-label.ts';
@@ -330,36 +329,6 @@ function buildBncrInboundTurnContext(args: {
   });
 }
 
-function buildBncrInboundRecordUpdateLastRoute(args: {
-  channelId: string;
-  peer: ParsedInbound['peer'];
-  senderIdForContext: string;
-  resolution: BncrInboundConversationResolution;
-  pinnedMainDmOwner: string | null;
-}) {
-  const { channelId, peer, senderIdForContext, resolution, pinnedMainDmOwner } = args;
-  if (peer.kind !== 'direct') return undefined;
-
-  const sessionKey = resolveOpenClawInboundLastRouteSessionKey({
-    route: resolution.resolvedRoute,
-    sessionKey: resolution.dispatchSessionKey,
-  });
-
-  return {
-    sessionKey,
-    channel: channelId,
-    to: resolution.canonicalTo,
-    accountId: resolution.accountId,
-    mainDmOwnerPin:
-      sessionKey === resolution.resolvedRoute.mainSessionKey && pinnedMainDmOwner
-        ? {
-            ownerRecipient: pinnedMainDmOwner,
-            senderRecipient: senderIdForContext,
-          }
-        : undefined,
-  };
-}
-
 function buildBncrInboundReplyRouteFact(
   resolution: BncrInboundConversationResolution,
 ): BncrInboundReplyRouteFact {
@@ -386,6 +355,7 @@ export async function dispatchBncrInbound(params: {
     route: any;
     payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
     mediaLocalRoots?: readonly string[];
+    replyTargetPolicy?: OutboundReplyTargetPolicy;
   }) => Promise<void>;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
@@ -478,9 +448,12 @@ export async function dispatchBncrInbound(params: {
       : null;
   const updateLastRoute = buildBncrInboundRecordUpdateLastRoute({
     channelId,
-    peer,
+    peerKind: peer.kind,
     senderIdForContext,
-    resolution,
+    accountId: resolution.accountId,
+    to: resolution.canonicalTo,
+    resolvedRoute: resolution.resolvedRoute,
+    sessionKey: resolution.dispatchSessionKey,
     pinnedMainDmOwner,
   });
 

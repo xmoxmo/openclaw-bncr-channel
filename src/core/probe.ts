@@ -1,3 +1,19 @@
+function finiteNumberOr(value: unknown, fallback: number): number {
+  if (value == null) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
+  return Math.max(0, finiteNumberOr(value, fallback));
+}
+
 export function probeBncrAccount(params: {
   accountId: string;
   connected: boolean;
@@ -14,18 +30,22 @@ export function probeBncrAccount(params: {
   };
 }) {
   const issues: string[] = [];
+  const pending = nonNegativeFiniteNumberOr(params.pending, 0);
+  const deadLetter = nonNegativeFiniteNumberOr(params.deadLetter, 0);
+  const activeConnections = nonNegativeFiniteNumberOr(params.activeConnections, 0);
+  const invalidOutboxSessionKeys = nonNegativeFiniteNumberOr(params.invalidOutboxSessionKeys, 0);
+  const legacyAccountResidue = nonNegativeFiniteNumberOr(params.legacyAccountResidue, 0);
 
   if (!params.connected) issues.push('not-connected');
-  if (params.pending > 20) issues.push('pending-high');
-  if (params.deadLetter > 0) issues.push('dead-letter');
-  if (params.activeConnections > 3) issues.push('too-many-connections');
-  if (params.invalidOutboxSessionKeys > 0) issues.push('invalid-session-keys');
-  if (params.legacyAccountResidue > 0) issues.push('legacy-account-residue');
+  if (pending > 20) issues.push('pending-high');
+  if (deadLetter > 0) issues.push('dead-letter');
+  if (activeConnections > 3) issues.push('too-many-connections');
+  if (invalidOutboxSessionKeys > 0) issues.push('invalid-session-keys');
+  if (legacyAccountResidue > 0) issues.push('legacy-account-residue');
 
   let level: 'ok' | 'warn' | 'error' = 'ok';
   if (issues.length > 0) level = 'warn';
-  if (!params.connected && (params.deadLetter > 0 || params.invalidOutboxSessionKeys > 0))
-    level = 'error';
+  if (!params.connected && (deadLetter > 0 || invalidOutboxSessionKeys > 0)) level = 'error';
 
   return {
     ok: level === 'ok',
@@ -34,12 +54,12 @@ export function probeBncrAccount(params: {
     details: {
       accountId: params.accountId,
       connected: params.connected,
-      pending: params.pending,
-      deadLetter: params.deadLetter,
-      activeConnections: params.activeConnections,
-      invalidOutboxSessionKeys: params.invalidOutboxSessionKeys,
-      legacyAccountResidue: params.legacyAccountResidue,
-      lastActivityAt: params.lastActivityAt ?? null,
+      pending,
+      deadLetter,
+      activeConnections,
+      invalidOutboxSessionKeys,
+      legacyAccountResidue,
+      lastActivityAt: finiteNumberOrNull(params.lastActivityAt),
       structure: params.structure ?? null,
     },
   };

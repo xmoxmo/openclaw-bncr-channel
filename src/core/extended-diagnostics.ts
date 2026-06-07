@@ -23,6 +23,7 @@ type ExtendedDiagnosticsInput = {
     lastDriftSnapshot: any;
   };
   outbound?: Record<string, any>;
+  deadLetterSummary?: Record<string, any>;
   connection: {
     active: number;
     primaryLeaseId: string | null;
@@ -68,6 +69,7 @@ export function buildExtendedDiagnostics(input: ExtendedDiagnosticsInput) {
       recent: input.connection.recent.map((entry) => ({ ...entry })),
     },
     outbound: input.outbound ? { ...input.outbound } : undefined,
+    deadLetterSummary: input.deadLetterSummary ? { ...input.deadLetterSummary } : undefined,
     protocol: {
       ...input.protocol,
       features: { ...input.protocol.features },

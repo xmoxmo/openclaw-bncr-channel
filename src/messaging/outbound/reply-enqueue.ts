@@ -1,6 +1,9 @@
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
 import { buildReplyMediaFallbackDebugInfo } from './diagnostics.ts';
+import type { OutboundReplyTargetPolicy } from './reply-target-policy.ts';
 import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
+
+export type { OutboundReplyTargetPolicy } from './reply-target-policy.ts';
 
 export type ReplyPayloadInput = {
   text?: string;
@@ -21,6 +24,7 @@ export type NormalizedReplyPayload = {
   audioAsVoice: boolean;
   kind?: 'tool' | 'block' | 'final';
   replyToId: string;
+  replyTargetPolicy: OutboundReplyTargetPolicy;
 };
 
 export type ReplyMediaEntriesParams = {
@@ -51,6 +55,7 @@ export type ReplyMediaFileTransferParams = {
   audioAsVoice: boolean;
   kind?: 'tool' | 'block' | 'final';
   replyToId: string;
+  replyTargetPolicy: OutboundReplyTargetPolicy;
   createdAt: number;
 };
 
@@ -70,6 +75,7 @@ export type ReplyMediaFallbackTextEntryParams = {
   mediaUrl: string;
   kind?: 'tool' | 'block' | 'final';
   replyToId: string;
+  replyTargetPolicy: OutboundReplyTargetPolicy;
   fallback: { text: string; reason: string };
 };
 
@@ -85,6 +91,7 @@ export function buildReplyTextOutboxEntry(
     text: string;
     kind?: 'tool' | 'block' | 'final';
     replyToId: string;
+    replyTargetPolicy: OutboundReplyTargetPolicy;
   },
   helpers: {
     buildTextOutboxEntry: (args: {
@@ -94,6 +101,7 @@ export function buildReplyTextOutboxEntry(
       text: string;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
+      replyTargetPolicy?: OutboundReplyTargetPolicy;
     }) => OutboxEntry;
   },
 ): OutboxEntry {
@@ -104,6 +112,7 @@ export function buildReplyTextOutboxEntry(
     text: params.text,
     kind: params.kind,
     replyToId: params.replyToId || undefined,
+    replyTargetPolicy: params.replyTargetPolicy,
   });
 }
 
@@ -123,6 +132,7 @@ export function enqueueReplyTextEntry(
       text: string;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
+      replyTargetPolicy?: OutboundReplyTargetPolicy;
     }) => OutboxEntry;
   },
 ): void {
@@ -137,6 +147,7 @@ export function enqueueReplyTextEntry(
         text: params.payload.text,
         kind: params.payload.kind,
         replyToId: params.payload.replyToId,
+        replyTargetPolicy: params.payload.replyTargetPolicy,
       },
       { buildTextOutboxEntry: helpers.buildTextOutboxEntry },
     ),
@@ -159,6 +170,7 @@ export function enqueueReplyMediaFallbackTextEntry(
       text: string;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
+      replyTargetPolicy?: OutboundReplyTargetPolicy;
     }) => OutboxEntry;
   },
 ): void {
@@ -176,6 +188,7 @@ export function enqueueReplyMediaFallbackTextEntry(
         text: params.fallback.text,
         kind: params.kind,
         replyToId: params.replyToId,
+        replyTargetPolicy: params.replyTargetPolicy,
       },
       { buildTextOutboxEntry: helpers.buildTextOutboxEntry },
     ),
@@ -197,6 +210,7 @@ export function enqueueReplyMediaFileTransferEntry(
       audioAsVoice: boolean;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
+      replyTargetPolicy?: OutboundReplyTargetPolicy;
     }) => OutboxEntry;
     rememberRecentMediaSend: (args: {
       sessionKey: string;
@@ -219,6 +233,7 @@ export function enqueueReplyMediaFileTransferEntry(
       audioAsVoice: params.audioAsVoice,
       kind: params.kind,
       replyToId: params.replyToId || undefined,
+      replyTargetPolicy: params.replyTargetPolicy,
     }),
   );
   helpers.rememberRecentMediaSend({
@@ -245,6 +260,7 @@ export function enqueueSingleReplyMediaEntry(
       mediaUrl: params.mediaUrl,
       kind: params.params.payload.kind,
       replyToId: params.params.payload.replyToId,
+      replyTargetPolicy: params.params.payload.replyTargetPolicy,
       fallback: params.fallback,
     });
     return;
@@ -262,6 +278,7 @@ export function enqueueSingleReplyMediaEntry(
     audioAsVoice: params.params.payload.audioAsVoice,
     kind: params.params.payload.kind,
     replyToId: params.params.payload.replyToId,
+    replyTargetPolicy: params.params.payload.replyTargetPolicy,
     createdAt: params.currentTime,
   });
 }
@@ -314,6 +331,7 @@ export function enqueueNormalizedReplyPayload(
 export function normalizeReplyPayload(
   payload: ReplyPayloadInput,
   helpers: { asString: (value: unknown, fallback?: string) => string },
+  options?: { replyTargetPolicy?: OutboundReplyTargetPolicy },
 ): NormalizedReplyPayload {
   const text = helpers.asString(payload?.text || '').trim();
   const mediaUrl = helpers.asString(payload?.mediaUrl || '').trim();
@@ -328,6 +346,11 @@ export function normalizeReplyPayload(
     asVoice: payload?.asVoice === true,
     audioAsVoice: payload?.audioAsVoice === true,
     kind: payload?.kind,
-    replyToId: normalizeOutboundReplyToId({ kind: payload?.kind, replyToId: payload?.replyToId }),
+    replyTargetPolicy: options?.replyTargetPolicy ?? 'agent-default',
+    replyToId: normalizeOutboundReplyToId({
+      kind: payload?.kind,
+      replyToId: payload?.replyToId,
+      replyTargetPolicy: options?.replyTargetPolicy,
+    }),
   };
 }

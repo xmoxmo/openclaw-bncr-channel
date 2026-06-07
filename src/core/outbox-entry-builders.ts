@@ -1,3 +1,4 @@
+import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
 import { normalizeOutboundReplyToId } from '../messaging/outbound/reply-target-policy.ts';
 import type { BncrRoute, OutboxEntry } from './types.ts';
 
@@ -16,6 +17,7 @@ export function buildFileTransferOutboxEntry(args: {
   audioAsVoice?: boolean;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
+  replyTargetPolicy?: OutboundReplyTargetPolicy;
 }): OutboxEntry {
   const messageId = args.createMessageId();
   const createdAt = args.now();
@@ -36,7 +38,11 @@ export function buildFileTransferOutboxEntry(args: {
         audioAsVoice: args.audioAsVoice === true,
         finalEvent: args.pushEvent,
         replyToId:
-          normalizeOutboundReplyToId({ kind: args.kind, replyToId: args.replyToId }) || undefined,
+          normalizeOutboundReplyToId({
+            kind: args.kind,
+            replyToId: args.replyToId,
+            replyTargetPolicy: args.replyTargetPolicy,
+          }) || undefined,
         messageKind: args.kind,
       },
     },
@@ -57,6 +63,7 @@ export function buildTextOutboxEntry(args: {
   text: string;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
+  replyTargetPolicy?: OutboundReplyTargetPolicy;
 }): OutboxEntry {
   const messageId = args.createMessageId();
   const createdAt = args.now();
@@ -66,7 +73,11 @@ export function buildTextOutboxEntry(args: {
     idempotencyKey: messageId,
     sessionKey: args.sessionKey,
     replyToId:
-      normalizeOutboundReplyToId({ kind: args.kind, replyToId: args.replyToId }) || undefined,
+      normalizeOutboundReplyToId({
+        kind: args.kind,
+        replyToId: args.replyToId,
+        replyTargetPolicy: args.replyTargetPolicy,
+      }) || undefined,
     message: {
       platform: args.route.platform,
       groupId: args.route.groupId,

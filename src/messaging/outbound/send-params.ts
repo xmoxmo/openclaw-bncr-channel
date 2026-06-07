@@ -1,0 +1,56 @@
+import { normalizeAccountId } from '../../core/accounts.ts';
+import { readOpenClawBooleanParam, readOpenClawStringParam } from '../../openclaw/sdk-helpers.ts';
+
+export type NormalizedBncrSendParams = {
+  to: string;
+  accountId: string;
+  message: string;
+  caption: string;
+  mediaUrl?: string;
+  asVoice: boolean;
+  audioAsVoice: boolean;
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function normalizeBncrSendParams(input: {
+  params: unknown;
+  accountId: string;
+}): NormalizedBncrSendParams {
+  const paramsObj = isPlainObject(input.params) ? input.params : {};
+  const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
+  const resolvedAccountId = normalizeAccountId(
+    readOpenClawStringParam(paramsObj, 'accountId') ?? input.accountId,
+  );
+
+  const message = readOpenClawStringParam(paramsObj, 'message', { allowEmpty: true }) ?? '';
+  const caption = readOpenClawStringParam(paramsObj, 'caption', { allowEmpty: true }) ?? '';
+  const mediaUrl =
+    readOpenClawStringParam(paramsObj, 'media', { trim: false }) ??
+    readOpenClawStringParam(paramsObj, 'path', { trim: false }) ??
+    readOpenClawStringParam(paramsObj, 'filePath', { trim: false }) ??
+    readOpenClawStringParam(paramsObj, 'mediaUrl', { trim: false });
+  const asVoice = readOpenClawBooleanParam(paramsObj, 'asVoice') ?? false;
+  const audioAsVoice = readOpenClawBooleanParam(paramsObj, 'audioAsVoice') ?? false;
+
+  if (asVoice && !mediaUrl) throw new Error('send voice requires media path');
+
+  const normalizedMessage = mediaUrl ? '' : message || caption || '';
+  const normalizedCaption = mediaUrl ? caption || message || '' : '';
+
+  if (!normalizedMessage.trim() && !normalizedCaption.trim() && !mediaUrl) {
+    throw new Error('send requires message or media');
+  }
+
+  return {
+    to,
+    accountId: resolvedAccountId,
+    message: normalizedMessage,
+    caption: normalizedCaption,
+    mediaUrl: mediaUrl || undefined,
+    asVoice,
+    audioAsVoice,
+  };
+}

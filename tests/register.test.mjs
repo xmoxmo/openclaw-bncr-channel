@@ -100,6 +100,20 @@ test('bncr README documents channel handoff rather than final platform delivery 
   assert.match(readme, /仍不启用 `durableFinal`/);
 });
 
+test('bncr manifest config schemas stay aligned with runtime schema keys', async () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'),
+  );
+  const { BncrConfigSchema } = await import('../src/core/config-schema.ts');
+
+  const runtimeKeys = Object.keys(BncrConfigSchema.schema.properties).sort();
+  const manifestTopKeys = Object.keys(manifest.configSchema.properties).sort();
+  const manifestChannelKeys = Object.keys(manifest.channelConfigs.bncr.schema.properties).sort();
+
+  assert.deepEqual(manifestTopKeys, runtimeKeys);
+  assert.deepEqual(manifestChannelKeys, runtimeKeys);
+});
+
 test('bncr channel routes OpenClaw SDK helper imports through the local adapter', () => {
   const channelSource = fs.readFileSync(new URL('../src/channel.ts', import.meta.url), 'utf8');
   const adapterSource = fs.readFileSync(
@@ -127,6 +141,68 @@ test('bncr gate routes OpenClaw ingress runtime through the local adapter', () =
   assert.equal(adapterSource.includes(INGRESS_RUNTIME_IMPORT), true);
 });
 
+test('bncr selfcheck covers every OpenClaw SDK import used by source and entrypoint', () => {
+  const sourceRoot = new URL('../src/', import.meta.url);
+  const importedSpecifiers = new Set();
+  const scanFile = (fileUrl) => {
+    const source = fs.readFileSync(fileUrl, 'utf8');
+    for (const match of source.matchAll(/openclaw\/plugin-sdk(?:\/[A-Za-z0-9_-]+)?/g)) {
+      importedSpecifiers.add(match[0]);
+    }
+  };
+  const visitSourceDir = (dirUrl) => {
+    for (const entry of fs.readdirSync(dirUrl, { withFileTypes: true })) {
+      const entryUrl = new URL(entry.name, dirUrl);
+      if (entry.isDirectory()) {
+        visitSourceDir(new URL(`${entry.name}/`, dirUrl));
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+      scanFile(entryUrl);
+    }
+  };
+  scanFile(new URL('../index.ts', import.meta.url));
+  visitSourceDir(sourceRoot);
+
+  const selfcheckSource = fs.readFileSync(
+    new URL('../scripts/selfcheck.mjs', import.meta.url),
+    'utf8',
+  );
+
+  for (const specifier of importedSpecifiers) {
+    assert.equal(selfcheckSource.includes(`'${specifier}'`), true, specifier);
+  }
+});
+
+test('bncr package guard scripts list every source file', () => {
+  const sourceRoot = new URL('../src/', import.meta.url);
+  const actualSourceFiles = [];
+  const visit = (dirUrl, relDir = 'src') => {
+    for (const entry of fs.readdirSync(dirUrl, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        visit(new URL(`${entry.name}/`, dirUrl), `${relDir}/${entry.name}`);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+      actualSourceFiles.push(`${relDir}/${entry.name}`);
+    }
+  };
+  visit(sourceRoot);
+  actualSourceFiles.sort();
+
+  for (const script of ['selfcheck.mjs', 'check-pack.mjs']) {
+    const source = fs.readFileSync(new URL(`../scripts/${script}`, import.meta.url), 'utf8');
+    const listed = Array.from(
+      new Set(
+        Array.from(source.matchAll(/'([^']+\.ts)'/g), (match) => match[1])
+          .filter((file) => file.startsWith('src/'))
+          .sort(),
+      ),
+    );
+    assert.deepEqual(listed, actualSourceFiles, script);
+  }
+});
+
 test('bncr register is idempotent on the same api instance', async () => {
   const mod = await import('../index.ts');
   const api = createApi();
@@ -144,6 +220,8 @@ test('bncr register is idempotent on the same api instance', async () => {
       'bncr.activity',
       'bncr.ack',
       'bncr.diagnostics',
+      'bncr.deadLetter.inspect',
+      'bncr.deadLetter.prune',
       'bncr.file.init',
       'bncr.file.chunk',
       'bncr.file.complete',
@@ -164,11 +242,11 @@ test('bncr register reuses bridge but only registers methods on a new api instan
 
   assert.equal(api1.services.length, 1);
   assert.equal(api1.channels.length, 1);
-  assert.equal(api1.methods.length, 10);
+  assert.equal(api1.methods.length, 12);
 
   assert.equal(api2.services.length, 0);
   assert.equal(api2.channels.length, 0);
-  assert.equal(api2.methods.length, 10);
+  assert.equal(api2.methods.length, 12);
 });
 
 test('bncr miniconfig uses transactional mutateConfigFile', async () => {

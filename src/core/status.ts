@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildRuntimeStatusMetaDisplay } from './status-meta.ts';
 import type { BncrDiagnosticsSummary, PendingAdmission } from './types.ts';
 
 type RuntimeStatusInput = {
@@ -35,44 +36,50 @@ function finiteNumberOr(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function fmtAgo(ts?: number | null): string {
-  if (!ts || !Number.isFinite(ts) || ts <= 0) return '-';
-  const diff = Math.max(0, now() - ts);
-  if (diff < 1_000) return 'just now';
-  if (diff < 60_000) return `${Math.floor(diff / 1_000)}s ago`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
+function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
+  return Math.max(0, finiteNumberOr(value, fallback));
 }
 
 export function buildIntegratedDiagnostics(input: RuntimeStatusInput): BncrDiagnosticsSummary {
   const root = input.channelRoot || path.join(process.cwd(), 'plugins', 'bncr');
   const pluginIndexExists = fs.existsSync(path.join(root, 'index.ts'));
   const pluginChannelExists = fs.existsSync(path.join(root, 'src', 'channel.ts'));
+  const currentTime = now();
+  const startedAt = finiteNumberOr(input.startedAt, currentTime);
+  const pending = nonNegativeFiniteNumberOr(input.pending, 0);
+  const deadLetter = nonNegativeFiniteNumberOr(input.deadLetter, 0);
+  const activeConnections = nonNegativeFiniteNumberOr(input.activeConnections, 0);
+  const connectEvents = nonNegativeFiniteNumberOr(input.connectEvents, 0);
+  const inboundEvents = nonNegativeFiniteNumberOr(input.inboundEvents, 0);
+  const activityEvents = nonNegativeFiniteNumberOr(input.activityEvents, 0);
+  const ackEvents = nonNegativeFiniteNumberOr(input.ackEvents, 0);
+  const sessionRoutesCount = nonNegativeFiniteNumberOr(input.sessionRoutesCount, 0);
+  const invalidOutboxSessionKeys = nonNegativeFiniteNumberOr(input.invalidOutboxSessionKeys, 0);
+  const legacyAccountResidue = nonNegativeFiniteNumberOr(input.legacyAccountResidue, 0);
 
   return {
     health: {
       connected: input.connected,
-      pending: input.pending,
+      pending,
       pendingAdmissions: Array.isArray(input.pendingAdmissions)
         ? input.pendingAdmissions.length
         : 0,
-      deadLetter: input.deadLetter,
-      activeConnections: input.activeConnections,
-      connectEvents: input.connectEvents,
-      inboundEvents: input.inboundEvents,
-      activityEvents: input.activityEvents,
-      ackEvents: input.ackEvents,
-      uptimeSec: Math.floor((now() - input.startedAt) / 1000),
+      deadLetter,
+      activeConnections,
+      connectEvents,
+      inboundEvents,
+      activityEvents,
+      ackEvents,
+      uptimeSec: Math.max(0, Math.floor((currentTime - startedAt) / 1000)),
     },
     regression: {
       pluginFilesPresent: pluginIndexExists && pluginChannelExists,
       pluginIndexExists,
       pluginChannelExists,
-      totalKnownRoutes: input.sessionRoutesCount,
-      invalidOutboxSessionKeys: input.invalidOutboxSessionKeys,
-      legacyAccountResidue: input.legacyAccountResidue,
-      ok: input.invalidOutboxSessionKeys === 0 && input.legacyAccountResidue === 0,
+      totalKnownRoutes: sessionRoutesCount,
+      invalidOutboxSessionKeys,
+      legacyAccountResidue,
+      ok: invalidOutboxSessionKeys === 0 && legacyAccountResidue === 0,
     },
   };
 }
@@ -91,35 +98,21 @@ export function buildStatusHeadlineFromRuntime(input: RuntimeStatusInput): strin
 
 export function buildStatusMetaFromRuntime(input: RuntimeStatusInput) {
   const diagnostics = buildIntegratedDiagnostics(input);
+  const display = buildRuntimeStatusMetaDisplay(input);
   return {
-    pending: input.pending,
-    pendingAdmissionsCount: Array.isArray(input.pendingAdmissions)
-      ? input.pendingAdmissions.length
-      : 0,
-    pendingAdmissions: Array.isArray(input.pendingAdmissions)
-      ? input.pendingAdmissions.map((item) => ({
-          clientId: item.clientId,
-          scope: item.route
-            ? `${item.route.platform}:${item.route.groupId}:${item.route.userId}`
-            : null,
-          scopes: Array.isArray(item.routes)
-            ? item.routes.map((route) => `${route.platform}:${route.groupId}:${route.userId}`)
-            : [],
-          firstSeenAt: item.firstSeenAt,
-          lastSeenAt: item.lastSeenAt,
-          attempts: item.attempts,
-        }))
-      : [],
-    deadLetter: input.deadLetter,
-    lastSessionScope: input.lastSession?.scope || null,
-    lastSessionAt: input.lastSession?.updatedAt || null,
-    lastSessionAgo: fmtAgo(input.lastSession?.updatedAt || null),
-    lastActivityAt: input.lastActivityAt || null,
-    lastActivityAgo: fmtAgo(input.lastActivityAt || null),
-    lastInboundAt: input.lastInboundAt || null,
-    lastInboundAgo: fmtAgo(input.lastInboundAt || null),
-    lastOutboundAt: input.lastOutboundAt || null,
-    lastOutboundAgo: fmtAgo(input.lastOutboundAt || null),
+    pending: diagnostics.health.pending,
+    pendingAdmissionsCount: display.pendingAdmissionsCount,
+    pendingAdmissions: display.pendingAdmissions,
+    deadLetter: diagnostics.health.deadLetter,
+    lastSessionScope: display.lastSessionScope,
+    lastSessionAt: display.lastSessionAt,
+    lastSessionAgo: display.lastSessionAgo,
+    lastActivityAt: display.lastActivityAt,
+    lastActivityAgo: display.lastActivityAgo,
+    lastInboundAt: display.lastInboundAt,
+    lastInboundAgo: display.lastInboundAgo,
+    lastOutboundAt: display.lastOutboundAt,
+    lastOutboundAgo: display.lastOutboundAgo,
     diagnostics,
   };
 }
@@ -131,17 +124,17 @@ export function buildAccountRuntimeSnapshot(input: RuntimeStatusInput) {
     running: input.running ?? true,
     connected: input.connected,
     linked: input.connected,
-    lastEventAt: input.lastActivityAt || null,
-    lastInboundAt: input.lastInboundAt || null,
-    lastOutboundAt: input.lastOutboundAt || null,
+    lastEventAt: meta.lastActivityAt,
+    lastInboundAt: meta.lastInboundAt,
+    lastOutboundAt: meta.lastOutboundAt,
     mode: input.connected ? 'linked' : 'configured',
     lastError: input.lastError ?? null,
-    pending: input.pending,
-    deadLetter: input.deadLetter,
+    pending: meta.pending,
+    deadLetter: meta.deadLetter,
     lastSessionKey: input.lastSession?.sessionKey || null,
     lastSessionScope: input.lastSession?.scope || null,
-    lastSessionAt: input.lastSession?.updatedAt || null,
-    lastActivityAt: input.lastActivityAt || null,
+    lastSessionAt: meta.lastSessionAt,
+    lastActivityAt: meta.lastActivityAt,
     diagnostics: meta.diagnostics,
     meta,
   };
@@ -156,8 +149,8 @@ export function buildAccountStatusSnapshot(input: {
   const rt = input.runtime || {};
   const meta = rt?.meta || {};
 
-  const pending = finiteNumberOr(rt?.pending ?? meta.pending, 0);
-  const deadLetter = finiteNumberOr(rt?.deadLetter ?? meta.deadLetter, 0);
+  const pending = nonNegativeFiniteNumberOr(rt?.pending ?? meta.pending, 0);
+  const deadLetter = nonNegativeFiniteNumberOr(rt?.deadLetter ?? meta.deadLetter, 0);
   const lastSessionKey = rt?.lastSessionKey ?? meta.lastSessionKey ?? null;
   const lastSessionScope = rt?.lastSessionScope ?? meta.lastSessionScope ?? null;
   const lastSessionAt = rt?.lastSessionAt ?? meta.lastSessionAt ?? null;

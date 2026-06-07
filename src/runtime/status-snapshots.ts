@@ -46,6 +46,10 @@ export function buildRuntimeEventCounters(args: {
   };
 }
 
+function nullableMapNumber(map: Map<string, number>, key: string): number | null {
+  return map.get(key) ?? null;
+}
+
 export function buildRuntimeActivitySnapshot(args: {
   accountId: string;
   activeConnectionCount: (accountId: string) => number;
@@ -58,9 +62,9 @@ export function buildRuntimeActivitySnapshot(args: {
   return {
     activeConnections: args.activeConnectionCount(accountId),
     lastSession: args.lastSessionByAccount.get(accountId) || null,
-    lastActivityAt: args.lastActivityByAccount.get(accountId) || null,
-    lastInboundAt: args.lastInboundByAccount.get(accountId) || null,
-    lastOutboundAt: args.lastOutboundByAccount.get(accountId) || null,
+    lastActivityAt: nullableMapNumber(args.lastActivityByAccount, accountId),
+    lastInboundAt: nullableMapNumber(args.lastInboundByAccount, accountId),
+    lastOutboundAt: nullableMapNumber(args.lastOutboundByAccount, accountId),
   };
 }
 

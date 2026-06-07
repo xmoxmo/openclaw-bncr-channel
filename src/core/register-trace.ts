@@ -81,6 +81,54 @@ export function dominantRegisterBucket(sourceBuckets: Record<string, number>) {
   return winner;
 }
 
+export function normalizeRegisterDriftSnapshot(raw: unknown): RegisterDriftSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const finiteOrNull = (value: unknown): number | null => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+  const cleanString = (value: unknown): string | null => {
+    const text = value == null ? '' : String(value);
+    return text.trim() || null;
+  };
+
+  return {
+    capturedAt: finiteNumberOr(data.capturedAt, 0),
+    registerCount: finiteOrNull(data.registerCount),
+    apiGeneration: finiteOrNull(data.apiGeneration),
+    postWarmupRegisterCount: finiteOrNull(data.postWarmupRegisterCount),
+    apiInstanceId: cleanString(data.apiInstanceId),
+    registryFingerprint: cleanString(data.registryFingerprint),
+    dominantBucket: cleanString(data.dominantBucket),
+    sourceBuckets:
+      data.sourceBuckets && typeof data.sourceBuckets === 'object'
+        ? { ...(data.sourceBuckets as Record<string, number>) }
+        : {},
+    traceWindowSize: finiteNumberOr(data.traceWindowSize, 0),
+    traceRecent: Array.isArray(data.traceRecent)
+      ? [...(data.traceRecent as Array<Record<string, unknown>>)]
+      : [],
+  };
+}
+
+export function dumpRegisterDriftSnapshot(snapshot: RegisterDriftSnapshot | null) {
+  return snapshot
+    ? {
+        capturedAt: snapshot.capturedAt,
+        registerCount: snapshot.registerCount,
+        apiGeneration: snapshot.apiGeneration,
+        postWarmupRegisterCount: snapshot.postWarmupRegisterCount,
+        apiInstanceId: snapshot.apiInstanceId,
+        registryFingerprint: snapshot.registryFingerprint,
+        dominantBucket: snapshot.dominantBucket,
+        sourceBuckets: { ...snapshot.sourceBuckets },
+        traceWindowSize: snapshot.traceWindowSize,
+        traceRecent: snapshot.traceRecent.map((trace) => ({ ...trace })),
+      }
+    : null;
+}
+
 export function buildRegisterTraceEntry(args: {
   ts: number;
   bridgeId: string;

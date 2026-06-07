@@ -6,6 +6,10 @@ function finiteNumberOr(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
+  return Math.max(0, finiteNumberOr(value, fallback));
+}
+
 type DiagnosticsPayloadArgs = {
   cfg: any;
   channelId: string;
@@ -26,11 +30,11 @@ export function buildDiagnosticsPayload(args: DiagnosticsPayloadArgs) {
   const probe = probeBncrAccount({
     accountId: args.accountId,
     connected: Boolean(args.runtime?.connected),
-    pending: finiteNumberOr(args.runtime?.meta?.pending, 0),
-    deadLetter: finiteNumberOr(args.runtime?.meta?.deadLetter, 0),
-    activeConnections: args.activeConnections,
-    invalidOutboxSessionKeys: args.invalidOutboxSessionKeys,
-    legacyAccountResidue: args.legacyAccountResidue,
+    pending: nonNegativeFiniteNumberOr(args.runtime?.meta?.pending, 0),
+    deadLetter: nonNegativeFiniteNumberOr(args.runtime?.meta?.deadLetter, 0),
+    activeConnections: nonNegativeFiniteNumberOr(args.activeConnections, 0),
+    invalidOutboxSessionKeys: nonNegativeFiniteNumberOr(args.invalidOutboxSessionKeys, 0),
+    legacyAccountResidue: nonNegativeFiniteNumberOr(args.legacyAccountResidue, 0),
     lastActivityAt: args.runtime?.meta?.lastActivityAt ?? null,
     structure: {
       coreComplete: true,

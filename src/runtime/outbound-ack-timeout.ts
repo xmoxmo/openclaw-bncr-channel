@@ -65,6 +65,15 @@ export function computeBncrRecommendedAckTimeoutMs(args: ComputeBncrRecommendedA
   return Math.min(args.maxAckTimeoutMs, Math.max(args.minAckTimeoutMs, recommended));
 }
 
+export function resolveBncrRuntimeAckTimeoutDecision(args: ComputeBncrRecommendedAckTimeoutArgs) {
+  const timeoutMs = computeBncrRecommendedAckTimeoutMs(args);
+  const reason = computeBncrRecommendedAckTimeoutReason({
+    ...args,
+    recommendedAckTimeoutMs: timeoutMs,
+  });
+  return { timeoutMs, reason };
+}
+
 function finiteNumberOr(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -92,5 +101,69 @@ export function buildBncrRuntimeAckStrategy(args: {
     lastLateAckAgeMs: ackObservability.lastLateAckAgeMs ?? null,
     lateAckObservationTtlMs: ackObservability.lateAckObservationTtlMs ?? null,
     recovered: ackObservability.adaptiveAckRecovered === true,
+  };
+}
+
+export function buildBncrRuntimeAckObservability(args: {
+  lastAckOkAt: number | null;
+  lastAckTimeoutAt: number | null;
+  recentAckTimeoutCount: number;
+  lateAckOkCount: number;
+  lastLateAckOkAt: number | null;
+  adaptiveAckRecoveryOkCount: number;
+  lastAckQueueLatencyMs: number | null;
+  lastAckPushLatencyMs: number | null;
+  lastLateAckQueueLatencyMs: number | null;
+  lastLateAckPushLatencyMs: number | null;
+  adaptiveAckTimeoutEnabled: boolean;
+  defaultAckTimeoutMs: number;
+  currentAckTimeoutMs: number;
+  minAckTimeoutMs: number;
+  maxAckTimeoutMs: number;
+  lateAckObservationTtlMs: number;
+  recoveryOkThreshold: number;
+  nowMs: number;
+}) {
+  const lastLateAckAgeMs =
+    typeof args.lastLateAckOkAt === 'number' && args.lastLateAckOkAt > 0
+      ? Math.max(0, args.nowMs - args.lastLateAckOkAt)
+      : null;
+  const lateAckObservationExpired =
+    typeof lastLateAckAgeMs === 'number' && lastLateAckAgeMs > args.lateAckObservationTtlMs;
+  const adaptiveAckRecovered = args.adaptiveAckRecoveryOkCount >= args.recoveryOkThreshold;
+  const ackTimeoutDecision = resolveBncrRuntimeAckTimeoutDecision({
+    lateAckOkCount: args.lateAckOkCount,
+    recentAckTimeoutCount: args.recentAckTimeoutCount,
+    lastLateAckPushLatencyMs: args.lastLateAckPushLatencyMs,
+    lastLateAckOkAt: args.lastLateAckOkAt,
+    adaptiveAckRecoveryOkCount: args.adaptiveAckRecoveryOkCount,
+    nowMs: args.nowMs,
+    defaultAckTimeoutMs: args.defaultAckTimeoutMs,
+    minAckTimeoutMs: args.minAckTimeoutMs,
+    maxAckTimeoutMs: args.maxAckTimeoutMs,
+    lateAckObservationTtlMs: args.lateAckObservationTtlMs,
+    recoveryOkThreshold: args.recoveryOkThreshold,
+  });
+  return {
+    lastAckOkAt: args.lastAckOkAt,
+    lastAckTimeoutAt: args.lastAckTimeoutAt,
+    recentAckTimeoutCount: args.recentAckTimeoutCount,
+    lateAckOkCount: args.lateAckOkCount,
+    lastLateAckOkAt: args.lastLateAckOkAt,
+    lastLateAckAgeMs,
+    lateAckObservationTtlMs: args.lateAckObservationTtlMs,
+    lateAckObservationExpired,
+    adaptiveAckRecoveryOkCount: args.adaptiveAckRecoveryOkCount,
+    adaptiveAckRecoveryOkThreshold: args.recoveryOkThreshold,
+    adaptiveAckRecovered,
+    lastAckQueueLatencyMs: args.lastAckQueueLatencyMs,
+    lastAckPushLatencyMs: args.lastAckPushLatencyMs,
+    lastLateAckQueueLatencyMs: args.lastLateAckQueueLatencyMs,
+    lastLateAckPushLatencyMs: args.lastLateAckPushLatencyMs,
+    adaptiveAckTimeoutEnabled: args.adaptiveAckTimeoutEnabled,
+    defaultAckTimeoutMs: args.defaultAckTimeoutMs,
+    currentAckTimeoutMs: args.currentAckTimeoutMs,
+    recommendedAckTimeoutMs: ackTimeoutDecision.timeoutMs,
+    recommendedAckTimeoutReason: ackTimeoutDecision.reason,
   };
 }

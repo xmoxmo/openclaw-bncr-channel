@@ -14,6 +14,7 @@ import {
 } from '../src/messaging/inbound/dispatch.ts';
 import { parseBncrInboundParams, resolveChatType } from '../src/messaging/inbound/parse.ts';
 import { setBncrInboundSessionRuntimeForTest } from '../src/openclaw/inbound-session-runtime.ts';
+import { withConsoleCapture } from './helpers/console-capture.mjs';
 
 function createInboundApiStub(options = {}) {
   const currentConfig = {};
@@ -724,16 +725,9 @@ test('slash command with no native reply falls back to normal bncr agent inbound
     msgId: 'slash-fallback-1',
   });
   const enqueueCalls = [];
-  const logLines = [];
-  const originalLog = console.log;
-  console.log = (...args) => {
-    logLines.push(args.join(' '));
-    originalLog(...args);
-  };
 
-  let result;
-  try {
-    result = await dispatchBncrInbound({
+  const { result, logLines } = await withConsoleCapture('log', async ({ log }) => {
+    const result = await dispatchBncrInbound({
       api,
       channelId: 'bncr',
       cfg: {},
@@ -746,9 +740,8 @@ test('slash command with no native reply falls back to normal bncr agent inbound
       setInboundActivity() {},
       scheduleSave() {},
     });
-  } finally {
-    console.log = originalLog;
-  }
+    return { result, logLines: log };
+  });
 
   assert.equal(result.accountId, 'Primary');
   assert.equal(calls.turnRuns.length, 2);

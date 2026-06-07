@@ -134,7 +134,6 @@ var BNCR_BRIDGE_OWNER = /* @__PURE__ */ Symbol.for("bncr.bridge.owner");
 var BNCR_GATEWAY_RUNTIME = /* @__PURE__ */ Symbol.for("bncr.gateway.runtime");
 var MODULE_EPOCH = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 var runtime = null;
-var activeServiceStop = null;
 var identityIds = /* @__PURE__ */ new WeakMap();
 var identitySeq = 0;
 var tryExec = (command, args) => {
@@ -288,7 +287,9 @@ var loadRuntimeSync = () => {
     return runtime;
   } catch (error) {
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    throw new Error(`bncr failed to load channel runtime after dependency bootstrap from ${runtimeSourceDir}: ${detail}`);
+    throw new Error(
+      `bncr failed to load channel runtime after dependency bootstrap from ${runtimeSourceDir}: ${detail}`
+    );
   }
 };
 var getIdentityId = (obj, prefix) => {
@@ -375,6 +376,8 @@ var gatewayMethodDispatchers = {
   "bncr.activity": (bridge, opts) => bridge.handleActivity(opts),
   "bncr.ack": (bridge, opts) => bridge.handleAck(opts),
   "bncr.diagnostics": (bridge, opts) => bridge.handleDiagnostics(opts),
+  "bncr.deadLetter.inspect": (bridge, opts) => bridge.handleDeadLetterInspect(opts),
+  "bncr.deadLetter.prune": (bridge, opts) => bridge.handleDeadLetterPrune(opts),
   "bncr.file.init": (bridge, opts) => bridge.handleFileInit(opts),
   "bncr.file.chunk": (bridge, opts) => bridge.handleFileChunk(opts),
   "bncr.file.complete": (bridge, opts) => bridge.handleFileComplete(opts),
@@ -719,7 +722,6 @@ var plugin = {
         },
         stop: serviceStopHandler
       });
-      activeServiceStop = serviceStopHandler;
       gatewayRuntime.serviceRegistered = true;
       gatewayRuntime.serviceOwnerApiInstanceId = apiInstanceId;
       meta.service = true;
@@ -747,6 +749,8 @@ var plugin = {
     ensureGatewayMethodRegistered(api, "bncr.activity", debugLog);
     ensureGatewayMethodRegistered(api, "bncr.ack", debugLog);
     ensureGatewayMethodRegistered(api, "bncr.diagnostics", debugLog);
+    ensureGatewayMethodRegistered(api, "bncr.deadLetter.inspect", debugLog);
+    ensureGatewayMethodRegistered(api, "bncr.deadLetter.prune", debugLog);
     ensureGatewayMethodRegistered(api, "bncr.file.init", debugLog);
     ensureGatewayMethodRegistered(api, "bncr.file.chunk", debugLog);
     ensureGatewayMethodRegistered(api, "bncr.file.complete", debugLog);

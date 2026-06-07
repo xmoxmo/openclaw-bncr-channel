@@ -15,7 +15,57 @@ export type ChannelAccountWorkerHandle = {
   timer: NodeJS.Timeout;
   finish: (reason: string) => void;
   cleanupAbortListener?: () => void;
+  healthLogState?: HealthStatusLogState;
 };
+
+export const HEALTH_STATUS_STABLE_WINDOW_MS = 10_000;
+
+export type HealthStatusLogState = {
+  emittedSig: string | null;
+  pendingSig: string | null;
+  pendingSince: number;
+};
+
+export function createHealthStatusLogState(): HealthStatusLogState {
+  return { emittedSig: null, pendingSig: null, pendingSince: 0 };
+}
+
+function finiteNumberOr(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
+  return Math.max(0, finiteNumberOr(value, fallback));
+}
+
+export function updateHealthStatusLogState(args: {
+  state: HealthStatusLogState;
+  sig: string;
+  nowMs: number;
+  stableWindowMs?: number;
+}): 'pending' | 'stable' | 'unchanged' {
+  const stableWindowMs = nonNegativeFiniteNumberOr(
+    args.stableWindowMs,
+    HEALTH_STATUS_STABLE_WINDOW_MS,
+  );
+  const nowMs = finiteNumberOr(args.nowMs, 0);
+  if (args.state.emittedSig === args.sig) {
+    args.state.pendingSig = null;
+    args.state.pendingSince = 0;
+    return 'unchanged';
+  }
+  if (args.state.pendingSig !== args.sig) {
+    args.state.pendingSig = args.sig;
+    args.state.pendingSince = nowMs;
+    if (stableWindowMs > 0) return 'pending';
+  }
+  if (nowMs - args.state.pendingSince < stableWindowMs) return 'pending';
+  args.state.emittedSig = args.sig;
+  args.state.pendingSig = null;
+  args.state.pendingSince = 0;
+  return 'stable';
+}
 
 type StatusWorkerHooks = {
   isOnline: (accountId: string) => boolean;
@@ -30,6 +80,8 @@ type StatusWorkerHooks = {
     message: string,
     options: { key: string; sig: string; debugOnly?: boolean; windowMs?: number },
   ) => void;
+  now?: () => number;
+  healthStableWindowMs?: number;
 };
 
 type StatusWorkerRuntime = {
@@ -66,6 +118,7 @@ export async function startBncrStatusWorker(
 ) {
   const accountId = normalizeAccountId(ctx.accountId);
   clearBncrStatusWorker(runtime, accountId, 'start-replace');
+  let worker!: ChannelAccountWorkerHandle;
 
   const tick = () => {
     const previous = ctx.getStatus?.() || {};
@@ -84,14 +137,20 @@ export async function startBncrStatusWorker(
       activeConnections,
     });
     const conns = activeConnections.length;
-    runtime.hooks.logInfoDedup(
-      'health',
-      `status-tick ${accountId}|changed|${connected ? 'linked' : 'configured'}|onlineByConn=${onlineByConn}|recentInboundReachable=${recentInboundReachable}|conns=${conns}`,
-      {
-        key: `health-status-tick:${accountId}`,
-        sig: healthSig,
-      },
-    );
+    const healthLogState = worker.healthLogState || createHealthStatusLogState();
+    worker.healthLogState = healthLogState;
+    const healthLogDecision = updateHealthStatusLogState({
+      state: healthLogState,
+      sig: healthSig,
+      nowMs: runtime.hooks.now?.() ?? Date.now(),
+      stableWindowMs: runtime.hooks.healthStableWindowMs,
+    });
+    if (healthLogDecision === 'stable') {
+      runtime.hooks.logInfo(
+        'health',
+        `status-tick ${accountId}|stable|${connected ? 'linked' : 'configured'}|onlineByConn=${onlineByConn}|recentInboundReachable=${recentInboundReachable}|conns=${conns}`,
+      );
+    }
     runtime.hooks.logInfoDedup('health', `status-tick ${healthSig}`, {
       key: `health-status-tick-debug:${accountId}`,
       sig: healthSig,
@@ -111,9 +170,7 @@ export async function startBncrStatusWorker(
     });
   };
 
-  tick();
   const timer = setInterval(tick, 5_000);
-  let worker!: ChannelAccountWorkerHandle;
   const done = new Promise<void>((resolve) => {
     let settled = false;
     const finish = (reason: string) => {
@@ -135,8 +192,10 @@ export async function startBncrStatusWorker(
       resolve();
     };
 
-    worker = { timer, finish };
+    worker = { timer, finish, healthLogState: createHealthStatusLogState() };
     runtime.workers.set(accountId, worker);
+
+    tick();
 
     const onAbort = () => finish('abort');
     const abortSignal = ctx.abortSignal;

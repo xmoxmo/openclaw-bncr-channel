@@ -94,6 +94,112 @@ export function hasAlternativeLiveConnection(args: {
   return false;
 }
 
+type OutboundPushCandidateConnection = BncrConnection & {
+  inboundOnly?: boolean;
+  preferredForOutboundUntil?: number;
+  outboundReadyUntil?: number;
+  lastAckOkAt?: number;
+  lastPushTimeoutAt?: number;
+  pushFailureScore?: number;
+};
+
+export function isEligibleOutboundPushConnection(args: {
+  connection?: BncrConnection | null;
+  now: number;
+  connectTtlMs: number;
+}): args is { connection: OutboundPushCandidateConnection; now: number; connectTtlMs: number } {
+  const conn = args.connection as OutboundPushCandidateConnection | null | undefined;
+  if (!conn?.connId) return false;
+  const nowMs = finiteNumberOr(args.now, 0);
+  const connectTtlMs = finiteNumberOr(args.connectTtlMs, 0);
+  const lastSeenAt = finiteNumberOr(conn.lastSeenAt, 0);
+  if (!nowMs || !connectTtlMs || !lastSeenAt) return false;
+  if (nowMs - lastSeenAt > connectTtlMs) return false;
+  if (conn.inboundOnly === true) return false;
+  return true;
+}
+
+function scoreOutboundPushConnection(args: {
+  connection: BncrConnection;
+  now: number;
+  recentInboundConnIds: Set<string>;
+}) {
+  const conn = args.connection as OutboundPushCandidateConnection;
+  const preferredForOutboundUntil = finiteNumberOr(conn.preferredForOutboundUntil, 0);
+  const outboundReadyUntil = finiteNumberOr(conn.outboundReadyUntil, 0);
+  const lastPushTimeoutAt = finiteNumberOr(conn.lastPushTimeoutAt, 0);
+  const lastAckOkAt = finiteNumberOr(conn.lastAckOkAt, 0);
+  const pushFailureScore = finiteNumberOr(conn.pushFailureScore, 0);
+  const recentTimeoutPenalty =
+    lastPushTimeoutAt > 0 && args.now - lastPushTimeoutAt <= 30_000 ? 1 : 0;
+  return {
+    preferred: preferredForOutboundUntil > args.now ? 1 : 0,
+    ready: outboundReadyUntil > args.now ? 1 : 0,
+    recentInbound: args.recentInboundConnIds.has(conn.connId) ? 1 : 0,
+    recentTimeoutPenalty,
+    pushFailureScore,
+    lastAckOkAt,
+    lastPushTimeoutAt,
+    lastSeenAt: finiteNumberOr(conn.lastSeenAt, 0),
+    connectedAt: finiteNumberOr(conn.connectedAt, 0),
+  };
+}
+
+export function compareOutboundPushConnections(args: {
+  a: BncrConnection;
+  b: BncrConnection;
+  now: number;
+  recentInboundConnIds: Set<string>;
+}) {
+  const sa = scoreOutboundPushConnection({
+    connection: args.a,
+    now: args.now,
+    recentInboundConnIds: args.recentInboundConnIds,
+  });
+  const sb = scoreOutboundPushConnection({
+    connection: args.b,
+    now: args.now,
+    recentInboundConnIds: args.recentInboundConnIds,
+  });
+  if (sb.preferred !== sa.preferred) return sb.preferred - sa.preferred;
+  if (sb.ready !== sa.ready) return sb.ready - sa.ready;
+  if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty)
+    return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
+  if (sa.pushFailureScore !== sb.pushFailureScore) return sa.pushFailureScore - sb.pushFailureScore;
+  if (sb.lastAckOkAt !== sa.lastAckOkAt) return sb.lastAckOkAt - sa.lastAckOkAt;
+  if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt)
+    return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
+  if (sb.recentInbound !== sa.recentInbound) return sb.recentInbound - sa.recentInbound;
+  if (sb.lastSeenAt !== sa.lastSeenAt) return sb.lastSeenAt - sa.lastSeenAt;
+  return sb.connectedAt - sa.connectedAt;
+}
+
+export function selectOrderedOutboundPushConnections(args: {
+  accountId: string;
+  now: number;
+  connectTtlMs: number;
+  recentInboundConnIds: Set<string>;
+  connections: Iterable<BncrConnection>;
+}) {
+  return Array.from(args.connections)
+    .filter((c): c is BncrConnection => c.accountId === args.accountId)
+    .filter((connection) =>
+      isEligibleOutboundPushConnection({
+        connection,
+        now: args.now,
+        connectTtlMs: args.connectTtlMs,
+      }),
+    )
+    .sort((a, b) =>
+      compareOutboundPushConnections({
+        a,
+        b,
+        now: args.now,
+        recentInboundConnIds: args.recentInboundConnIds,
+      }),
+    );
+}
+
 type ReachableConnection = BncrConnection & {
   inboundOnly?: boolean;
   preferredForOutboundUntil?: number;

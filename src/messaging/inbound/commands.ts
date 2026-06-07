@@ -11,10 +11,11 @@ import {
   resolveBncrPinnedMainDmOwnerFromAllowlist,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
-import {
-  resolveOpenClawAgentRoute,
-  resolveOpenClawInboundLastRouteSessionKey,
-} from '../../openclaw/routing-runtime.ts';
+import { resolveOpenClawAgentRoute } from '../../openclaw/routing-runtime.ts';
+import type { OutboundReplyTargetPolicy } from '../outbound/reply-target-policy.ts';
+import { buildBncrInboundRecordUpdateLastRoute } from './last-route.ts';
+import { parseBncrNativeCommand, resolveBncrNativeVerboseCommand } from './native-command.ts';
+import { buildBncrNativeReplyDeliveryPayload } from './native-reply-delivery.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import {
@@ -25,38 +26,6 @@ import {
 
 type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
 
-type NativeCommand = {
-  command: string;
-  raw: string;
-  body: string;
-};
-
-type NativeVerboseCommand = {
-  handled: true;
-  verboseLevel?: 'on' | 'off' | 'full';
-  text: string;
-};
-
-function resolveBncrNativeVerboseCommand(command: NativeCommand): NativeVerboseCommand | null {
-  if (command.command !== 'verbose') return null;
-  const rawLevel = String(command.raw.slice('/verbose'.length) || '')
-    .trim()
-    .toLowerCase();
-  if (!rawLevel || rawLevel === 'status') {
-    return { handled: true, text: 'Current verbose level is unchanged.' };
-  }
-  if (rawLevel === 'on')
-    return { handled: true, verboseLevel: 'on', text: 'Verbose logging enabled.' };
-  if (rawLevel === 'off')
-    return { handled: true, verboseLevel: 'off', text: 'Verbose logging disabled.' };
-  if (rawLevel === 'full')
-    return { handled: true, verboseLevel: 'full', text: 'Verbose logging set to full.' };
-  return {
-    handled: true,
-    text: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on, full.`,
-  };
-}
-
 function logBncrNativeCommandEvent(
   event: string,
   fields: Record<string, unknown>,
@@ -66,21 +35,7 @@ function logBncrNativeCommandEvent(
   emitBncrLogLine('info', `[bncr] native-command ${JSON.stringify({ event, ...fields })}`);
 }
 
-export function parseBncrNativeCommand(text: string): NativeCommand | null {
-  const raw = String(text || '').trim();
-  if (!raw.startsWith('/')) return null;
-  const match = raw.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/i);
-  if (!match) return null;
-
-  const command = String(match[1] || '')
-    .trim()
-    .toLowerCase();
-  if (!command) return null;
-
-  const rest = String(match[2] || '').trim();
-  const body = command === 'help' ? ['/commands', rest].filter(Boolean).join(' ') : raw;
-  return { command, raw, body };
-}
+export { parseBncrNativeCommand } from './native-command.ts';
 
 export async function handleBncrNativeCommand(params: {
   api: any;
@@ -95,6 +50,7 @@ export async function handleBncrNativeCommand(params: {
     route: any;
     payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
     mediaLocalRoots?: readonly string[];
+    replyTargetPolicy?: OutboundReplyTargetPolicy;
   }) => Promise<void>;
   logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<
@@ -284,9 +240,15 @@ export async function handleBncrNativeCommand(params: {
           normalizeEntry: (entry: string) => String(entry || '').trim(),
         })
       : null;
-  const inboundLastRouteSessionKey = resolveOpenClawInboundLastRouteSessionKey({
-    route: resolvedRoute,
+  const updateLastRoute = buildBncrInboundRecordUpdateLastRoute({
+    channelId,
+    peerKind: peer.kind,
+    senderIdForContext,
+    accountId,
+    to: displayTo,
+    resolvedRoute,
     sessionKey,
+    pinnedMainDmOwner,
   });
 
   let responded = false;
@@ -325,22 +287,7 @@ export async function handleBncrNativeCommand(params: {
           expectedLabel: displayTo,
         }),
         record: {
-          updateLastRoute:
-            peer.kind === 'direct'
-              ? {
-                  sessionKey: inboundLastRouteSessionKey,
-                  channel: channelId,
-                  to: displayTo,
-                  accountId,
-                  mainDmOwnerPin:
-                    inboundLastRouteSessionKey === resolvedRoute.mainSessionKey && pinnedMainDmOwner
-                      ? {
-                          ownerRecipient: pinnedMainDmOwner,
-                          senderRecipient: senderIdForContext,
-                        }
-                      : undefined,
-                }
-              : undefined,
+          updateLastRoute,
           onRecordError: (err: unknown) => {
             emitBncrLogLine(
               'warn',
@@ -363,18 +310,13 @@ export async function handleBncrNativeCommand(params: {
                 info?: { kind?: 'tool' | 'block' | 'final' },
               ) => {
                 const kind = info?.kind;
-                const shouldForwardTool = effectiveReply.blockStreaming && effectiveReply.allowTool;
-
-                if (kind === 'tool' && !shouldForwardTool) {
-                  return;
-                }
-
-                const hasPayload = Boolean(
-                  payload?.text ||
-                    payload?.mediaUrl ||
-                    (Array.isArray(payload?.mediaUrls) && payload.mediaUrls.length > 0),
-                );
-                if (!hasPayload) return;
+                const deliveryPayload = buildBncrNativeReplyDeliveryPayload({
+                  payload,
+                  kind,
+                  effectiveReply,
+                  msgId,
+                });
+                if (!deliveryPayload) return;
                 if (!responded) {
                   logBncrNativeCommandEvent(
                     'payload-produced',
@@ -395,11 +337,8 @@ export async function handleBncrNativeCommand(params: {
                   accountId,
                   sessionKey,
                   route,
-                  payload: {
-                    ...payload,
-                    kind: kind as 'tool' | 'block' | 'final' | undefined,
-                    replyToId: msgId || undefined,
-                  },
+                  payload: deliveryPayload,
+                  replyTargetPolicy: 'preserve',
                 });
               },
             },

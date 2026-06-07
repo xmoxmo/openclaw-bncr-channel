@@ -76,6 +76,8 @@ type GatewayMethodName =
   | 'bncr.activity'
   | 'bncr.ack'
   | 'bncr.diagnostics'
+  | 'bncr.deadLetter.inspect'
+  | 'bncr.deadLetter.prune'
   | 'bncr.file.init'
   | 'bncr.file.chunk'
   | 'bncr.file.complete'
@@ -405,6 +407,8 @@ const gatewayMethodDispatchers: Record<
   'bncr.activity': (bridge, opts) => bridge.handleActivity(opts),
   'bncr.ack': (bridge, opts) => bridge.handleAck(opts),
   'bncr.diagnostics': (bridge, opts) => bridge.handleDiagnostics(opts),
+  'bncr.deadLetter.inspect': (bridge, opts) => bridge.handleDeadLetterInspect(opts),
+  'bncr.deadLetter.prune': (bridge, opts) => bridge.handleDeadLetterPrune(opts),
   'bncr.file.init': (bridge, opts) => bridge.handleFileInit(opts),
   'bncr.file.chunk': (bridge, opts) => bridge.handleFileChunk(opts),
   'bncr.file.complete': (bridge, opts) => bridge.handleFileComplete(opts),
@@ -870,6 +874,8 @@ const plugin = {
     ensureGatewayMethodRegistered(api, 'bncr.activity', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.ack', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.diagnostics', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.deadLetter.inspect', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.deadLetter.prune', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.file.init', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.file.chunk', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.file.complete', debugLog);

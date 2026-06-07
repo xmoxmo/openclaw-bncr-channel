@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-
-import { createBncrBridge } from '../src/channel.ts';
 import {
   buildBncrMediaOutboundFrame,
   resolveBncrOutboundMessageType,
@@ -10,43 +8,7 @@ import {
   isOpenClawRemoteHttpMediaUrl,
   loadOpenClawWebMedia,
 } from '../src/openclaw/media-runtime.ts';
-
-function createApiStub() {
-  const currentConfig = {};
-  return {
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {
-      config: {
-        current() {
-          return currentConfig;
-        },
-        get() {
-          return currentConfig;
-        },
-        async loadConfig() {
-          return currentConfig;
-        },
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute() {
-            return { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' };
-          },
-        },
-      },
-    },
-  };
-}
-
-function cleanupBridge(bridge) {
-  if (bridge.saveTimer) clearTimeout(bridge.saveTimer);
-  if (bridge.pushTimer) clearTimeout(bridge.pushTimer);
-
-  for (const waiter of bridge.messageAckWaiters?.values?.() || []) {
-    clearTimeout(waiter.timer);
-  }
-  bridge.messageAckWaiters?.clear?.();
-}
+import { cleanupBridge, createBridge } from './helpers/bncr-bridge.mjs';
 
 test('loadOpenClawWebMedia prefers channel readRemoteMediaBuffer for remote http media', async () => {
   const calls = [];
@@ -199,7 +161,7 @@ test('buildBncrMediaOutboundFrame writes resolved type and path', () => {
 });
 
 test('channelSendMedia enqueues file-transfer outbox entry with voice metadata', async () => {
-  const bridge = createBncrBridge(createApiStub());
+  const bridge = createBridge();
   bridge.canonicalAgentId = 'orion';
 
   const route = { platform: 'tgBot', groupId: '-1001', userId: '10001' };
@@ -234,7 +196,7 @@ test('channelSendMedia enqueues file-transfer outbox entry with voice metadata',
 });
 
 test('channelSendMedia stores replyToId on file-transfer metadata', async () => {
-  const bridge = createBncrBridge(createApiStub());
+  const bridge = createBridge();
   bridge.canonicalAgentId = 'orion';
 
   bridge.resolveVerifiedTarget = () => ({
@@ -264,7 +226,7 @@ test('channelSendMedia stores replyToId on file-transfer metadata', async () => 
 });
 
 test('channelSendMedia strips replyToId for tool file-transfer metadata', async () => {
-  const bridge = createBncrBridge(createApiStub());
+  const bridge = createBridge();
   bridge.canonicalAgentId = 'orion';
 
   bridge.resolveVerifiedTarget = () => ({
@@ -294,7 +256,7 @@ test('channelSendMedia strips replyToId for tool file-transfer metadata', async 
 });
 
 test('file-transfer waits until final push is emitted before waiting for message ack', async () => {
-  const bridge = createBncrBridge(createApiStub());
+  const bridge = createBridge();
   bridge.canonicalAgentId = 'orion';
 
   const order = [];
@@ -351,7 +313,7 @@ test('file-transfer waits until final push is emitted before waiting for message
 });
 
 test('file-transfer failure does not start message ack wait or rewrite error to push-ack-timeout', async () => {
-  const bridge = createBncrBridge(createApiStub());
+  const bridge = createBridge();
   bridge.canonicalAgentId = 'orion';
 
   let waitCalls = 0;

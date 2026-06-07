@@ -56,8 +56,8 @@ export function findCapabilityConnection(args: {
 
 export function buildCapabilitySnapshot(connection: CapabilityConnection) {
   return {
-    outboundReadyUntil: connection.outboundReadyUntil || null,
-    preferredForOutboundUntil: connection.preferredForOutboundUntil || null,
+    outboundReadyUntil: connection.outboundReadyUntil ?? null,
+    preferredForOutboundUntil: connection.preferredForOutboundUntil ?? null,
     inboundOnly: connection.inboundOnly === true,
   };
 }
