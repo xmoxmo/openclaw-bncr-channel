@@ -79,8 +79,23 @@ export type ReplyMediaFallbackTextEntryParams = {
   fallback: { text: string; reason: string };
 };
 
+const MEDIA_TEXT_SPLIT_THRESHOLD = 1020;
+
 export function hasReplyMediaEntries(payload: NormalizedReplyPayload) {
   return payload.mediaList.length > 0;
+}
+
+export function shouldSplitReplyMediaText(payload: NormalizedReplyPayload) {
+  if (!payload.text) return false;
+  if (payload.mediaList.length > 1) return true;
+  return payload.text.length > MEDIA_TEXT_SPLIT_THRESHOLD;
+}
+
+function withoutReplyMediaText(payload: NormalizedReplyPayload): NormalizedReplyPayload {
+  return {
+    ...payload,
+    text: '',
+  };
 }
 
 export function buildReplyTextOutboxEntry(
@@ -310,6 +325,23 @@ export function enqueueNormalizedReplyPayload(
   });
 
   if (helpers.hasReplyMediaEntries(params.payload)) {
+    if (shouldSplitReplyMediaText(params.payload)) {
+      helpers.enqueueReplyTextEntry({
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+        route: params.route,
+        payload: params.payload,
+      });
+      helpers.enqueueReplyMediaEntries({
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+        route: params.route,
+        payload: withoutReplyMediaText(params.payload),
+        mediaLocalRoots: params.mediaLocalRoots,
+      });
+      return;
+    }
+
     helpers.enqueueReplyMediaEntries({
       accountId: params.accountId,
       sessionKey: params.sessionKey,

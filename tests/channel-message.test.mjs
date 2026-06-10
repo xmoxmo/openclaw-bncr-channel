@@ -60,7 +60,7 @@ test('channel.message media sends enqueue file-transfer entries and return queue
   }
 });
 
-test('channel.message media sends with mediaUrls return queued handoff receipt for the last new outbox entry', async () => {
+test('channel.message media sends with mediaUrls and text split text before attachments', async () => {
   const bridge = createBridge();
   try {
     const existing = makeEntry('existing-channel-message-outbox', 'already queued');
@@ -75,21 +75,24 @@ test('channel.message media sends with mediaUrls return queued handoff receipt f
       mediaLocalRoots: ['/tmp'],
     });
 
-    assert.equal(bridge.outbox.size, 3);
+    assert.equal(bridge.outbox.size, 4);
     const newEntries = Array.from(bridge.outbox.values()).filter(
       (entry) => entry.messageId !== existing.messageId,
     );
-    assert.equal(newEntries.length, 2);
-    assert.equal(newEntries[0].payload._meta?.kind, 'file-transfer');
-    assert.equal(newEntries[0].payload._meta?.mediaUrl, '/tmp/channel-message-1.png');
-    assert.equal(newEntries[0].payload._meta?.text, 'album caption');
-    assert.equal(newEntries[0].payload._meta?.replyToId, 'source-channel-message-media-album');
+    assert.equal(newEntries.length, 3);
+    assert.equal(newEntries[0].payload.type, 'message.outbound');
+    assert.equal(newEntries[0].payload.message.msg, 'album caption');
+    assert.equal(newEntries[0].payload.replyToId, 'source-channel-message-media-album');
     assert.equal(newEntries[1].payload._meta?.kind, 'file-transfer');
-    assert.equal(newEntries[1].payload._meta?.mediaUrl, '/tmp/channel-message-2.png');
+    assert.equal(newEntries[1].payload._meta?.mediaUrl, '/tmp/channel-message-1.png');
     assert.equal(newEntries[1].payload._meta?.text, '');
     assert.equal(newEntries[1].payload._meta?.replyToId, 'source-channel-message-media-album');
+    assert.equal(newEntries[2].payload._meta?.kind, 'file-transfer');
+    assert.equal(newEntries[2].payload._meta?.mediaUrl, '/tmp/channel-message-2.png');
+    assert.equal(newEntries[2].payload._meta?.text, '');
+    assert.equal(newEntries[2].payload._meta?.replyToId, 'source-channel-message-media-album');
 
-    const lastNewEntry = newEntries[1];
+    const lastNewEntry = newEntries[2];
     assert.equal(result.results.length, 1);
     assert.equal(result.results[0].messageId, lastNewEntry.messageId);
     assert.equal(result.receipt.primaryPlatformMessageId, lastNewEntry.messageId);
@@ -97,6 +100,115 @@ test('channel.message media sends with mediaUrls return queued handoff receipt f
     assert.equal(result.receipt.parts.length, 1);
     assert.equal(result.receipt.parts[0].platformMessageId, lastNewEntry.messageId);
     assert.equal(result.receipt.parts[0].kind, 'media');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('channel.message media sends with mediaUrls and no text enqueue attachment entries only', async () => {
+  const bridge = createBridge();
+  try {
+    const result = await bridge.channelMessageSendMedia({
+      accountId: 'Primary',
+      to: target,
+      mediaUrls: ['/tmp/channel-message-no-text-1.png', '/tmp/channel-message-no-text-2.png'],
+      replyToId: 'source-channel-message-media-no-text',
+      mediaLocalRoots: ['/tmp'],
+    });
+
+    assert.equal(bridge.outbox.size, 2);
+    const entries = Array.from(bridge.outbox.values());
+    assert.deepEqual(
+      entries.map((entry) => entry.payload._meta?.mediaUrl),
+      ['/tmp/channel-message-no-text-1.png', '/tmp/channel-message-no-text-2.png'],
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.payload._meta?.text),
+      ['', ''],
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.payload._meta?.replyToId),
+      ['source-channel-message-media-no-text', 'source-channel-message-media-no-text'],
+    );
+
+    const lastEntry = entries[1];
+    assert.equal(result.results[0].messageId, lastEntry.messageId);
+    assert.equal(result.receipt.parts[0].kind, 'media');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('channel.message media keeps short text as single attachment caption', async () => {
+  const bridge = createBridge();
+  try {
+    await bridge.channelMessageSendMedia({
+      accountId: 'Primary',
+      to: target,
+      text: 'short caption',
+      mediaUrl: '/tmp/channel-message-short-caption.png',
+      replyToId: 'source-channel-message-media-short-caption',
+      mediaLocalRoots: ['/tmp'],
+    });
+
+    assert.equal(bridge.outbox.size, 1);
+    const [entry] = bridge.outbox.values();
+    assert.equal(entry.payload._meta?.kind, 'file-transfer');
+    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/channel-message-short-caption.png');
+    assert.equal(entry.payload._meta?.text, 'short caption');
+    assert.equal(entry.payload._meta?.replyToId, 'source-channel-message-media-short-caption');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('channel.message media splits text before a single attachment when text exceeds threshold', async () => {
+  const bridge = createBridge();
+  try {
+    const longText = 'x'.repeat(1021);
+    const result = await bridge.channelMessageSendMedia({
+      accountId: 'Primary',
+      to: target,
+      text: longText,
+      mediaUrl: '/tmp/channel-message-long-caption.png',
+      replyToId: 'source-channel-message-media-long-caption',
+      mediaLocalRoots: ['/tmp'],
+    });
+
+    assert.equal(bridge.outbox.size, 2);
+    const entries = Array.from(bridge.outbox.values());
+    assert.equal(entries[0].payload.type, 'message.outbound');
+    assert.equal(entries[0].payload.message.msg, longText);
+    assert.equal(entries[0].payload.replyToId, 'source-channel-message-media-long-caption');
+    assert.equal(entries[1].payload._meta?.kind, 'file-transfer');
+    assert.equal(entries[1].payload._meta?.mediaUrl, '/tmp/channel-message-long-caption.png');
+    assert.equal(entries[1].payload._meta?.text, '');
+    assert.equal(entries[1].payload._meta?.replyToId, 'source-channel-message-media-long-caption');
+
+    assert.equal(result.results[0].messageId, entries[1].messageId);
+    assert.equal(result.receipt.parts[0].kind, 'media');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('channel.message media keeps a 1020 character text as attachment caption', async () => {
+  const bridge = createBridge();
+  try {
+    const boundaryText = 'x'.repeat(1020);
+    await bridge.channelMessageSendMedia({
+      accountId: 'Primary',
+      to: target,
+      text: boundaryText,
+      mediaUrl: '/tmp/channel-message-boundary-caption.png',
+      replyToId: 'source-channel-message-media-boundary-caption',
+      mediaLocalRoots: ['/tmp'],
+    });
+
+    assert.equal(bridge.outbox.size, 1);
+    const [entry] = bridge.outbox.values();
+    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/channel-message-boundary-caption.png');
+    assert.equal(entry.payload._meta?.text, boundaryText);
   } finally {
     cleanupBridge(bridge);
   }
@@ -171,7 +283,7 @@ test('channel.message payload send uses caption alias and context reply fallback
   }
 });
 
-test('channel.message payload sends with mediaUrls return queued handoff receipt for the last new outbox entry', async () => {
+test('channel.message payload sends with mediaUrls and text split text before attachments', async () => {
   const bridge = createBridge();
   try {
     const result = await bridge.channelMessageSendPayload({
@@ -189,21 +301,25 @@ test('channel.message payload sends with mediaUrls return queued handoff receipt
       mediaLocalRoots: ['/tmp'],
     });
 
-    assert.equal(bridge.outbox.size, 3);
+    assert.equal(bridge.outbox.size, 4);
     const entries = Array.from(bridge.outbox.values());
+    assert.equal(entries[0].payload.type, 'message.outbound');
+    assert.equal(entries[0].payload.message.msg, 'payload album caption');
+    assert.equal(entries[0].payload.replyToId, 'source-channel-message-payload-album');
     assert.deepEqual(
-      entries.map((entry) => entry.payload._meta?.mediaUrl),
+      entries.slice(1).map((entry) => entry.payload._meta?.mediaUrl),
       [
         '/tmp/channel-message-payload-1.png',
         '/tmp/channel-message-payload-2.png',
         '/tmp/channel-message-payload-3.png',
       ],
     );
-    assert.equal(entries[0].payload._meta?.text, 'payload album caption');
-    assert.equal(entries[1].payload._meta?.text, '');
-    assert.equal(entries[2].payload._meta?.text, '');
     assert.deepEqual(
-      entries.map((entry) => entry.payload._meta?.replyToId),
+      entries.slice(1).map((entry) => entry.payload._meta?.text),
+      ['', '', ''],
+    );
+    assert.deepEqual(
+      entries.slice(1).map((entry) => entry.payload._meta?.replyToId),
       [
         'source-channel-message-payload-album',
         'source-channel-message-payload-album',
@@ -211,7 +327,7 @@ test('channel.message payload sends with mediaUrls return queued handoff receipt
       ],
     );
 
-    const lastEntry = entries[2];
+    const lastEntry = entries[3];
     assert.equal(result.results.length, 1);
     assert.equal(result.results[0].messageId, lastEntry.messageId);
     assert.equal(result.receipt.primaryPlatformMessageId, lastEntry.messageId);
