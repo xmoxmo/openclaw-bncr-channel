@@ -1,0 +1,146 @@
+import type { RegisterDriftSnapshot, RegisterTraceEntry } from '../core/register-trace.ts';
+import type { BncrDiagnosticsSummary, BncrRoute, OutboxEntry } from '../core/types.ts';
+import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
+
+type OpenClawJsonResultPayload = ReturnType<typeof openClawJsonResult>;
+
+export type BncrChannelConfigRoot = {
+  channels?: Record<string, BncrChannelConfigSection | undefined>;
+};
+
+export type BncrChannelConfigSection = {
+  enabled?: boolean;
+  name?: string;
+  debug?: {
+    verbose?: boolean;
+  };
+  accounts?: Record<string, BncrAccountConfig | undefined>;
+  outboundRequireAck?: boolean;
+  [key: string]: unknown;
+};
+
+export type BncrAccountConfig = {
+  enabled?: boolean;
+  name?: string;
+  [key: string]: unknown;
+};
+
+export type BncrPersistedSessionRoute = {
+  sessionKey: string;
+  accountId: string;
+  route: BncrRoute;
+  updatedAt: number;
+};
+
+export type BncrPersistedAccountTimestamp = {
+  accountId: string;
+  updatedAt: number;
+};
+
+export type BncrPersistedLastSession = {
+  accountId: string;
+  sessionKey: string;
+  scope: string;
+  updatedAt: number;
+};
+
+export type BncrStatusRuntimeSnapshot = {
+  connected?: boolean;
+  running?: boolean;
+  mode?: string;
+  pending?: number | null;
+  deadLetter?: number | null;
+  lastEventAt?: number | null;
+  lastError?: string | null;
+  lastSessionKey?: string | null;
+  lastSessionScope?: string | null;
+  lastSessionAt?: number | null;
+  lastActivityAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+  lastSessionAgo?: string | null;
+  lastActivityAgo?: string | null;
+  lastInboundAgo?: string | null;
+  lastOutboundAgo?: string | null;
+  diagnostics?: BncrDiagnosticsSummary | Record<string, unknown> | null;
+  meta?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
+export type BncrVerifiedTarget = {
+  sessionKey: string;
+  route: BncrRoute;
+  displayScope: string;
+};
+
+export type BncrChannelSendContext = {
+  accountId?: string | null;
+  to?: string;
+  text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  type?: string;
+  kind?: string;
+  replyToId?: string | null;
+  replyToMessageId?: string | null;
+  asVoice?: boolean;
+  audioAsVoice?: boolean;
+  mediaLocalRoots?: readonly string[];
+  payload?: Record<string, unknown>;
+  sessionKey?: string;
+  mirror?: { sessionKey?: string };
+  threadId?: string;
+};
+
+export type BncrRegisterRuntimeSnapshot = {
+  bridgeId: string;
+  gatewayPid: number;
+  pluginVersion: string | null;
+  pluginSource: string | null;
+  lastApiInstanceId: string | null;
+  lastRegistryFingerprint: string | null;
+  registerCount: number;
+  firstRegisterAt: number | null;
+  lastRegisterAt: number | null;
+  lastApiRebindAt: number | null;
+  apiGeneration: number;
+  registerTraceRecent: RegisterTraceEntry[];
+  lastDriftSnapshot: RegisterDriftSnapshot | null;
+};
+
+export type FileAckPayloadState = {
+  payload: Record<string, unknown>;
+  ok: boolean;
+  at: number;
+};
+
+export type ChannelMessageActionAdapter = {
+  describeMessageTool: (ctx: { cfg: BncrChannelConfigRoot }) => {
+    actions: readonly ['send'];
+    capabilities: readonly [];
+  } | null;
+  supportsAction: (ctx: { action: string }) => boolean;
+  extractToolSend: (ctx: { args: unknown }) => OpenClawChannelToolSend | null;
+  handleAction: (ctx: {
+    action: string;
+    params: unknown;
+    accountId?: string | null;
+    mediaLocalRoots?: readonly string[];
+  }) => Promise<OpenClawJsonResultPayload>;
+};
+
+export type PersistedState = {
+  outbox: OutboxEntry[];
+  deadLetter: OutboxEntry[];
+  sessionRoutes: BncrPersistedSessionRoute[];
+  lastSessionByAccount?: BncrPersistedLastSession[];
+  lastActivityByAccount?: BncrPersistedAccountTimestamp[];
+  lastInboundByAccount?: BncrPersistedAccountTimestamp[];
+  lastOutboundByAccount?: BncrPersistedAccountTimestamp[];
+  lastDriftSnapshot?: RegisterDriftSnapshot | null;
+};
+
+export type BncrBridgeRuntimePaths = {
+  pluginRoot?: string | null;
+  pluginFile?: string | null;
+};

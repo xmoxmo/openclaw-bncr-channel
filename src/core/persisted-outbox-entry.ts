@@ -2,6 +2,10 @@ import { normalizeAccountId } from './accounts.ts';
 import { normalizeStoredSessionKey, parseRouteLike } from './targets.ts';
 import type { OutboxEntry } from './types.ts';
 
+type PersistedOutboxEntryInput = Partial<OutboxEntry> & {
+  payload?: Record<string, unknown>;
+};
+
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
   if (v == null) return fallback;
@@ -20,7 +24,7 @@ function optionalFiniteNumber(value: unknown): number | undefined {
 }
 
 export function normalizePersistedOutboxEntry(args: {
-  entry: any;
+  entry: PersistedOutboxEntryInput | null | undefined;
   canonicalAgentId: string;
   now: () => number;
 }): OutboxEntry | null {
@@ -32,14 +36,16 @@ export function normalizePersistedOutboxEntry(args: {
   if (!normalized) return null;
 
   const route = parseRouteLike(entry.route) || normalized.route;
-  const payload = entry.payload && typeof entry.payload === 'object' ? { ...entry.payload } : {};
-  (payload as any).sessionKey = normalized.sessionKey;
-  (payload as any).platform = route.platform;
-  (payload as any).groupId = route.groupId;
-  (payload as any).userId = route.userId;
+  const payload: Record<string, unknown> =
+    entry.payload && typeof entry.payload === 'object' ? { ...entry.payload } : {};
+  payload.sessionKey = normalized.sessionKey;
+  payload.platform = route.platform;
+  payload.groupId = route.groupId;
+  payload.userId = route.userId;
 
   return {
     ...entry,
+    messageId: asString(entry.messageId).trim(),
     accountId,
     sessionKey: normalized.sessionKey,
     route,
@@ -49,5 +55,14 @@ export function normalizePersistedOutboxEntry(args: {
     nextAttemptAt: finiteNumberOr(entry.nextAttemptAt, args.now()),
     lastAttemptAt: optionalFiniteNumber(entry.lastAttemptAt),
     lastError: entry.lastError ? asString(entry.lastError) : undefined,
+    lastPushAt: optionalFiniteNumber(entry.lastPushAt),
+    lastPushConnId: entry.lastPushConnId ? asString(entry.lastPushConnId) : undefined,
+    lastPushClientId: entry.lastPushClientId ? asString(entry.lastPushClientId) : undefined,
+    routeAttemptConnIds: Array.isArray(entry.routeAttemptConnIds)
+      ? entry.routeAttemptConnIds.map((value) => asString(value)).filter(Boolean)
+      : undefined,
+    routeAttemptRound: optionalFiniteNumber(entry.routeAttemptRound),
+    fastReroutePending: entry.fastReroutePending === true,
+    awaitingRetryPush: entry.awaitingRetryPush === true,
   };
 }

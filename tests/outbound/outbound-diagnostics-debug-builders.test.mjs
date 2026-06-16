@@ -1,0 +1,421 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  buildFlushDebugInfo,
+  buildOutboxAckDebugInfo,
+  buildOutboxDrainSkipDebugInfo,
+  buildOutboxDrainStuckDebugInfo,
+  buildOutboxPushOkDebugInfo,
+  buildOutboxPushSkipDebugInfo,
+  buildOutboxRouteSelectDebugInfo,
+  buildOutboxScheduleDebugInfo,
+} from '../../src/messaging/outbound/diagnostics.ts';
+import { OUTBOUND_SCHEDULE_SOURCE } from '../../src/messaging/outbound/reasons.ts';
+
+test('buildOutboxScheduleDebugInfo includes only provided scheduling fields', () => {
+  assert.deepEqual(
+    buildOutboxScheduleDebugInfo({
+      bridgeId: 'bridge-1',
+      source: OUTBOUND_SCHEDULE_SOURCE.SCHEDULE_PUSH_DRAIN,
+      wait: 1000,
+    }),
+    {
+      bridge: 'bridge-1',
+      source: OUTBOUND_SCHEDULE_SOURCE.SCHEDULE_PUSH_DRAIN,
+      wait: 1000,
+    },
+  );
+
+  assert.deepEqual(
+    buildOutboxScheduleDebugInfo({
+      bridgeId: 'bridge-1',
+      accountId: 'Primary',
+      messageId: 'mid-1',
+      source: OUTBOUND_SCHEDULE_SOURCE.RETRY_REROUTE_WAIT,
+      wait: 2000,
+      localNextDelay: 1500,
+      globalNextDelay: 1500,
+    }),
+    {
+      bridge: 'bridge-1',
+      accountId: 'Primary',
+      messageId: 'mid-1',
+      source: OUTBOUND_SCHEDULE_SOURCE.RETRY_REROUTE_WAIT,
+      wait: 2000,
+      localNextDelay: 1500,
+      globalNextDelay: 1500,
+    },
+  );
+});
+
+test('buildOutboxScheduleDebugInfo preserves source-specific payload contracts', () => {
+  assert.deepEqual(
+    buildOutboxScheduleDebugInfo({
+      bridgeId: 'bridge-2',
+      source: OUTBOUND_SCHEDULE_SOURCE.SCHEDULE_PUSH_DRAIN,
+      wait: 500,
+    }),
+    {
+      bridge: 'bridge-2',
+      source: OUTBOUND_SCHEDULE_SOURCE.SCHEDULE_PUSH_DRAIN,
+      wait: 500,
+    },
+  );
+
+  assert.deepEqual(
+    buildOutboxScheduleDebugInfo({
+      bridgeId: 'bridge-2',
+      accountId: 'Primary',
+      source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_NEXT_DELAY_MERGE,
+      localNextDelay: 1200,
+      globalNextDelay: 900,
+    }),
+    {
+      bridge: 'bridge-2',
+      accountId: 'Primary',
+      source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_NEXT_DELAY_MERGE,
+      localNextDelay: 1200,
+      globalNextDelay: 900,
+    },
+  );
+
+  assert.deepEqual(
+    buildOutboxScheduleDebugInfo({
+      bridgeId: 'bridge-2',
+      source: OUTBOUND_SCHEDULE_SOURCE.FLUSH_NEXT_DRAIN,
+      wait: 900,
+      globalNextDelay: 900,
+    }),
+    {
+      bridge: 'bridge-2',
+      source: OUTBOUND_SCHEDULE_SOURCE.FLUSH_NEXT_DRAIN,
+      wait: 900,
+      globalNextDelay: 900,
+    },
+  );
+});
+
+test('buildOutboxPushSkipDebugInfo returns optional reachability and kind fields only when present', () => {
+  assert.deepEqual(
+    buildOutboxPushSkipDebugInfo({
+      messageId: 'mid-skip-1',
+      accountId: 'Primary',
+      reason: 'no-gateway-context',
+    }),
+    {
+      messageId: 'mid-skip-1',
+      accountId: 'Primary',
+      reason: 'no-gateway-context',
+    },
+  );
+
+  assert.deepEqual(
+    buildOutboxPushSkipDebugInfo({
+      messageId: 'mid-skip-2',
+      accountId: 'Primary',
+      kind: 'file-transfer',
+      reason: 'no-active-connection',
+      recentInboundReachable: false,
+      routeReason: 'none',
+      connIds: [],
+      ownerConnId: 'conn-owner',
+      ownerClientId: 'client-owner',
+      activeConnectionCount: 1,
+      connections: [
+        {
+          accountId: 'Primary',
+          connId: 'conn-owner',
+          clientId: 'client-owner',
+          lastSeenAt: 123,
+          connectedAt: 100,
+          inboundOnly: true,
+          outboundReadyUntil: 456,
+          preferredForOutboundUntil: 789,
+          lastAckOkAt: 234,
+          lastPushTimeoutAt: 345,
+          pushFailureScore: 2,
+        },
+        {
+          accountId: 'Other',
+          connId: 'conn-other',
+          lastSeenAt: 999,
+          connectedAt: 900,
+        },
+      ],
+    }),
+    {
+      messageId: 'mid-skip-2',
+      accountId: 'Primary',
+      kind: 'file-transfer',
+      reason: 'no-active-connection',
+      routeReason: 'none',
+      connIds: [],
+      ownerConnId: 'conn-owner',
+      ownerClientId: 'client-owner',
+      activeConnectionCount: 1,
+      connections: [
+        {
+          connId: 'conn-owner',
+          clientId: 'client-owner',
+          lastSeenAt: 123,
+          outboundReadyUntil: 456,
+          preferredForOutboundUntil: 789,
+          inboundOnly: true,
+          lastAckOkAt: 234,
+          lastPushTimeoutAt: 345,
+          pushFailureScore: 2,
+        },
+      ],
+      recentInboundReachable: false,
+    },
+  );
+});
+
+test('buildOutboxRouteSelectDebugInfo copies connection ids and preserves routing context', () => {
+  const connIds = ['conn-a', 'conn-b'];
+  const result = buildOutboxRouteSelectDebugInfo({
+    messageId: 'mid-route',
+    accountId: 'Primary',
+    kind: 'file-transfer',
+    routeReason: 'active-connections',
+    connIds,
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    recentInboundReachable: true,
+    event: 'plugin.bncr.push',
+  });
+
+  assert.deepEqual(result, {
+    messageId: 'mid-route',
+    accountId: 'Primary',
+    kind: 'file-transfer',
+    routeReason: 'active-connections',
+    connIds: ['conn-a', 'conn-b'],
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    recentInboundReachable: true,
+    event: 'plugin.bncr.push',
+  });
+  assert.notEqual(result.connIds, connIds);
+});
+
+test('buildOutboxPushOkDebugInfo copies connection ids and preserves delivery context', () => {
+  const connIds = ['conn-a'];
+  const result = buildOutboxPushOkDebugInfo({
+    messageId: 'mid-ok',
+    accountId: 'Primary',
+    connIds,
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    recentInboundReachable: true,
+    event: 'plugin.bncr.push',
+  });
+
+  assert.deepEqual(result, {
+    messageId: 'mid-ok',
+    accountId: 'Primary',
+    connIds: ['conn-a'],
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    recentInboundReachable: true,
+    event: 'plugin.bncr.push',
+  });
+  assert.notEqual(result.connIds, connIds);
+});
+
+test('buildFlushDebugInfo copies target accounts and preserves flush context', () => {
+  const targetAccounts = ['Primary', 'Backup'];
+  const result = buildFlushDebugInfo({
+    bridgeId: 'bridge-1',
+    accountId: 'Primary',
+    targetAccounts,
+    outboxSize: 3,
+    trigger: 'manual',
+    reason: 'scheduled-drain',
+  });
+
+  assert.deepEqual(result, {
+    bridge: 'bridge-1',
+    accountId: 'Primary',
+    targetAccounts: ['Primary', 'Backup'],
+    outboxSize: 3,
+    trigger: 'manual',
+    reason: 'scheduled-drain',
+  });
+  assert.notEqual(result.targetAccounts, targetAccounts);
+});
+
+test('buildOutboxDrainSkipDebugInfo captures reentrant drain skip context', () => {
+  assert.deepEqual(
+    buildOutboxDrainSkipDebugInfo({
+      bridgeId: 'bridge-drain',
+      accountId: 'Primary',
+      reason: 'already-running',
+      outboxSize: 2,
+      trigger: 'manual',
+    }),
+    {
+      bridge: 'bridge-drain',
+      accountId: 'Primary',
+      reason: 'already-running',
+      outboxSize: 2,
+      trigger: 'manual',
+    },
+  );
+});
+
+test('buildOutboxDrainStuckDebugInfo captures pending entries and connection details', () => {
+  assert.deepEqual(
+    buildOutboxDrainStuckDebugInfo({
+      bridgeId: 'bridge-stuck',
+      accountId: 'Primary',
+      reason: 'already-running',
+      trigger: 'activity',
+      outboxSize: 2,
+      pending: 1,
+      runningMs: 31_000,
+      runningSince: 0,
+      hasGatewayContext: true,
+      activeConnectionCount: 1,
+      messageAckWaiters: 1,
+      fileAckWaiters: 0,
+      pendingEntries: [
+        {
+          messageId: 'mid-stuck',
+          retryCount: 2,
+          nextAttemptAt: 2000,
+          lastAttemptAt: 1500,
+          lastError: 'push-retry',
+          lastPushAt: 1400,
+          lastPushConnId: 'conn-1',
+          routeAttemptConnIds: ['conn-1'],
+        },
+      ],
+      connections: [
+        {
+          accountId: 'Primary',
+          connId: 'conn-1',
+          clientId: 'client-1',
+          connectedAt: 500,
+          lastSeenAt: 2500,
+          outboundReadyUntil: 3000,
+          preferredForOutboundUntil: 2800,
+          inboundOnly: false,
+          lastAckOkAt: 2400,
+          lastPushTimeoutAt: 0,
+          pushFailureScore: 0,
+        },
+        {
+          accountId: 'Other',
+          connId: 'conn-other',
+          connectedAt: 500,
+          lastSeenAt: 2500,
+        },
+      ],
+    }),
+    {
+      bridge: 'bridge-stuck',
+      accountId: 'Primary',
+      reason: 'already-running',
+      trigger: 'activity',
+      outboxSize: 2,
+      pending: 1,
+      runningMs: 31_000,
+      runningSince: 0,
+      hasGatewayContext: true,
+      activeConnectionCount: 1,
+      waiters: { messageAck: 1, fileAck: 0 },
+      pendingEntries: [
+        {
+          messageId: 'mid-stuck',
+          retryCount: 2,
+          nextAttemptAt: 2000,
+          lastAttemptAt: 1500,
+          lastError: 'push-retry',
+          lastPushAt: 1400,
+          lastPushConnId: 'conn-1',
+          routeAttemptConnIds: ['conn-1'],
+        },
+      ],
+      connections: [
+        {
+          connId: 'conn-1',
+          clientId: 'client-1',
+          connectedAt: 500,
+          lastSeenAt: 2500,
+          outboundReadyUntil: 3000,
+          preferredForOutboundUntil: 2800,
+          inboundOnly: false,
+          lastAckOkAt: 2400,
+          lastPushTimeoutAt: 0,
+          pushFailureScore: 0,
+        },
+      ],
+    },
+  );
+});
+
+test('buildOutboxAckDebugInfo returns stable ack observability payload', () => {
+  const result = buildOutboxAckDebugInfo({
+    messageId: 'mid-ack',
+    accountId: 'Primary',
+    requireAck: true,
+    ackResult: 'timeout',
+    onlineNow: true,
+    recentInboundReachable: false,
+  });
+
+  assert.deepEqual(result, {
+    messageId: 'mid-ack',
+    accountId: 'Primary',
+    requireAck: true,
+    ackResult: 'timeout',
+    ackStage: 'message',
+    ackOutcome: 'timeout',
+    onlineNow: true,
+    recentInboundReachable: false,
+  });
+});
+
+test('buildOutboxAckDebugInfo includes causal route and ack outcome fields when provided', () => {
+  const result = buildOutboxAckDebugInfo({
+    messageId: 'mid-ack-rich',
+    accountId: 'Primary',
+    sessionKey: 'agent:orion:bncr:direct:demo',
+    to: 'Bncr:tgBot:-1001:10001',
+    requireAck: true,
+    ackResult: 'timeout',
+    ackStage: 'message',
+    ackOutcome: 'timeout',
+    reason: 'push-ack-timeout',
+    ackTimeoutMs: 60000,
+    adaptiveAckTimeoutEnabled: true,
+    onlineNow: true,
+    recentInboundReachable: false,
+    connIds: ['conn-a'],
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    event: 'message.outbound',
+  });
+
+  assert.deepEqual(result, {
+    messageId: 'mid-ack-rich',
+    accountId: 'Primary',
+    sessionKey: 'agent:orion:bncr:direct:demo',
+    to: 'Bncr:tgBot:-1001:10001',
+    requireAck: true,
+    ackResult: 'timeout',
+    ackStage: 'message',
+    ackOutcome: 'timeout',
+    reason: 'push-ack-timeout',
+    ackTimeoutMs: 60000,
+    adaptiveAckTimeoutEnabled: true,
+    onlineNow: true,
+    recentInboundReachable: false,
+    connIds: ['conn-a'],
+    ownerConnId: 'conn-a',
+    ownerClientId: 'client-a',
+    event: 'message.outbound',
+  });
+});

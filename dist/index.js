@@ -126,8 +126,27 @@ async function mutateOpenClawRuntimeConfigFile(api, params) {
 var pluginFile = fileURLToPath(import.meta.url);
 var pluginDir = path.dirname(pluginFile);
 var pluginRequire = createRequire(import.meta.url);
+var pluginPackageName = "@xmoxmo/bncr";
 var sdkCoreSpecifier = "openclaw/plugin-sdk/core";
 var linkType = process.platform === "win32" ? "junction" : "dir";
+var resolvePluginRoot = (filePath) => {
+  let current = fs.existsSync(filePath) && fs.statSync(filePath).isDirectory() ? filePath : path.dirname(filePath);
+  while (true) {
+    const pkgPath = path.join(current, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+        if (pkg.name === pluginPackageName) return current;
+      } catch {
+      }
+    }
+    if (fs.existsSync(path.join(current, "openclaw.plugin.json"))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return path.dirname(filePath);
+    current = parent;
+  }
+};
+var pluginRoot = resolvePluginRoot(pluginFile);
 var BNCR_REGISTER_META = /* @__PURE__ */ Symbol.for("bncr.register.meta");
 var BNCR_GLOBAL_REGISTER_TRACE = /* @__PURE__ */ Symbol.for("bncr.global.register.trace");
 var BNCR_BRIDGE_OWNER = /* @__PURE__ */ Symbol.for("bncr.bridge.owner");
@@ -155,9 +174,9 @@ var readOpenClawPackageName = (pkgPath) => {
     return "";
   }
 };
-var readPluginVersion = () => {
+var readPluginVersion = (rootDir = pluginRoot) => {
   try {
-    const raw = fs.readFileSync(path.join(pluginDir, "package.json"), "utf8");
+    const raw = fs.readFileSync(path.join(rootDir, "package.json"), "utf8");
     const parsed = JSON.parse(raw);
     return typeof parsed?.version === "string" ? parsed.version : "unknown";
   } catch {
@@ -508,7 +527,7 @@ var getBridgeSingleton = (api) => {
       } catch {
       }
       g.__bncrBridge = hydrateBridgeRegisterState(
-        assignBridgeOwner(loaded.createBncrBridge(api), owner),
+        assignBridgeOwner(loaded.createBncrBridge(api, { pluginRoot, pluginFile }), owner),
         registerState
       );
       created = true;
@@ -520,9 +539,13 @@ var getBridgeSingleton = (api) => {
       rebuilt = false;
     }
   } else {
-    g.__bncrBridge = assignBridgeOwner(loaded.createBncrBridge(api), owner);
+    g.__bncrBridge = assignBridgeOwner(
+      loaded.createBncrBridge(api, { pluginRoot, pluginFile }),
+      owner
+    );
     created = true;
   }
+  g.__bncrBridge.bindRuntimePaths?.({ pluginRoot, pluginFile });
   return { bridge: g.__bncrBridge, runtime: loaded, created, rebuilt, owner, previousOwner };
 };
 var getExistingBridgeSingleton = () => {
@@ -669,7 +692,7 @@ var plugin = {
     globalTrace.lastApiInstanceId = apiInstanceId;
     globalTrace.lastRegistryFingerprint = registryFingerprint;
     bridge?.noteRegister?.({
-      source: "~/.openclaw/workspace/plugins/bncr/index.ts",
+      source: "@xmoxmo/bncr",
       pluginVersion,
       apiRebound: ownerDecision.adoptOwner ? !created && !rebuilt : false,
       apiInstanceId: meta.apiInstanceId,

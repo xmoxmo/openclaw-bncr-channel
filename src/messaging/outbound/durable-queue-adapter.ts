@@ -65,6 +65,14 @@ export type BncrDurableQueuedResult = {
   }>;
 };
 
+type OutboxPayload = OutboxEntry['payload'];
+type OutboxMeta = NonNullable<OutboxPayload['_meta']>;
+type OutboxMessagePayload = { type?: unknown };
+
+function getOutboxPayload(entry: OutboxEntry): OutboxPayload {
+  return entry.payload;
+}
+
 export function buildBncrDurableQueuedResult(args: {
   entry: OutboxEntry;
   index?: number;
@@ -131,24 +139,29 @@ export function buildBncrDurableQueuedResult(args: {
 }
 
 function extractPayloadType(entry: OutboxEntry): string | undefined {
-  const payload = entry.payload as any;
+  const payload = getOutboxPayload(entry);
   return typeof payload?.type === 'string' ? payload.type : undefined;
 }
 
 function extractReplyToId(entry: OutboxEntry): string | undefined {
-  const payload = entry.payload as any;
-  const metaReply = payload?._meta?.replyToId;
+  const payload = getOutboxPayload(entry);
+  const metaReply = (payload?._meta as OutboxMeta | undefined)?.replyToId;
   const replyToId = payload?.replyToId ?? metaReply;
   return typeof replyToId === 'string' ? replyToId : undefined;
 }
 
 function inferReceiptKind(entry: OutboxEntry): 'text' | 'media' | 'voice' | 'unknown' {
-  const payload = entry.payload as any;
-  if (payload?._meta?.kind === 'file-transfer') {
-    if (payload?._meta?.asVoice === true || payload?._meta?.audioAsVoice === true) return 'voice';
+  const payload = getOutboxPayload(entry);
+  const meta = payload?._meta as OutboxMeta | undefined;
+  const message =
+    payload.message && typeof payload.message === 'object'
+      ? (payload.message as OutboxMessagePayload)
+      : null;
+  if (meta?.kind === 'file-transfer') {
+    if (meta.asVoice === true || meta.audioAsVoice === true) return 'voice';
     return 'media';
   }
-  if (payload?.message?.type === 'text') return 'text';
+  if (message?.type === 'text') return 'text';
   return 'unknown';
 }
 

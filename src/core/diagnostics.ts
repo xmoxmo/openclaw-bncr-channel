@@ -1,31 +1,47 @@
+import type { BncrRuntimeFlags } from '../runtime/outbound-flags.ts';
+import type { BncrExtendedDiagnostics } from './extended-diagnostics.ts';
+import type { BncrPermissionSummary } from './permissions.ts';
 import { buildBncrPermissionSummary } from './permissions.ts';
+import type { BncrAccountProbe } from './probe.ts';
 import { probeBncrAccount } from './probe.ts';
+import type { BncrAccountRuntimeSnapshot } from './status.ts';
+import type { BncrDownlinkHealthSummary } from './types.ts';
+import { nonNegativeFiniteNumberOr } from './value-sanitize.ts';
 
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
-  return Math.max(0, finiteNumberOr(value, fallback));
-}
+export type BncrDiagnosticsWaiters = {
+  messageAck: number;
+  fileAck: number;
+};
 
 type DiagnosticsPayloadArgs = {
-  cfg: any;
+  cfg: unknown;
   channelId: string;
   accountId: string;
-  runtime: any;
-  diagnostics: any;
-  downlinkHealth: any;
-  runtimeFlags: any;
-  waiters: { messageAck: number; fileAck: number };
+  runtime: BncrAccountRuntimeSnapshot;
+  diagnostics: BncrExtendedDiagnostics;
+  downlinkHealth: BncrDownlinkHealthSummary;
+  runtimeFlags: BncrRuntimeFlags;
+  waiters: BncrDiagnosticsWaiters;
   activeConnections: number;
   invalidOutboxSessionKeys: number;
   legacyAccountResidue: number;
   now: number;
 };
 
-export function buildDiagnosticsPayload(args: DiagnosticsPayloadArgs) {
+export type BncrDiagnosticsPayload = {
+  channel: string;
+  accountId: string;
+  runtime: BncrAccountRuntimeSnapshot;
+  diagnostics: BncrExtendedDiagnostics;
+  downlinkHealth: BncrDownlinkHealthSummary;
+  runtimeFlags: BncrRuntimeFlags;
+  waiters: BncrDiagnosticsWaiters;
+  permissions: BncrPermissionSummary;
+  probe: BncrAccountProbe;
+  now: number;
+};
+
+export function buildDiagnosticsPayload(args: DiagnosticsPayloadArgs): BncrDiagnosticsPayload {
   const permissions = buildBncrPermissionSummary(args.cfg ?? {});
   const probe = probeBncrAccount({
     accountId: args.accountId,

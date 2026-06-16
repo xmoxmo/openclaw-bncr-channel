@@ -1,3 +1,9 @@
+import type {
+  BncrAccountConfig,
+  BncrChannelConfigRoot,
+  BncrChannelConfigSection,
+} from '../plugin/channel-runtime-types.ts';
+
 const CHANNEL_ID = 'bncr';
 const BNCR_DEFAULT_ACCOUNT_ID = 'Primary';
 
@@ -29,8 +35,21 @@ export function resolveDefaultDisplayName(rawName: unknown, accountId: string): 
   return raw;
 }
 
-export function resolveAccount(cfg: any, accountId?: string | null) {
-  const accounts = cfg?.channels?.[CHANNEL_ID]?.accounts || {};
+function getChannelConfig(cfg: BncrChannelConfigRoot | null | undefined): BncrChannelConfigSection {
+  return cfg?.channels?.[CHANNEL_ID] || {};
+}
+
+function getAccountsConfig(
+  cfg: BncrChannelConfigRoot | null | undefined,
+): Record<string, BncrAccountConfig | undefined> {
+  return getChannelConfig(cfg).accounts || {};
+}
+
+export function resolveAccount(
+  cfg: BncrChannelConfigRoot | null | undefined,
+  accountId?: string | null,
+) {
+  const accounts = getAccountsConfig(cfg);
   let key = normalizeAccountId(accountId);
 
   if (!accounts[key]) {
@@ -48,8 +67,8 @@ export function resolveAccount(cfg: any, accountId?: string | null) {
   };
 }
 
-export function listAccountIds(cfg: any): string[] {
-  const ids = Object.keys(cfg?.channels?.[CHANNEL_ID]?.accounts || {});
+export function listAccountIds(cfg: BncrChannelConfigRoot | null | undefined): string[] {
+  const ids = Object.keys(getAccountsConfig(cfg));
   return ids.length ? ids : [BNCR_DEFAULT_ACCOUNT_ID];
 }
 

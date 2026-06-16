@@ -1,18 +1,4 @@
-function finiteNumberOr(value: unknown, fallback: number): number {
-  if (value == null) return fallback;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function finiteNumberOrNull(value: unknown): number | null {
-  if (value == null) return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
-  return Math.max(0, finiteNumberOr(value, fallback));
-}
+import { finiteNumberOrNull, nonNegativeFiniteNumberOr } from './value-sanitize.ts';
 
 export function probeBncrAccount(params: {
   accountId: string;
@@ -64,3 +50,5 @@ export function probeBncrAccount(params: {
     },
   };
 }
+
+export type BncrAccountProbe = ReturnType<typeof probeBncrAccount>;

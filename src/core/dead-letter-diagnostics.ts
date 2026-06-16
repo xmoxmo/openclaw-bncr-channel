@@ -1,6 +1,10 @@
 import { summarizeBncrTextPreview } from './logging.ts';
 import { formatDisplayScope } from './targets.ts';
-import type { OutboxEntry } from './types.ts';
+import type {
+  BncrDeadLetterDiagnosticsSummary,
+  BncrDeadLetterEntrySummary,
+  OutboxEntry,
+} from './types.ts';
 
 export type DeadLetterTopReason = { reason: string; count: number };
 
@@ -15,6 +19,15 @@ function asString(value: unknown, fallback = ''): string {
   if (typeof value === 'string') return value;
   if (value == null) return fallback;
   return String(value);
+}
+
+function asPayloadMessage(payload: OutboxEntry['payload']): {
+  msg?: string;
+  type?: string;
+  [key: string]: unknown;
+} {
+  const raw = payload.message;
+  return raw && typeof raw === 'object' ? (raw as { msg?: string; type?: string }) : {};
 }
 
 export function buildDeadLetterDiagnostics(options: BuildDeadLetterDiagnosticsOptions) {
@@ -43,7 +56,7 @@ export function buildDeadLetterDiagnostics(options: BuildDeadLetterDiagnosticsOp
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 5)
       .map(([reason, count]) => ({ reason, count })),
-  };
+  } satisfies BncrDeadLetterDiagnosticsSummary;
 }
 
 export function formatDeadLetterTopReasons(topReasons: DeadLetterTopReason[]): string {
@@ -75,17 +88,36 @@ export function parseDeadLetterOlderThan(raw: unknown): number | null {
 
 export function summarizeDeadLetterEntry(entry: OutboxEntry) {
   const meta = entry.payload?._meta || {};
-  const msg = (entry.payload as any)?.message || {};
+  const msg = asPayloadMessage(entry.payload);
   const text = asString(meta.text || msg.msg || '');
   return {
     messageId: entry.messageId,
     accountId: entry.accountId,
     sessionKey: entry.sessionKey,
     route: formatDisplayScope(entry.route),
-    kind: asString(meta.kind || (entry.payload as any)?.type || 'message'),
+    kind: asString(meta.kind || msg.type || 'message'),
     createdAt: Number.isFinite(Number(entry.createdAt)) ? Number(entry.createdAt) : null,
     retryCount: Number.isFinite(Number(entry.retryCount)) ? Number(entry.retryCount) : 0,
     lastError: entry.lastError || null,
     textPreview: summarizeBncrTextPreview(text, 24),
-  };
+  } satisfies BncrDeadLetterEntrySummary;
+}
+
+export function filterDeadLetterEntries(args: {
+  accountId: string;
+  entries: OutboxEntry[];
+  reason?: string | null;
+  olderThan?: number | null;
+}) {
+  const normalizedAccountId = asString(args.accountId).trim().toLowerCase();
+  const reason = asString(args.reason || '').trim();
+  return args.entries.filter((entry) => {
+    if (asString(entry.accountId).trim().toLowerCase() !== normalizedAccountId) return false;
+    if (reason && entry.lastError !== reason) return false;
+    if (typeof args.olderThan === 'number') {
+      const createdAt = Number(entry.createdAt);
+      if (!Number.isFinite(createdAt) || createdAt >= args.olderThan) return false;
+    }
+    return true;
+  });
 }

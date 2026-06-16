@@ -1,6 +1,6 @@
 {
   "name": "@xmoxmo/bncr",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -27,10 +27,12 @@
   "scripts": {
     "build": "npx -y esbuild@0.28.0 index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/index.js",
     "selfcheck": "node ./scripts/selfcheck.mjs",
-    "test": "node --import ./tests/register-ts-hooks.mjs --test ./tests/*.test.mjs",
+    "test": "node --import ./tests/register-ts-hooks.mjs --test ./tests/**/*.test.mjs",
     "check-register-drift": "node ./scripts/check-register-drift.mjs",
     "check-pack": "node ./scripts/check-pack.mjs",
-    "format:check": "biome format --check .",
+    "typecheck": "node ./node_modules/typescript/lib/tsc.js -p tsconfig.typecheck.json",
+    "fullcheck": "npm run typecheck && npm run check && npm test && npm run selfcheck && npm run check-pack && npm run format:check",
+    "format:check": "biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false .",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "check": "biome check ."
@@ -40,8 +42,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
+    "@types/node": "^24.13.2",
     "esbuild": "^0.28.0",
-    "openclaw": ">=2026.5.27"
+    "openclaw": ">=2026.5.27",
+    "typescript": "^6.0.3"
   },
   "openclaw": {
     "extensions": [

@@ -5,11 +5,31 @@ import {
 } from '../core/accounts.ts';
 import { buildAccountStatusSnapshot } from '../core/status.ts';
 import { createOpenClawDefaultChannelRuntimeState } from '../openclaw/sdk-helpers.ts';
+import type { BncrChannelConfigRoot, BncrStatusRuntimeSnapshot } from './channel-runtime-types.ts';
+
+type StatusSurfaceSummaryArgs = { defaultAccountId?: string };
+
+type StatusSurfaceAccount = { accountId?: string; name?: string; enabled?: boolean };
+
+type StatusSurfaceAccountSnapshotArgs = {
+  account?: StatusSurfaceAccount;
+  runtime?: BncrStatusRuntimeSnapshot;
+};
+
+type StatusSurfaceAccountStateArgs = {
+  enabled?: boolean;
+  configured?: boolean;
+  account?: StatusSurfaceAccount;
+  cfg: BncrChannelConfigRoot;
+  runtime?: BncrStatusRuntimeSnapshot;
+};
 
 export type BncrStatusBridge = {
-  getChannelSummary: (defaultAccountId: string) => unknown | Promise<unknown>;
-  getAccountRuntimeSnapshot: (accountId?: string) => unknown;
-  getStatusHeadline: (accountId?: string) => unknown;
+  getChannelSummary: (
+    defaultAccountId: string,
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  getAccountRuntimeSnapshot: (accountId?: string) => BncrStatusRuntimeSnapshot;
+  getStatusHeadline: (accountId?: string) => string;
 };
 
 export function createBncrStatusSurface(getBridge: () => BncrStatusBridge) {
@@ -17,10 +37,10 @@ export function createBncrStatusSurface(getBridge: () => BncrStatusBridge) {
     defaultRuntime: createOpenClawDefaultChannelRuntimeState(BNCR_DEFAULT_ACCOUNT_ID, {
       mode: 'ws-offline',
     }),
-    buildChannelSummary: async ({ defaultAccountId }: any) => {
+    buildChannelSummary: async ({ defaultAccountId }: StatusSurfaceSummaryArgs) => {
       return getBridge().getChannelSummary(defaultAccountId || BNCR_DEFAULT_ACCOUNT_ID);
     },
-    buildAccountSnapshot: async ({ account, runtime }: any) => {
+    buildAccountSnapshot: async ({ account, runtime }: StatusSurfaceAccountSnapshotArgs) => {
       const runtimeBridge = getBridge();
       const accountId = account?.accountId || BNCR_DEFAULT_ACCOUNT_ID;
       const snapshotAccount = {
@@ -37,12 +57,18 @@ export function createBncrStatusSurface(getBridge: () => BncrStatusBridge) {
         displayName: resolveDefaultDisplayName(account?.name, accountId),
       });
     },
-    resolveAccountState: ({ enabled, configured, account, cfg, runtime }: any) => {
+    resolveAccountState: ({
+      enabled,
+      configured,
+      account,
+      cfg,
+      runtime,
+    }: StatusSurfaceAccountStateArgs) => {
       if (!enabled) return 'disabled';
       const resolved = resolveAccount(cfg, account?.accountId);
       if (!(resolved.enabled && configured)) return 'not configured';
       const rt = runtime || getBridge().getAccountRuntimeSnapshot(account?.accountId);
-      return (rt as any)?.connected ? 'linked' : 'configured';
+      return rt?.connected ? 'linked' : 'configured';
     },
   };
 }

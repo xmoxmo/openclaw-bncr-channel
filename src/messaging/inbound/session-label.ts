@@ -1,10 +1,17 @@
 import { emitBncrLogLine } from '../../core/logging.ts';
+import type { OpenClawChannelRuntimeContext } from '../../openclaw/channel-runtime-contracts.ts';
 import {
   recordBncrSessionMetaFromInbound,
   updateBncrSessionStoreEntry,
 } from '../../openclaw/inbound-session-runtime.ts';
 
-type RecordInboundSessionFn = (args: any) => Promise<unknown> | unknown;
+type RecordInboundSessionFn = (args: {
+  storePath?: string;
+  sessionKey?: string;
+  [key: string]: unknown;
+}) => Promise<unknown> | unknown;
+
+type SessionStoreEntryLike = { label?: string | null; [key: string]: unknown };
 
 export function buildBncrInboundSessionIdentityPatch(args: {
   channelId: string;
@@ -60,7 +67,7 @@ export async function correctBncrInboundSessionLabel(args: {
     await updateBncrSessionStoreEntry({
       storePath,
       sessionKey,
-      update: (entry: any) => {
+      update: (entry: SessionStoreEntryLike) => {
         if (entry?.label === expectedLabel) return null;
         return { label: expectedLabel };
       },
@@ -73,7 +80,7 @@ export async function correctBncrInboundSessionLabel(args: {
 export async function recordAndPatchBncrInboundSessionEntry(args: {
   storePath: string;
   sessionKey: string;
-  ctx?: Record<string, unknown>;
+  ctx?: OpenClawChannelRuntimeContext;
   patch: Record<string, unknown>;
 }) {
   const storePath = normalizeNonEmptyString(args.storePath);
@@ -85,7 +92,7 @@ export async function recordAndPatchBncrInboundSessionEntry(args: {
       await recordBncrSessionMetaFromInbound({
         storePath,
         sessionKey,
-        ctx: args.ctx as any,
+        ctx: args.ctx,
         createIfMissing: true,
       });
     }
@@ -103,11 +110,12 @@ export function wrapBncrInboundRecordSessionLabelCorrection(args: {
   recordInboundSession: RecordInboundSessionFn;
   expectedLabel: string;
 }): RecordInboundSessionFn {
-  return async (recordArgs: any) => {
+  return async (recordArgs) => {
     const result = await args.recordInboundSession(recordArgs);
+    if (!recordArgs?.storePath || !recordArgs?.sessionKey) return result;
     await correctBncrInboundSessionLabel({
-      storePath: recordArgs?.storePath,
-      sessionKey: recordArgs?.sessionKey,
+      storePath: recordArgs.storePath,
+      sessionKey: recordArgs.sessionKey,
       expectedLabel: args.expectedLabel,
     });
     return result;

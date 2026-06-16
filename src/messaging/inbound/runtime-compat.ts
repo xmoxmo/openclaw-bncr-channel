@@ -1,19 +1,40 @@
 import { emitBncrLogLine } from '../../core/logging.ts';
+import type { OpenClawInboundRuntime } from '../../openclaw/channel-runtime-contracts.ts';
+import type { BncrInboundApi } from './contracts.ts';
 
-type ChannelRuntimeCompat = {
-  buildContext: (...args: any[]) => any;
-  run: (...args: any[]) => Promise<any> | any;
-  runPreparedReply?: (...args: any[]) => Promise<any> | any;
-  dispatchReply?: (...args: any[]) => Promise<any> | any;
+type InboundRuntimeShape = {
+  buildContext?: (params: unknown) => unknown;
+  run?: (params: unknown) => unknown;
+  runPreparedReply?: (params: unknown) => unknown;
+  dispatchReply?: (params: unknown) => unknown;
+};
+
+type LegacyTurnRuntimeShape = {
+  buildContext?: (params: unknown) => unknown;
+  run?: (params: unknown) => unknown;
+  runPrepared?: (params: unknown) => unknown;
+  dispatchAssembled?: (params: unknown) => unknown;
+  runAssembled?: (params: unknown) => unknown;
+};
+
+type ChannelRuntimeShape = {
+  inbound?: InboundRuntimeShape;
+  turn?: LegacyTurnRuntimeShape;
+  [key: string]: unknown;
 };
 
 let warnedLegacyTurnRuntime = false;
 
-export function resolveBncrChannelInboundRuntime(api: any): ChannelRuntimeCompat {
-  const channelRuntime = api?.runtime?.channel;
+export function resolveBncrChannelInboundRuntime(api: BncrInboundApi): OpenClawInboundRuntime {
+  const channelRuntime = api?.runtime?.channel as ChannelRuntimeShape | undefined;
   const inboundRuntime = channelRuntime?.inbound;
   if (inboundRuntime?.buildContext && inboundRuntime?.run) {
-    return inboundRuntime;
+    return {
+      buildContext: inboundRuntime.buildContext as OpenClawInboundRuntime['buildContext'],
+      run: inboundRuntime.run as OpenClawInboundRuntime['run'],
+      runPreparedReply: inboundRuntime.runPreparedReply,
+      dispatchReply: inboundRuntime.dispatchReply,
+    };
   }
 
   const legacyTurnRuntime = channelRuntime?.turn;
@@ -34,8 +55,8 @@ export function resolveBncrChannelInboundRuntime(api: any): ChannelRuntimeCompat
       );
     }
     return {
-      buildContext: legacyTurnRuntime.buildContext,
-      run: legacyTurnRuntime.run,
+      buildContext: legacyTurnRuntime.buildContext as OpenClawInboundRuntime['buildContext'],
+      run: legacyTurnRuntime.run as OpenClawInboundRuntime['run'],
       runPreparedReply: legacyTurnRuntime.runPrepared,
       dispatchReply: legacyTurnRuntime.dispatchAssembled ?? legacyTurnRuntime.runAssembled,
     };

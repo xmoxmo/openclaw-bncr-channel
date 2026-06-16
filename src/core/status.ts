@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildRuntimeStatusMetaDisplay } from './status-meta.ts';
-import type { BncrDiagnosticsSummary, PendingAdmission } from './types.ts';
+import type { BncrDiagnosticsSummary, BncrRuntimeLastSession, PendingAdmission } from './types.ts';
 
 type RuntimeStatusInput = {
   accountId: string;
@@ -15,7 +15,7 @@ type RuntimeStatusInput = {
   ackEvents: number;
   startedAt: number;
   pendingAdmissions?: PendingAdmission[];
-  lastSession?: { sessionKey: string; scope: string; updatedAt: number } | null;
+  lastSession?: BncrRuntimeLastSession | null;
   lastActivityAt?: number | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
@@ -140,9 +140,48 @@ export function buildAccountRuntimeSnapshot(input: RuntimeStatusInput) {
   };
 }
 
+export type BncrAccountRuntimeSnapshot = ReturnType<typeof buildAccountRuntimeSnapshot>;
+
 export function buildAccountStatusSnapshot(input: {
   account: { accountId: string; name?: string; enabled?: boolean };
-  runtime: any;
+  runtime:
+    | {
+        connected?: boolean;
+        running?: boolean;
+        mode?: string;
+        pending?: number | null;
+        deadLetter?: number | null;
+        lastEventAt?: number | null;
+        lastError?: string | null;
+        lastSessionKey?: string | null;
+        lastSessionScope?: string | null;
+        lastSessionAt?: number | null;
+        lastActivityAt?: number | null;
+        lastInboundAt?: number | null;
+        lastOutboundAt?: number | null;
+        lastSessionAgo?: string | null;
+        lastActivityAgo?: string | null;
+        lastInboundAgo?: string | null;
+        lastOutboundAgo?: string | null;
+        diagnostics?: BncrDiagnosticsSummary | Record<string, unknown> | null;
+        meta?: {
+          pending?: number | null;
+          deadLetter?: number | null;
+          lastSessionKey?: string | null;
+          lastSessionScope?: string | null;
+          lastSessionAt?: number | null;
+          lastActivityAt?: number | null;
+          lastInboundAt?: number | null;
+          lastOutboundAt?: number | null;
+          lastSessionAgo?: string | null;
+          lastActivityAgo?: string | null;
+          lastInboundAgo?: string | null;
+          lastOutboundAgo?: string | null;
+          diagnostics?: BncrDiagnosticsSummary | Record<string, unknown> | null;
+        } | null;
+      }
+    | null
+    | undefined;
   healthSummary: string;
   displayName: string;
 }) {
@@ -162,7 +201,7 @@ export function buildAccountStatusSnapshot(input: {
   const lastOutboundAt = rt?.lastOutboundAt ?? meta.lastOutboundAt ?? null;
   const lastOutboundAgo = rt?.lastOutboundAgo ?? meta.lastOutboundAgo ?? '-';
   const diagnostics = rt?.diagnostics ?? meta.diagnostics ?? null;
-  const normalizedMode = rt?.mode === 'linked' ? 'linked' : 'Status';
+  const normalizedMode = rt?.mode === 'linked' ? 'linked' : 'configured';
 
   return {
     accountId: input.account.accountId,

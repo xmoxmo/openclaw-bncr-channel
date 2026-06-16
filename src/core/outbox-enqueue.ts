@@ -1,13 +1,24 @@
 import type { OutboxEntry } from './types.ts';
 
+type OutboxEnqueueMessage = {
+  type?: unknown;
+  msg?: unknown;
+};
+
+type OutboxEnqueuePayload = {
+  type?: unknown;
+  message?: OutboxEnqueueMessage;
+};
+
 export function buildOutboxEnqueueDebugInfo(args: {
   bridgeId: string;
   entry: OutboxEntry;
   asString: (value: unknown) => string;
   formatDisplayScope: (route: OutboxEntry['route']) => string;
 }) {
-  const msg = (args.entry.payload as any)?.message || {};
-  const type = args.asString(msg.type || (args.entry.payload as any)?.type || 'unknown');
+  const payload = args.entry.payload as OutboxEnqueuePayload;
+  const msg = payload?.message || {};
+  const type = args.asString(msg.type || payload?.type || 'unknown');
   const text = args.asString(msg.msg || '');
   return {
     bridge: args.bridgeId,

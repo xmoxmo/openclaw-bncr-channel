@@ -4,7 +4,18 @@ function asString(v: unknown, fallback = ''): string {
   return String(v);
 }
 
-export function getBncrElevatedConfig(rootCfg: any) {
+type BncrElevatedConfigRoot = {
+  tools?: {
+    elevated?: {
+      enabled?: boolean;
+      allowFrom?: {
+        bncr?: unknown;
+      };
+    };
+  };
+};
+
+export function getBncrElevatedConfig(rootCfg: BncrElevatedConfigRoot | null | undefined) {
   const elevated = rootCfg?.tools?.elevated || {};
   const allowFrom = elevated?.allowFrom || {};
   const bncrRules = Array.isArray(allowFrom?.bncr)
@@ -18,7 +29,7 @@ export function getBncrElevatedConfig(rootCfg: any) {
   };
 }
 
-export function buildBncrPermissionSummary(rootCfg: any) {
+export function buildBncrPermissionSummary(rootCfg: BncrElevatedConfigRoot | null | undefined) {
   const elevated = getBncrElevatedConfig(rootCfg);
   return {
     elevatedEnabled: elevated.enabled,
@@ -29,3 +40,5 @@ export function buildBncrPermissionSummary(rootCfg: any) {
       : 'bncr elevated not explicitly allowed',
   };
 }
+
+export type BncrPermissionSummary = ReturnType<typeof buildBncrPermissionSummary>;

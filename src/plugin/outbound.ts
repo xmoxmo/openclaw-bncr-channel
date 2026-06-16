@@ -10,17 +10,59 @@ function asString(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : v == null ? fallback : String(v);
 }
 
+type BncrOutboundDeliveryResult = { channel: string; messageId: string; chatId: string };
+
+type BncrOutboundSendContext = {
+  accountId?: string | null;
+  to?: string;
+  text?: string;
+  mediaUrl?: string;
+  type?: string;
+  kind?: string;
+  replyToId?: string | null;
+  replyToMessageId?: string | null;
+  asVoice?: boolean;
+  audioAsVoice?: boolean;
+  mediaLocalRoots?: readonly string[];
+};
+
+type BncrOutboundReplyActionContext = {
+  accountId?: string | null;
+  to?: string;
+  text?: string;
+  replyToId?: string | null;
+  replyToMessageId?: string | null;
+};
+
+type BncrOutboundTargetActionContext = {
+  accountId?: string | null;
+  messageId?: string | null;
+  targetMessageId?: string | null;
+};
+
+type BncrOutboundReactActionContext = BncrOutboundTargetActionContext & {
+  emoji?: string | null;
+};
+
+type BncrOutboundEditActionContext = BncrOutboundTargetActionContext & {
+  text?: string;
+};
+
 export type BncrOutboundBridge = {
-  channelSendText: (ctx: any) => unknown | Promise<unknown>;
-  channelSendMedia: (ctx: any) => unknown | Promise<unknown>;
+  channelSendText: (
+    ctx: BncrOutboundSendContext,
+  ) => BncrOutboundDeliveryResult | Promise<BncrOutboundDeliveryResult>;
+  channelSendMedia: (
+    ctx: BncrOutboundSendContext,
+  ) => BncrOutboundDeliveryResult | Promise<BncrOutboundDeliveryResult>;
 };
 
 export function createBncrOutboundRuntime(getBridge: () => BncrOutboundBridge) {
   return {
     deliveryMode: 'gateway' as const,
-    sendText: async (ctx: any) => getBridge().channelSendText(ctx),
-    sendMedia: async (ctx: any) => getBridge().channelSendMedia(ctx),
-    replyAction: async (ctx: any) =>
+    sendText: async (ctx: BncrOutboundSendContext) => getBridge().channelSendText(ctx),
+    sendMedia: async (ctx: BncrOutboundSendContext) => getBridge().channelSendMedia(ctx),
+    replyAction: async (ctx: BncrOutboundReplyActionContext) =>
       sendBncrReplyAction({
         accountId: normalizeAccountId(ctx?.accountId),
         to: asString(ctx?.to || '').trim(),
@@ -30,18 +72,18 @@ export function createBncrOutboundRuntime(getBridge: () => BncrOutboundBridge) {
         sendText: async ({ accountId, to, text }) =>
           getBridge().channelSendText({ accountId, to, text }),
       }),
-    deleteAction: async (ctx: any) =>
+    deleteAction: async (ctx: BncrOutboundTargetActionContext) =>
       deleteBncrMessageAction({
         accountId: normalizeAccountId(ctx?.accountId),
         targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
       }),
-    reactAction: async (ctx: any) =>
+    reactAction: async (ctx: BncrOutboundReactActionContext) =>
       reactBncrMessageAction({
         accountId: normalizeAccountId(ctx?.accountId),
         targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),
         emoji: asString(ctx?.emoji || '').trim(),
       }),
-    editAction: async (ctx: any) =>
+    editAction: async (ctx: BncrOutboundEditActionContext) =>
       editBncrMessageAction({
         accountId: normalizeAccountId(ctx?.accountId),
         targetMessageId: asString(ctx?.messageId || ctx?.targetMessageId || '').trim(),

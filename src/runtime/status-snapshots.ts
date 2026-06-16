@@ -1,5 +1,34 @@
 import { normalizeAccountId } from '../core/accounts.ts';
-import type { OutboxEntry } from '../core/types.ts';
+import type { BncrRuntimeLastSession, OutboxEntry } from '../core/types.ts';
+
+export type RuntimeQueueSnapshot = {
+  pending: number;
+  deadLetter: number;
+  sessionRoutesCount: number;
+  invalidOutboxSessionKeys: number;
+  legacyAccountResidue: number;
+};
+
+export type RuntimeEventCounters = {
+  connectEvents: number;
+  inboundEvents: number;
+  activityEvents: number;
+  ackEvents: number;
+};
+
+export type RuntimeActivitySnapshot = {
+  activeConnections: number;
+  lastSession: BncrRuntimeLastSession | null;
+  lastActivityAt: number | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+};
+
+export type RuntimeStatusSnapshots = {
+  queueSnapshot: RuntimeQueueSnapshot;
+  eventCounters: RuntimeEventCounters;
+  activitySnapshot: RuntimeActivitySnapshot;
+};
 
 function getCounter(map: Map<string, number>, accountId: string): number {
   return map.get(normalizeAccountId(accountId)) || 0;
@@ -12,7 +41,7 @@ export function buildRuntimeQueueSnapshot(args: {
   sessionRouteEntries: Iterable<{ accountId: string }>;
   countInvalidOutboxSessionKeys: (accountId: string) => number;
   countLegacyAccountResidue: (accountId: string) => number;
-}) {
+}): RuntimeQueueSnapshot {
   const accountId = normalizeAccountId(args.accountId);
   const pending = Array.from(args.outboxEntries).filter((v) => v.accountId === accountId).length;
   const deadLetter = Array.from(args.deadLetterEntries).filter(
@@ -36,7 +65,7 @@ export function buildRuntimeEventCounters(args: {
   inboundEventsByAccount: Map<string, number>;
   activityEventsByAccount: Map<string, number>;
   ackEventsByAccount: Map<string, number>;
-}) {
+}): RuntimeEventCounters {
   const accountId = normalizeAccountId(args.accountId);
   return {
     connectEvents: getCounter(args.connectEventsByAccount, accountId),
@@ -53,11 +82,11 @@ function nullableMapNumber(map: Map<string, number>, key: string): number | null
 export function buildRuntimeActivitySnapshot(args: {
   accountId: string;
   activeConnectionCount: (accountId: string) => number;
-  lastSessionByAccount: Map<string, { sessionKey: string; scope: string; updatedAt: number }>;
+  lastSessionByAccount: Map<string, BncrRuntimeLastSession>;
   lastActivityByAccount: Map<string, number>;
   lastInboundByAccount: Map<string, number>;
   lastOutboundByAccount: Map<string, number>;
-}) {
+}): RuntimeActivitySnapshot {
   const accountId = normalizeAccountId(args.accountId);
   return {
     activeConnections: args.activeConnectionCount(accountId),
@@ -80,11 +109,11 @@ export function buildRuntimeStatusSnapshots(args: {
   activityEventsByAccount: Map<string, number>;
   ackEventsByAccount: Map<string, number>;
   activeConnectionCount: (accountId: string) => number;
-  lastSessionByAccount: Map<string, { sessionKey: string; scope: string; updatedAt: number }>;
+  lastSessionByAccount: Map<string, BncrRuntimeLastSession>;
   lastActivityByAccount: Map<string, number>;
   lastInboundByAccount: Map<string, number>;
   lastOutboundByAccount: Map<string, number>;
-}) {
+}): RuntimeStatusSnapshots {
   const accountId = normalizeAccountId(args.accountId);
   return {
     queueSnapshot: buildRuntimeQueueSnapshot({

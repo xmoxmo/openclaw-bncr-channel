@@ -35,9 +35,9 @@ export type RegisterTraceSummary = {
 
 export type RegisterDriftSnapshot = {
   capturedAt: number;
-  registerCount: number;
-  apiGeneration: number;
-  postWarmupRegisterCount: number;
+  registerCount: number | null;
+  apiGeneration: number | null;
+  postWarmupRegisterCount: number | null;
   apiInstanceId: string | null;
   registryFingerprint: string | null;
   dominantBucket: string | null;

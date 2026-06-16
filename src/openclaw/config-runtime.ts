@@ -1,6 +1,8 @@
+import type { BncrChannelConfigRoot } from '../plugin/channel-runtime-types.ts';
+
 type RuntimeConfigApi = {
-  current?: () => unknown;
-  get?: () => unknown;
+  current?: () => BncrChannelConfigRoot;
+  get?: () => BncrChannelConfigRoot;
   mutateConfigFile?: (params: {
     afterWrite?: { mode?: string };
     mutate: (draft: Record<string, unknown>) => void;
@@ -9,17 +11,21 @@ type RuntimeConfigApi = {
 
 type RuntimeApiHolder = {
   runtime?: {
-    config?: RuntimeConfigApi;
+    config?: unknown;
+    [key: string]: unknown;
   };
+  [key: string]: unknown;
 };
 
 function resolveConfigApi(api: RuntimeApiHolder): RuntimeConfigApi {
   const config = api?.runtime?.config;
-  if (!config) throw new Error('OpenClaw runtime config API is unavailable');
-  return config;
+  if (!config || typeof config !== 'object') {
+    throw new Error('OpenClaw runtime config API is unavailable');
+  }
+  return config as RuntimeConfigApi;
 }
 
-export function getOpenClawRuntimeConfig(api: RuntimeApiHolder): unknown {
+export function getOpenClawRuntimeConfig(api: RuntimeApiHolder): BncrChannelConfigRoot {
   const config = resolveConfigApi(api);
   if (typeof config.current === 'function') return config.current();
   if (typeof config.get === 'function') return config.get();
@@ -29,7 +35,7 @@ export function getOpenClawRuntimeConfig(api: RuntimeApiHolder): unknown {
 export function getOpenClawRuntimeConfigOrDefault<T>(
   api: RuntimeApiHolder,
   fallback: T,
-): unknown | T {
+): BncrChannelConfigRoot | T {
   try {
     return getOpenClawRuntimeConfig(api);
   } catch {

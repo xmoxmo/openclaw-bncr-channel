@@ -1,10 +1,15 @@
 import { normalizeAccountId } from '../../core/accounts.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import { buildDisplayScopeCandidates } from '../../core/targets.ts';
+import type { BncrRoute } from '../../core/types.ts';
 import {
   defineOpenClawStableChannelIngressIdentity,
   resolveOpenClawChannelMessageIngress,
 } from '../../openclaw/ingress-runtime.ts';
+import type { BncrInboundConfig, BncrInboundParamsInput } from './contracts.ts';
+
+type RouteLike = Partial<Pick<BncrRoute, 'groupId' | 'userId' | 'platform'>>;
+type AccessGroupsLike = Parameters<typeof resolveOpenClawChannelMessageIngress>[0]['accessGroups'];
 
 export type BncrGateResult = { allowed: true } | { allowed: false; reason: string };
 
@@ -48,10 +53,10 @@ function gateReasonFromIngress(reasonCode?: string): string {
 }
 
 export async function checkBncrMessageGate(params: {
-  parsed: any;
-  cfg: any;
+  parsed: BncrInboundParamsInput & { route?: RouteLike };
+  cfg: BncrInboundConfig;
   account: { accountId: string; enabled?: boolean };
-}): BncrGateResult {
+}): Promise<BncrGateResult> {
   const { parsed, cfg, account } = params;
   const accountId = normalizeAccountId(account?.accountId);
   const channelCfg = cfg?.channels?.bncr || {};
@@ -63,9 +68,17 @@ export async function checkBncrMessageGate(params: {
   }
 
   const route = parsed?.route;
+  if (!route?.platform || !route?.groupId || !route?.userId) {
+    return { allowed: false, reason: 'invalid route' };
+  }
+  const resolvedRoute: BncrRoute = {
+    platform: route.platform,
+    groupId: route.groupId,
+    userId: route.userId,
+  };
   const isGroup = asString(route?.groupId || '0') !== '0';
 
-  const candidates = buildDisplayScopeCandidates(route);
+  const candidates = buildDisplayScopeCandidates(resolvedRoute);
   const displayScope = candidates[0] || '';
   const routeKey = candidates.find((candidate) => candidate !== displayScope) || displayScope;
 
@@ -93,7 +106,7 @@ export async function checkBncrMessageGate(params: {
     },
     allowFrom: policy.dmPolicy === 'open' ? ['*', ...policy.allowFrom] : policy.allowFrom,
     groupAllowFrom: policy.groupAllowFrom,
-    accessGroups: cfg?.accessGroups,
+    accessGroups: cfg?.accessGroups as AccessGroupsLike,
   });
 
   if (resolved.ingress.admission === 'dispatch' || resolved.ingress.admission === 'observe') {

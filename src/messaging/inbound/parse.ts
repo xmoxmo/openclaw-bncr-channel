@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { normalizeAccountId } from '../../core/accounts.ts';
 import { extractInlineTaskKey } from '../../core/targets.ts';
 import type { BncrRoute } from '../../core/types.ts';
+import type { BncrInboundParamsInput } from './contracts.ts';
 
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
@@ -43,7 +44,7 @@ export function resolveChatType(_route: BncrRoute): 'direct' | 'group' {
   return 'direct';
 }
 
-export function parseBncrInboundParams(params: any) {
+export function parseBncrInboundParams(params: BncrInboundParamsInput) {
   const accountId = normalizeAccountId(asString(params?.accountId || ''));
   const platform = asString(params?.platform || '').trim();
   const groupId = asString(params?.groupId || '0').trim() || '0';

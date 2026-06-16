@@ -1,59 +1,32 @@
-type RuntimeReplyApi = {
-  formatAgentEnvelope?: (params: {
-    channel: string;
-    from: string;
-    timestamp: number;
-    previousTimestamp?: unknown;
-    envelope?: unknown;
-    body: string;
-  }) => string;
-  resolveEnvelopeFormatOptions?: (cfg: unknown) => unknown;
-  dispatchReplyWithBufferedBlockDispatcher?: (params: {
-    ctx: unknown;
-    cfg: unknown;
-    dispatcherOptions: {
-      deliver: (
-        payload: {
-          text?: string;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-          audioAsVoice?: boolean;
-        },
-        info?: { kind?: 'tool' | 'block' | 'final' },
-      ) => Promise<void> | void;
-      onError?: (err: unknown) => void;
-    };
-    replyOptions?: {
-      disableBlockStreaming?: boolean;
-      shouldEmitToolResult?: () => boolean;
-    };
-  }) => Promise<unknown> | unknown;
-};
+import type {
+  OpenClawChannelRuntimeApiHolder,
+  OpenClawChannelRuntimeContext,
+  OpenClawReplyDispatcherPayload,
+  OpenClawReplyDispatchInfo,
+} from './channel-runtime-contracts.ts';
 
-type RuntimeApiHolder = {
-  runtime?: {
-    channel?: {
-      reply?: RuntimeReplyApi;
-    };
-  };
-};
-
-function resolveReplyApi(api: RuntimeApiHolder): RuntimeReplyApi {
+function resolveReplyApi(api: OpenClawChannelRuntimeApiHolder): Record<string, unknown> {
   const reply = api?.runtime?.channel?.reply;
-  if (!reply) throw new Error('OpenClaw channel reply API is unavailable');
-  return reply;
+  if (!reply || typeof reply !== 'object') {
+    throw new Error('OpenClaw channel reply API is unavailable');
+  }
+  return reply as Record<string, unknown>;
 }
 
-export function resolveOpenClawEnvelopeFormatOptions(api: RuntimeApiHolder, cfg: unknown): unknown {
+export function resolveOpenClawEnvelopeFormatOptions(
+  api: OpenClawChannelRuntimeApiHolder,
+  cfg: unknown,
+): unknown {
   const reply = resolveReplyApi(api);
-  if (typeof reply.resolveEnvelopeFormatOptions !== 'function') {
+  const resolveEnvelopeFormatOptions = reply.resolveEnvelopeFormatOptions;
+  if (typeof resolveEnvelopeFormatOptions !== 'function') {
     throw new Error('OpenClaw channel reply resolveEnvelopeFormatOptions API is unavailable');
   }
-  return reply.resolveEnvelopeFormatOptions(cfg);
+  return resolveEnvelopeFormatOptions(cfg);
 }
 
 export function formatOpenClawAgentEnvelope(
-  api: RuntimeApiHolder,
+  api: OpenClawChannelRuntimeApiHolder,
   params: {
     channel: string;
     from: string;
@@ -64,26 +37,31 @@ export function formatOpenClawAgentEnvelope(
   },
 ): string {
   const reply = resolveReplyApi(api);
-  if (typeof reply.formatAgentEnvelope !== 'function') {
+  const formatAgentEnvelope = reply.formatAgentEnvelope as
+    | ((params: {
+        channel: string;
+        from: string;
+        timestamp: number;
+        previousTimestamp?: unknown;
+        envelope?: unknown;
+        body: string;
+      }) => string)
+    | undefined;
+  if (typeof formatAgentEnvelope !== 'function') {
     throw new Error('OpenClaw channel reply formatAgentEnvelope API is unavailable');
   }
-  return reply.formatAgentEnvelope(params);
+  return formatAgentEnvelope(params);
 }
 
 export async function dispatchOpenClawReplyWithBufferedBlockDispatcher(
-  api: RuntimeApiHolder,
+  api: OpenClawChannelRuntimeApiHolder,
   params: {
-    ctx: unknown;
+    ctx: OpenClawChannelRuntimeContext;
     cfg: unknown;
     dispatcherOptions: {
       deliver: (
-        payload: {
-          text?: string;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-          audioAsVoice?: boolean;
-        },
-        info?: { kind?: 'tool' | 'block' | 'final' },
+        payload: OpenClawReplyDispatcherPayload,
+        info?: OpenClawReplyDispatchInfo,
       ) => Promise<void> | void;
       onError?: (err: unknown) => void;
     };
@@ -94,10 +72,27 @@ export async function dispatchOpenClawReplyWithBufferedBlockDispatcher(
   },
 ): Promise<unknown> {
   const reply = resolveReplyApi(api);
-  if (typeof reply.dispatchReplyWithBufferedBlockDispatcher !== 'function') {
+  const dispatchReplyWithBufferedBlockDispatcher = reply.dispatchReplyWithBufferedBlockDispatcher as
+    | ((params: {
+        ctx: OpenClawChannelRuntimeContext;
+        cfg: unknown;
+        dispatcherOptions: {
+          deliver: (
+            payload: OpenClawReplyDispatcherPayload,
+            info?: OpenClawReplyDispatchInfo,
+          ) => Promise<void> | void;
+          onError?: (err: unknown) => void;
+        };
+        replyOptions?: {
+          disableBlockStreaming?: boolean;
+          shouldEmitToolResult?: () => boolean;
+        };
+      }) => Promise<unknown> | unknown)
+    | undefined;
+  if (typeof dispatchReplyWithBufferedBlockDispatcher !== 'function') {
     throw new Error(
       'OpenClaw channel reply dispatchReplyWithBufferedBlockDispatcher API is unavailable',
     );
   }
-  return reply.dispatchReplyWithBufferedBlockDispatcher(params);
+  return dispatchReplyWithBufferedBlockDispatcher(params);
 }

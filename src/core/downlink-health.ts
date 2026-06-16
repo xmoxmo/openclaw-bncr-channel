@@ -1,13 +1,5 @@
-import type { OutboxEntry } from './types.ts';
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
-  return Math.max(0, finiteNumberOr(value, fallback));
-}
+import type { BncrDownlinkHealthSummary, OutboxEntry } from './types.ts';
+import { finiteNumberOr, nonNegativeFiniteNumberOr } from './value-sanitize.ts';
 
 type DownlinkHealthInput = {
   accountId: string;
@@ -62,5 +54,5 @@ export function buildDownlinkHealth(input: DownlinkHealthInput) {
     recommendReason: ackStalled
       ? 'single-conn pending outbox with recent ack timeout and no recent ack-ok while inbound/activity is still alive'
       : '',
-  };
+  } satisfies BncrDownlinkHealthSummary;
 }

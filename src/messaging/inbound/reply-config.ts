@@ -1,7 +1,9 @@
+import type { BncrInboundConfig } from './contracts.ts';
+
 type BncrReplyConfigResult = {
   blockStreaming: boolean;
   allowTool: boolean;
-  replyCfg: any;
+  replyCfg: BncrInboundConfig;
 };
 
 function parseBooleanLike(value: unknown): boolean | undefined {
@@ -20,7 +22,7 @@ function parseBooleanLike(value: unknown): boolean | undefined {
   return undefined;
 }
 
-export function resolveBncrBlockStreaming(cfg: any): boolean {
+export function resolveBncrBlockStreaming(cfg: BncrInboundConfig): boolean {
   const channelValue = parseBooleanLike(cfg?.channels?.bncr?.blockStreaming);
   if (channelValue !== undefined) return channelValue;
 
@@ -30,11 +32,11 @@ export function resolveBncrBlockStreaming(cfg: any): boolean {
   return true;
 }
 
-export function resolveBncrAllowTool(cfg: any): boolean {
+export function resolveBncrAllowTool(cfg: BncrInboundConfig): boolean {
   return cfg?.channels?.bncr?.allowTool === true;
 }
 
-export function buildBncrReplyConfig(cfg: any): BncrReplyConfigResult {
+export function buildBncrReplyConfig(cfg: BncrInboundConfig): BncrReplyConfigResult {
   const blockStreaming = resolveBncrBlockStreaming(cfg);
   const allowTool = resolveBncrAllowTool(cfg);
 
@@ -46,6 +48,16 @@ export function buildBncrReplyConfig(cfg: any): BncrReplyConfigResult {
         ...(cfg?.agents?.defaults ?? {}),
       },
     },
+  } as BncrInboundConfig & {
+    agents: {
+      defaults: {
+        blockStreamingBreak?: string;
+        blockStreamingChunk?: { minChars: number; maxChars: number };
+        blockStreamingDefault?: unknown;
+        [key: string]: unknown;
+      };
+      [key: string]: unknown;
+    };
   };
 
   if (replyCfg.agents.defaults.blockStreamingBreak == null) {

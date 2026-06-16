@@ -1,0 +1,16 @@
+{
+  "phase": "next-phase-cross-module-regressions",
+  "updatedAt": "2026-06-14T18:19:42.697Z",
+  "covered": {
+    "channelMessageToAck": true,
+    "inboundNativeCommandReply": true,
+    "targetSessionAliasRestore": true,
+    "deadLetterPaginationIsolation": true,
+    "rerouteRetryDeadLetterMatrix": true,
+    "fileTransferLateAckOwner": true,
+    "statusDiagnosticsConsistency": true
+  },
+  "deferred": {
+    "largeScaleHelperRewrite": false
+  }
+}

@@ -1,0 +1,87 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { createBncrMediaOrchestratorsRuntimeGroup } from '../../src/plugin/media-orchestrators-runtime-group.ts';
+
+function createRuntime() {
+  const calls = { enqueueOutbound: [], rememberRecentMediaSend: [] };
+  const runtime = {
+    now: () => 10_000,
+    asString: (value, fallback = '') =>
+      typeof value === 'string' ? value : value == null ? fallback : String(value),
+    fileSendTransfers: new Map(),
+    getGatewayContext: () => null,
+    fileInitEvent: 'file.init',
+    fileAbortEvent: 'file.abort',
+    async prepareOutboundTransfer() {
+      return { mode: 'base64', mimeType: 'image/png', fileName: 'a.png', mediaBase64: 'Zm9v' };
+    },
+    sendChunk() {},
+    sendComplete() {},
+    async waitForFileAck() {
+      return { path: '/tmp/a.png' };
+    },
+    logFileTransferChunkAck() {},
+    logFileTransferChunkAckFail() {},
+    logFileTransferCompleteAck() {},
+    logInfo() {},
+    logEnqueueFromReply() {},
+    enqueueOutbound(entry) {
+      calls.enqueueOutbound.push(entry);
+    },
+    buildTextOutboxEntry(args) {
+      return {
+        messageId: `text-${calls.enqueueOutbound.length + 1}`,
+        retryCount: 0,
+        nextAttemptAt: 1,
+        createdAt: 1,
+        payload: { text: args.text },
+        ...args,
+      };
+    },
+    buildFileTransferOutboxEntry(args) {
+      return {
+        messageId: `file-${calls.enqueueOutbound.length + 1}`,
+        retryCount: 0,
+        nextAttemptAt: 1,
+        createdAt: 1,
+        payload: { _meta: { kind: 'file-transfer' }, mediaUrl: args.mediaUrl, text: args.text },
+        ...args,
+      };
+    },
+    rememberRecentMediaSend(args) {
+      calls.rememberRecentMediaSend.push(args);
+    },
+    tryBuildMediaDedupeFallback() {
+      return null;
+    },
+  };
+  return { runtime, calls };
+}
+
+test('media orchestrators runtime group exposes base64 transfer and reply enqueue helpers', async () => {
+  const { runtime, calls } = createRuntime();
+  const group = createBncrMediaOrchestratorsRuntimeGroup(runtime);
+
+  const result = await group.fileTransferOrchestrator.transferMediaToBncrClient({
+    accountId: 'Primary',
+    sessionKey: 'session-1',
+    route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+    mediaUrl: 'https://example.com/a.png',
+  });
+  group.replyMediaOrchestrator.enqueueFromReply({
+    accountId: 'Primary',
+    sessionKey: 'session-1',
+    route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+    payload: { text: 'hello', mediaUrl: 'https://example.com/a.png', replyToId: 'mid-1' },
+  });
+
+  assert.deepEqual(result, {
+    mode: 'base64',
+    mimeType: 'image/png',
+    fileName: 'a.png',
+    mediaBase64: 'Zm9v',
+  });
+  assert.equal(calls.enqueueOutbound.length, 1);
+  assert.equal(calls.rememberRecentMediaSend.length, 1);
+});

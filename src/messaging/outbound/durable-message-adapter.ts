@@ -6,6 +6,7 @@ import type {
   ChannelMessageSendTextContext,
 } from 'openclaw/plugin-sdk/channel-message';
 import { defineChannelMessageAdapter } from 'openclaw/plugin-sdk/channel-message';
+import type { OpenClawConfig } from 'openclaw/plugin-sdk/core';
 
 import {
   buildFileTransferOutboxEntry,
@@ -14,23 +15,25 @@ import {
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
 import { buildBncrDurableQueuedResult } from './durable-queue-adapter.ts';
 
-export type BncrDurableMessageQueuedAdapterDeps<TConfig = unknown> = {
-  enqueueText: (ctx: ChannelMessageSendTextContext<TConfig>) => Promise<OutboxEntry> | OutboxEntry;
+export type BncrDurableMessageQueuedAdapterDeps = {
+  enqueueText: (
+    ctx: ChannelMessageSendTextContext<OpenClawConfig>,
+  ) => Promise<OutboxEntry> | OutboxEntry;
   enqueueMedia?: (
-    ctx: ChannelMessageSendMediaContext<TConfig>,
+    ctx: ChannelMessageSendMediaContext<OpenClawConfig>,
   ) => Promise<OutboxEntry> | OutboxEntry;
   enqueuePayload?: (
-    ctx: ChannelMessageSendPayloadContext<TConfig>,
+    ctx: ChannelMessageSendPayloadContext<OpenClawConfig>,
   ) => Promise<OutboxEntry> | OutboxEntry;
   now?: () => number;
 };
 
-export type BncrDurableMessageQueuedAdapterBuilderDeps<TConfig = unknown> = {
+export type BncrDurableMessageQueuedAdapterBuilderDeps = {
   createMessageId: () => string;
   now: () => number;
   normalizeAccountId: (accountId?: string | null) => string;
   normalizeReplyToId: (value?: string | null) => string;
-  resolveTarget: (ctx: ChannelMessageSendTextContext<TConfig>) => {
+  resolveTarget: (ctx: ChannelMessageSendTextContext<OpenClawConfig>) => {
     route: BncrRoute;
     sessionKey: string;
     accountId?: string | null;
@@ -41,9 +44,9 @@ export type BncrDurableMessageQueuedAdapterBuilderDeps<TConfig = unknown> = {
 // This adapter intentionally models only the OpenClaw -> bncr-plugin handoff.
 // Once a message is accepted into bncr's own outbox, OpenClaw should stop managing it;
 // client/platform ACK, retry, and deadLetter remain owned by the bncr service framework.
-export function createBncrDurableMessageQueuedAdapter<TConfig = unknown>(
-  deps: BncrDurableMessageQueuedAdapterDeps<TConfig>,
-): ChannelMessageAdapterShape<TConfig, ChannelMessageSendResult> {
+export function createBncrDurableMessageQueuedAdapter(
+  deps: BncrDurableMessageQueuedAdapterDeps,
+): ChannelMessageAdapterShape<OpenClawConfig, ChannelMessageSendResult> {
   return defineChannelMessageAdapter({
     id: 'bncr-queued-outbox',
     receive: {
@@ -62,10 +65,10 @@ export function createBncrDurableMessageQueuedAdapter<TConfig = unknown>(
   });
 }
 
-export function createBncrDurableMessageQueuedAdapterFromBuilders<TConfig = unknown>(
-  deps: BncrDurableMessageQueuedAdapterBuilderDeps<TConfig>,
-): ChannelMessageAdapterShape<TConfig, ChannelMessageSendResult> {
-  return createBncrDurableMessageQueuedAdapter<TConfig>({
+export function createBncrDurableMessageQueuedAdapterFromBuilders(
+  deps: BncrDurableMessageQueuedAdapterBuilderDeps,
+): ChannelMessageAdapterShape<OpenClawConfig, ChannelMessageSendResult> {
+  return createBncrDurableMessageQueuedAdapter({
     now: deps.now,
     enqueueText: (ctx) => {
       const resolved = deps.resolveTarget(ctx);
@@ -74,7 +77,7 @@ export function createBncrDurableMessageQueuedAdapterFromBuilders<TConfig = unkn
         now: deps.now,
         normalizeAccountId: deps.normalizeAccountId,
         normalizeReplyToId: deps.normalizeReplyToId,
-        accountId: resolved.accountId ?? ctx.accountId ?? undefined,
+        accountId: resolved.accountId ?? ctx.accountId ?? '',
         sessionKey: resolved.sessionKey,
         route: resolved.route,
         text: ctx.text,
@@ -89,7 +92,7 @@ export function createBncrDurableMessageQueuedAdapterFromBuilders<TConfig = unkn
         now: deps.now,
         normalizeAccountId: deps.normalizeAccountId,
         pushEvent: deps.filePushEvent ?? 'bncr.file.push',
-        accountId: resolved.accountId ?? ctx.accountId ?? undefined,
+        accountId: resolved.accountId ?? ctx.accountId ?? '',
         sessionKey: resolved.sessionKey,
         route: resolved.route,
         mediaUrl: ctx.mediaUrl,
@@ -110,8 +113,9 @@ function toChannelMessageSendResult(
 ): ChannelMessageSendResult {
   if (!entry) throw new Error('bncr durable message adapter did not receive an outbox entry');
   const queued = buildBncrDurableQueuedResult({ entry, sentAt: now?.() });
+  const receipt: ChannelMessageSendResult['receipt'] = queued.receipt;
   return {
-    receipt: queued.receipt as any,
+    receipt,
     messageId: queued.receipt.primaryPlatformMessageId,
   };
 }

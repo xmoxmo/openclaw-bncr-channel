@@ -9,6 +9,7 @@ export function buildBncrInboundRecordUpdateLastRoute(args: {
   resolvedRoute: {
     sessionKey: string;
     mainSessionKey?: string;
+    lastRoutePolicy?: 'main' | 'session';
   };
   sessionKey: string;
   pinnedMainDmOwner: string | null;
@@ -25,10 +26,15 @@ export function buildBncrInboundRecordUpdateLastRoute(args: {
   } = args;
   if (peerKind !== 'direct') return undefined;
 
-  const inboundLastRouteSessionKey = resolveOpenClawInboundLastRouteSessionKey({
-    route: resolvedRoute,
-    sessionKey,
-  });
+  const inboundLastRouteSessionKey = resolvedRoute.mainSessionKey
+    ? resolveOpenClawInboundLastRouteSessionKey({
+        route: {
+          mainSessionKey: resolvedRoute.mainSessionKey,
+          lastRoutePolicy: resolvedRoute.lastRoutePolicy || 'session',
+        },
+        sessionKey,
+      })
+    : sessionKey;
 
   return {
     sessionKey: inboundLastRouteSessionKey,

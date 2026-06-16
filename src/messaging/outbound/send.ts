@@ -1,20 +1,26 @@
+import type { BncrRoute } from '../../core/types.ts';
+
+function normalizeReplyKind(value: unknown): 'tool' | 'block' | 'final' | undefined {
+  return value === 'tool' || value === 'block' || value === 'final' ? value : undefined;
+}
+
 export async function sendBncrText(params: {
   channelId: string;
   accountId: string;
   to: string;
   text: string;
-  kind?: 'tool' | 'block' | 'final';
+  kind?: string;
   replyToId?: string;
   mediaLocalRoots?: readonly string[];
   resolveVerifiedTarget: (
     to: string,
     accountId: string,
-  ) => { sessionKey: string; route: any; displayScope: string };
-  rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
+  ) => { sessionKey: string; route: BncrRoute; displayScope: string };
+  rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) => void;
   enqueueFromReply: (args: {
     accountId: string;
     sessionKey: string;
-    route: any;
+    route: BncrRoute;
     payload: {
       text?: string;
       mediaUrl?: string;
@@ -35,7 +41,7 @@ export async function sendBncrText(params: {
     route: verified.route,
     payload: {
       text: params.text,
-      kind: params.kind,
+      kind: normalizeReplyKind(params.kind),
       replyToId: params.replyToId,
     },
     mediaLocalRoots: params.mediaLocalRoots,
@@ -57,24 +63,26 @@ export async function sendBncrMedia(params: {
   mediaUrls?: string[];
   asVoice?: boolean;
   audioAsVoice?: boolean;
-  kind?: 'tool' | 'block' | 'final';
+  type?: string;
+  kind?: string;
   replyToId?: string;
   mediaLocalRoots?: readonly string[];
   resolveVerifiedTarget: (
     to: string,
     accountId: string,
-  ) => { sessionKey: string; route: any; displayScope: string };
-  rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
+  ) => { sessionKey: string; route: BncrRoute; displayScope: string };
+  rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) => void;
   enqueueFromReply: (args: {
     accountId: string;
     sessionKey: string;
-    route: any;
+    route: BncrRoute;
     payload: {
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
       asVoice?: boolean;
       audioAsVoice?: boolean;
+      type?: string;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
     };
@@ -95,7 +103,8 @@ export async function sendBncrMedia(params: {
       mediaUrls: params.mediaUrls?.length ? params.mediaUrls : undefined,
       asVoice: params.asVoice === true ? true : undefined,
       audioAsVoice: params.audioAsVoice === true ? true : undefined,
-      kind: params.kind,
+      type: params.type,
+      kind: normalizeReplyKind(params.kind),
       replyToId: params.replyToId,
     },
     mediaLocalRoots: params.mediaLocalRoots,

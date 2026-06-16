@@ -15,6 +15,7 @@ const TEXT_PAYLOAD_KEYS = new Set([
   'msg',
   'rawText',
   'text',
+  'textPreview',
 ]);
 const MEDIA_PAYLOAD_KEYS = new Set(['mediaUrl', 'path']);
 const MEDIA_LIST_PAYLOAD_KEYS = new Set(['mediaUrls', 'mediaList']);

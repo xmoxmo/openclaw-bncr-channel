@@ -1,37 +1,43 @@
+import { buildChannelOutboundSessionRoute } from 'openclaw/plugin-sdk/core';
 import { resolveInboundLastRouteSessionKey } from 'openclaw/plugin-sdk/routing';
+import type { BncrChannelConfigRoot } from '../plugin/channel-runtime-types.ts';
+import type {
+  OpenClawChannelRuntimeApiHolder,
+  OpenClawResolvedAgentRoute,
+} from './channel-runtime-contracts.ts';
 
-type RuntimeRoutingApi = {
+export type { OpenClawResolvedAgentRoute } from './channel-runtime-contracts.ts';
+
+type OpenClawRoutingApi = {
   resolveAgentRoute?: (params: {
-    cfg: any;
+    cfg: BncrChannelConfigRoot;
     channel: string;
     accountId: string;
     peer: unknown;
-  }) => any;
+  }) => OpenClawResolvedAgentRoute;
 };
 
-type RuntimeApiHolder = {
-  runtime?: {
-    channel?: {
-      routing?: RuntimeRoutingApi;
-    };
-  };
-};
+type BuildChannelOutboundSessionRouteParams = Parameters<
+  typeof buildChannelOutboundSessionRoute
+>[0];
 
-function resolveRoutingApi(api: RuntimeApiHolder): RuntimeRoutingApi {
+function resolveRoutingApi(api: OpenClawChannelRuntimeApiHolder): OpenClawRoutingApi {
   const routing = api?.runtime?.channel?.routing;
-  if (!routing) throw new Error('OpenClaw channel routing API is unavailable');
-  return routing;
+  if (!routing || typeof routing !== 'object') {
+    throw new Error('OpenClaw channel routing API is unavailable');
+  }
+  return routing as OpenClawRoutingApi;
 }
 
 export function resolveOpenClawAgentRoute(
-  api: RuntimeApiHolder,
+  api: OpenClawChannelRuntimeApiHolder,
   params: {
-    cfg: any;
+    cfg: BncrChannelConfigRoot;
     channel: string;
     accountId: string;
     peer: unknown;
   },
-): any {
+): OpenClawResolvedAgentRoute {
   const routing = resolveRoutingApi(api);
   if (typeof routing.resolveAgentRoute !== 'function') {
     throw new Error('OpenClaw channel routing resolveAgentRoute API is unavailable');
@@ -40,8 +46,19 @@ export function resolveOpenClawAgentRoute(
 }
 
 export function resolveOpenClawInboundLastRouteSessionKey(params: {
-  route: unknown;
+  route: { lastRoutePolicy?: 'main' | 'session'; mainSessionKey: string };
   sessionKey: string;
 }): string {
-  return resolveInboundLastRouteSessionKey(params as any);
+  return resolveInboundLastRouteSessionKey(
+    params as {
+      route: { lastRoutePolicy: 'main' | 'session'; mainSessionKey: string };
+      sessionKey: string;
+    },
+  );
+}
+
+export function buildOpenClawChannelOutboundSessionRoute(
+  params: BuildChannelOutboundSessionRouteParams,
+) {
+  return buildChannelOutboundSessionRoute(params);
 }

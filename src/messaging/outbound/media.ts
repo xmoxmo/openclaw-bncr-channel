@@ -1,5 +1,7 @@
 import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
 
+type BncrOutboundMessageType = 'text' | 'image' | 'video' | 'voice' | 'audio' | 'file';
+
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
   if (v == null) return fallback;
@@ -11,34 +13,43 @@ function isAudioMimeType(mimeType?: string): boolean {
   return mt.startsWith('audio/');
 }
 
+function isBncrOutboundMessageType(value: string): value is BncrOutboundMessageType {
+  return (
+    value === 'text' ||
+    value === 'image' ||
+    value === 'video' ||
+    value === 'voice' ||
+    value === 'audio' ||
+    value === 'file'
+  );
+}
+
+function isMimeMajorOutboundMessageType(
+  value: string,
+): value is Exclude<BncrOutboundMessageType, 'voice' | 'file'> {
+  return value === 'text' || value === 'image' || value === 'video' || value === 'audio';
+}
+
 export function resolveBncrOutboundMessageType(params: {
   mimeType?: string;
   fileName?: string;
   hintedType?: string;
   hasPayload?: boolean;
-}): 'text' | 'image' | 'video' | 'voice' | 'audio' | 'file' {
+}): BncrOutboundMessageType {
   const hinted = asString(params.hintedType || '').toLowerCase();
   const hasPayload = !!params.hasPayload;
   const mt = asString(params.mimeType || '').toLowerCase();
   const major = mt.split('/')[0] || '';
-  const isStandard =
-    hinted === 'text' ||
-    hinted === 'image' ||
-    hinted === 'video' ||
-    hinted === 'voice' ||
-    hinted === 'audio' ||
-    hinted === 'file';
+  const isStandard = isBncrOutboundMessageType(hinted);
 
   if (hasPayload && major === 'text' && (hinted === 'text' || !isStandard)) return 'file';
   if (hinted === 'voice') {
     if (isAudioMimeType(mt)) return 'voice';
-    if (major === 'text' || major === 'image' || major === 'video' || major === 'audio')
-      return major as any;
+    if (isMimeMajorOutboundMessageType(major)) return major;
     return 'file';
   }
-  if (isStandard) return hinted as any;
-  if (major === 'text' || major === 'image' || major === 'video' || major === 'audio')
-    return major as any;
+  if (isStandard) return hinted;
+  if (isMimeMajorOutboundMessageType(major)) return major;
   return 'file';
 }
 

@@ -16,6 +16,7 @@ const DEFAULT_OPTIONS = {
   intervalSec: 15,
   accountId: 'Primary',
   gatewayBin: 'openclaw',
+  gatewayTimeoutMs: 30_000,
 };
 
 export function parseCheckRegisterDriftOptions(args, defaults = DEFAULT_OPTIONS) {
@@ -28,6 +29,8 @@ export function parseCheckRegisterDriftOptions(args, defaults = DEFAULT_OPTIONS)
       options.intervalSec = readNumber(args[++i], options.intervalSec);
     else if (arg === '--account-id') options.accountId = readText(args[++i], options.accountId);
     else if (arg === '--gateway-bin') options.gatewayBin = readText(args[++i], options.gatewayBin);
+    else if (arg === '--gateway-timeout-ms')
+      options.gatewayTimeoutMs = readNumber(args[++i], options.gatewayTimeoutMs);
     else if (arg === '--help' || arg === '-h') options.help = true;
   }
 
@@ -36,25 +39,44 @@ export function parseCheckRegisterDriftOptions(args, defaults = DEFAULT_OPTIONS)
 
 const printHelp = () => {
   console.log(
-    'Usage: node ./scripts/check-register-drift.mjs [--duration-sec 300] [--interval-sec 15] [--account-id Primary] [--gateway-bin openclaw]\n\nSamples bncr.diagnostics over time and reports whether register counters drift after warmup.',
+    'Usage: node ./scripts/check-register-drift.mjs [--duration-sec 300] [--interval-sec 15] [--account-id Primary] [--gateway-bin openclaw] [--gateway-timeout-ms 30000]\n\nSamples bncr.diagnostics over time and reports whether register counters drift after warmup.',
   );
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const summarizeExecOutput = (value) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+
 const fetchDiagnostics = (options) => {
-  const raw = execFileSync(
-    options.gatewayBin,
-    [
-      'gateway',
-      'call',
-      'bncr.diagnostics',
-      '--json',
-      '--params',
-      JSON.stringify({ accountId: options.accountId }),
-    ],
-    { encoding: 'utf8' },
-  );
+  let raw;
+  try {
+    raw = execFileSync(
+      options.gatewayBin,
+      [
+        'gateway',
+        'call',
+        'bncr.diagnostics',
+        '--json',
+        '--timeout',
+        String(options.gatewayTimeoutMs),
+        '--params',
+        JSON.stringify({ accountId: options.accountId }),
+      ],
+      { encoding: 'utf8' },
+    );
+  } catch (error) {
+    const detail = [
+      `gatewayTimeoutMs=${options.gatewayTimeoutMs}`,
+      `status=${error?.status ?? 'unknown'}`,
+      `stderr=${summarizeExecOutput(error?.stderr) || '-'}`,
+      `stdout=${summarizeExecOutput(error?.stdout) || '-'}`,
+    ].join(' ');
+    throw new Error(`bncr.diagnostics gateway call failed (${detail})`, { cause: error });
+  }
   const parsed = JSON.parse(raw);
   const reg = parsed?.diagnostics?.register || {};
   const summary = reg?.traceSummary || {};

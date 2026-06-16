@@ -5,8 +5,12 @@ import {
   resolveStorePath as sdkResolveStorePath,
   updateSessionStoreEntry as sdkUpdateSessionStoreEntry,
 } from 'openclaw/plugin-sdk/session-store-runtime';
+import type { OpenClawChannelRuntimeApiHolder } from './channel-runtime-contracts.ts';
 
-type ResolveStorePathFn = (storeConfig: unknown, options: { agentId: string }) => string;
+type ResolveStorePathFn = (
+  storeConfig?: string,
+  options?: { agentId?: string; env?: NodeJS.ProcessEnv },
+) => string;
 type RecordInboundSessionFn = typeof sdkRecordInboundSession;
 type RecordSessionMetaFromInboundFn = typeof sdkRecordSessionMetaFromInbound;
 type UpdateSessionStoreEntryFn = typeof sdkUpdateSessionStoreEntry;
@@ -40,7 +44,7 @@ function resolveRuntime(): BncrInboundSessionRuntime {
 }
 
 export function resolveBncrInboundSessionStorePath(args: {
-  storeConfig: unknown;
+  storeConfig?: string;
   agentId: string;
 }): string {
   return resolveRuntime().resolveStorePath(args.storeConfig, { agentId: args.agentId });
@@ -65,7 +69,7 @@ export function updateBncrSessionStoreEntry(
 }
 
 export function readBncrSessionUpdatedAt(
-  api: { runtime?: { channel?: { session?: { readSessionUpdatedAt?: ReadSessionUpdatedAtFn } } } },
+  api: OpenClawChannelRuntimeApiHolder,
   params: { storePath: string; sessionKey: string },
 ): unknown {
   const runtime = resolveRuntime();

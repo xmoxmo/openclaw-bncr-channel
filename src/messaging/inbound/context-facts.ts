@@ -148,6 +148,7 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
     rawBody: string;
     body?: string;
     mediaPath?: string | null;
+    mediaContentType?: string;
   };
   senderIdForContext: string;
   senderDisplayName?: string;
@@ -157,6 +158,7 @@ export function buildBncrStructuredContextFactsFromInboundParts(
   input: BncrStructuredContextFactsFromInboundPartsInput,
 ) {
   const mediaPath = input.prepared.mediaPath || undefined;
+  const mediaContentType = input.prepared.mediaContentType || input.parsed.mimeType;
   return buildBncrStructuredContextFacts({
     channelId: input.channelId,
     accountId: input.parsed.accountId,
@@ -190,8 +192,8 @@ export function buildBncrStructuredContextFactsFromInboundParts(
       ? [
           {
             path: mediaPath,
-            contentType: input.parsed.mimeType,
-            kind: inferBncrStructuredMediaKind(input.parsed.mimeType),
+            contentType: mediaContentType,
+            kind: inferBncrStructuredMediaKind(mediaContentType),
             messageId: input.parsed.msgId,
           },
         ]

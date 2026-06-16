@@ -1,55 +1,15 @@
-import { createHash, randomUUID } from 'node:crypto';
-import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type {
   GatewayRequestHandlerOptions,
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
 } from 'openclaw/plugin-sdk/core';
-import {
-  BNCR_DEFAULT_ACCOUNT_ID,
-  CHANNEL_ID,
-  listAccountIds,
-  normalizeAccountId,
-  resolveAccount,
-} from './core/accounts.ts';
-import { BncrConfigSchema } from './core/config-schema.ts';
-import {
-  applyOutboundCapability,
-  buildCapabilitySnapshot,
-  clearOutboundCapability,
-  findCapabilityConnection,
-} from './core/connection-capability.ts';
-import {
-  getRevalidatedAttemptReason,
-  hasAlternativeLiveConnection as hasAlternativeLiveConnectionFromRuntime,
-  hasRecentInboundReachability as hasRecentInboundReachabilityFromRuntime,
-  isEligibleOutboundPushConnection,
-  isRecentlyReachableConn as isRecentlyReachableConnFromRuntime,
-  resolveRecentInboundConnIds as resolveRecentInboundConnIdsFromRuntime,
-  selectOrderedOutboundPushConnections,
-} from './core/connection-reachability.ts';
-import {
-  buildDeadLetterDiagnostics as buildDeadLetterDiagnosticsFromRuntime,
-  formatDeadLetterTopReasons,
-  parseDeadLetterLimit,
-  parseDeadLetterOffset,
-  parseDeadLetterOlderThan,
-  summarizeDeadLetterEntry,
-} from './core/dead-letter-diagnostics.ts';
+import { BNCR_DEFAULT_ACCOUNT_ID, CHANNEL_ID, normalizeAccountId } from './core/accounts.ts';
 import {
   countInvalidOutboxSessionKeys as countInvalidOutboxSessionKeysFromRuntime,
   countLegacyAccountResidue as countLegacyAccountResidueFromRuntime,
 } from './core/diagnostic-counters.ts';
-import { buildDiagnosticsPayload } from './core/diagnostics.ts';
-import { buildDownlinkHealth as buildDownlinkHealthFromRuntime } from './core/downlink-health.ts';
-import { buildExtendedDiagnostics as buildExtendedDiagnosticsFromRuntime } from './core/extended-diagnostics.ts';
-import { buildFileAckKey } from './core/file-ack.ts';
-import {
-  buildFileTransferAbortPayload,
-  buildFileTransferChunkPayload,
-  buildFileTransferCompletePayload,
-  buildFileTransferInitPayload,
-} from './core/file-transfer-payloads.ts';
+import type { BncrExtendedDiagnostics } from './core/extended-diagnostics.ts';
 import {
   matchesTransferOwner as matchesTransferOwnerFromRuntime,
   observeLeaseState,
@@ -57,318 +17,181 @@ import {
 import {
   buildBncrDebugJsonMessage,
   emitBncrLog,
-  emitBncrLogLine,
   summarizeBncrTextPreview,
 } from './core/logging.ts';
-import { buildOutboxEnqueueDebugInfo } from './core/outbox-enqueue.ts';
 import {
   buildFileTransferOutboxEntry as buildFileTransferOutboxEntryFromRuntime,
   buildTextOutboxEntry as buildTextOutboxEntryFromRuntime,
 } from './core/outbox-entry-builders.ts';
-import {
-  buildFileTransferPushOkArgs,
-  buildFileTransferPushSuccessArgs,
-} from './core/outbox-file-transfer-bookkeeping.ts';
-import {
-  buildFileTransferPushFailureArgs,
-  resolveFileTransferFailureState,
-} from './core/outbox-file-transfer-failure.ts';
-import { resolveFileTransferGuard } from './core/outbox-file-transfer-guards.ts';
-import { prepareFileTransferRouteSelection } from './core/outbox-file-transfer-prep.ts';
-import {
-  buildFileTransferBroadcastPayload,
-  buildFileTransferRouteSelectArgs,
-} from './core/outbox-file-transfer-success.ts';
-import {
-  appendDeadLetter,
-  buildDeadLetterEntry,
-  collectDueOutboxEntries,
-} from './core/outbox-queue.ts';
 import { summarizeOutboxEntry } from './core/outbox-summary.ts';
-import { buildTextPushFailureArgs } from './core/outbox-text-push-failure.ts';
-import { resolveTextPushGuard } from './core/outbox-text-push-guards.ts';
-import { prepareTextPushRouteSelection } from './core/outbox-text-push-prep.ts';
-import {
-  buildTextPushBroadcastPayload,
-  buildTextPushOkArgs,
-  buildTextPushRouteSelectArgs,
-  buildTextPushSuccessArgs,
-} from './core/outbox-text-push-success.ts';
 import { normalizePersistedOutboxEntry as normalizePersistedOutboxEntryFromRuntime } from './core/persisted-outbox-entry.ts';
-import { resolveBncrChannelPolicy, resolveBncrConfigWarnings } from './core/policy.ts';
 import {
-  dumpRegisterDriftSnapshot,
-  normalizeRegisterDriftSnapshot,
-} from './core/register-trace.ts';
-import {
-  buildAccountRuntimeSnapshot,
-  buildIntegratedDiagnostics as buildIntegratedDiagnosticsFromRuntime,
-  buildStatusHeadlineFromRuntime,
-  buildStatusMetaFromRuntime,
-} from './core/status.ts';
-import {
-  buildCanonicalBncrSessionKey,
   formatDisplayScope,
-  normalizeInboundSessionKey,
   normalizeStoredSessionKey,
-  parseRouteFromDisplayScope,
   parseRouteLike,
-  parseStrictBncrSessionKey,
   routeKey,
-  withTaskSessionKey,
 } from './core/targets.ts';
-import type { BncrConnection, BncrRoute, OutboxEntry } from './core/types.ts';
-import { dispatchBncrInbound } from './messaging/inbound/dispatch.ts';
-import { checkBncrMessageGate } from './messaging/inbound/gate.ts';
-import { parseBncrInboundParams } from './messaging/inbound/parse.ts';
-import {
-  buildEnqueueFromReplyDebugInfo,
-  buildExtendedOutboundDiagnostics,
-  buildFlushDebugInfo,
-  buildOutboxAckDebugInfo,
-  buildOutboxDrainSkipDebugInfo,
-  buildOutboxDrainStuckDebugInfo,
-  buildOutboxPushOkDebugInfo,
-  buildOutboxPushSkipDebugInfo,
-  buildOutboxQueueDiagnostics,
-  buildOutboxRouteSelectDebugInfo,
-  buildOutboxScheduleDebugInfo,
-  buildPushFailureDebugInfo,
-  buildRetryRerouteDebugInfo,
-} from './messaging/outbound/diagnostics.ts';
+import type {
+  BncrAckObservability,
+  BncrConnection,
+  BncrDiagnosticsSummary,
+  BncrRoute,
+  FileRecvTransferState,
+  FileSendTransferState,
+  OutboxEntry,
+} from './core/types.ts';
+import type { parseBncrInboundParams } from './messaging/inbound/parse.ts';
+import { buildEnqueueFromReplyDebugInfo } from './messaging/outbound/diagnostics.ts';
 import { buildBncrMediaOutboundFrame } from './messaging/outbound/media.ts';
-import { normalizeBncrSendParams } from './messaging/outbound/send-params.ts';
 import {
-  getOpenClawRuntimeConfig,
-  getOpenClawRuntimeConfigOrDefault,
-} from './openclaw/config-runtime.ts';
-import {
-  loadOpenClawWebMedia,
-  type OpenClawLoadedMedia,
-  saveOpenClawChannelMediaBuffer,
-} from './openclaw/media-runtime.ts';
+  type MediaDedupeCacheEntry,
+  normalizeReplyToId,
+} from './messaging/outbound/media-dedupe.ts';
+import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from './messaging/outbound/reasons.ts';
+import type {
+  NormalizedReplyPayload,
+  OutboundReplyTargetPolicy,
+  ReplyMediaEntriesParams,
+  ReplyPayloadInput,
+} from './messaging/outbound/reply-enqueue.ts';
+import type { OpenClawChannelRuntimeApiHolder } from './openclaw/channel-runtime-contracts.ts';
+import { getOpenClawRuntimeConfig } from './openclaw/config-runtime.ts';
+import type { OpenClawLoadedMedia } from './openclaw/media-runtime.ts';
 import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
-import { buildOpenClawChannelRuntimeSurfaceDiagnostics } from './openclaw/runtime-surface.ts';
+import { extractOpenClawToolSend, openClawJsonResult } from './openclaw/sdk-helpers.ts';
+import { createBncrAckOutboxRuntimeGroup } from './plugin/ack-outbox-runtime-group.ts';
+import { createBncrBridgeAckFacade } from './plugin/bridge-ack-facade.ts';
+import { createBncrBridgeConnectionFacade } from './plugin/bridge-connection-facade.ts';
+import { createBncrBridgeDiagnosticsFacade } from './plugin/bridge-diagnostics-facade.ts';
+import { createBncrBridgeDrainFacade } from './plugin/bridge-drain-facade.ts';
+import { createBncrBridgeExtendedDiagnosticsFacade } from './plugin/bridge-extended-diagnostics-facade.ts';
+import { createBncrBridgeFileTransferPushFacade } from './plugin/bridge-file-transfer-push-facade.ts';
 import {
-  extractOpenClawToolSend,
-  openClawJsonResult,
-  readOpenClawJsonFileWithFallback,
-  writeOpenClawJsonFileAtomically,
-} from './openclaw/sdk-helpers.ts';
+  cleanupBncrBridgeRuntime,
+  shutdownBncrBridgeService,
+  startBncrBridgeService,
+  stopBncrBridgeService,
+} from './plugin/bridge-lifecycle.ts';
+import { createBncrBridgeMediaFacade } from './plugin/bridge-media-facade.ts';
+import { createBncrBridgeOutboxFacade } from './plugin/bridge-outbox-facade.ts';
+import { createBncrBridgeRuntimeSurfaceFacade } from './plugin/bridge-runtime-surface-facade.ts';
+import {
+  buildBncrAckDiagnosticsRuntime,
+  buildBncrStatusProjectionRuntime,
+  createBncrBridgeStatusFacade,
+} from './plugin/bridge-status-facade.ts';
+import { createBncrBridgeStatusWorkerFacade } from './plugin/bridge-status-worker-facade.ts';
+import { createBncrBridgeSurfaceHandlersGroup } from './plugin/bridge-surface-handlers-group.ts';
+import {
+  buildBridgeDrainTriggers,
+  buildBridgeLifecycleMarkers,
+  buildBridgeStatusProjectionRuntime,
+  buildChannelSendTargetRuntime,
+  buildInboundSurfaceActivityRuntime,
+  buildInboundSurfaceConnectionRuntime,
+  createBridgeSupportRuntime,
+} from './plugin/bridge-surface-helpers.ts';
+import { BNCR_CHANNEL_CAPABILITIES } from './plugin/capabilities.ts';
+import { resolveBncrChannelRoot } from './plugin/channel-components.ts';
+import {
+  buildInboundAcceptedLifecycleDebugInfo,
+  buildInboundResponsePayload,
+} from './plugin/channel-inbound-helpers.ts';
+import type { BncrChannelPluginBridge } from './plugin/channel-plugin-bridge-group.ts';
+import { createBncrChannelPluginBridgeGroup } from './plugin/channel-plugin-bridge-group.ts';
+import { createBncrChannelPluginSurfaceGroup } from './plugin/channel-plugin-surface-group.ts';
+import {
+  buildBncrBridgeSurfaceHandlersRuntime,
+  buildBncrChannelSendRuntime,
+  buildBncrInboundSurfaceRuntime,
+} from './plugin/channel-runtime-builders.ts';
+import {
+  ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+  ADAPTIVE_ACK_TIMEOUT_LOG_THROTTLE_MS,
+  ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS,
+  ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
+  BNCR_FILE_ABORT_EVENT,
+  BNCR_FILE_CHUNK_EVENT,
+  BNCR_FILE_COMPLETE_EVENT,
+  BNCR_FILE_INIT_EVENT,
+  BNCR_PUSH_EVENT,
+  BRIDGE_VERSION,
+  CONNECT_TTL_MS,
+  FILE_ACK_TIMEOUT_MS,
+  FILE_FORCE_CHUNK,
+  FILE_INLINE_THRESHOLD,
+  FILE_TRANSFER_ACK_TTL_MS,
+  FILE_TRANSFER_KEEP_MS,
+  FILE_TRANSFER_TERMINAL_KEEP_MS,
+  INBOUND_FILE_TRANSFER_MAX_BYTES,
+  INBOUND_FILE_TRANSFER_MAX_CHUNKS,
+  MAX_ACCOUNT_ACTIVITY_ENTRIES,
+  MAX_DEAD_LETTER_ENTRIES,
+  MAX_EARLY_FILE_ACKS,
+  MAX_RETRY,
+  MAX_SESSION_ROUTE_ENTRIES,
+  OUTBOUND_READY_TTL_MS,
+  PRE_PUSH_GUARD_RETRY_DELAY_MS,
+  PREFERRED_OUTBOUND_TTL_MS,
+  PUSH_ACK_TIMEOUT_MS,
+  PUSH_DRAIN_ACCOUNT_BUDGET,
+  PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS,
+  PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS,
+  PUSH_DRAIN_EXCEPTION_RETRY_LIMIT,
+  PUSH_DRAIN_INTERVAL_MS,
+  PUSH_DRAIN_STUCK_WARN_MS,
+  RECENT_INBOUND_SEND_WINDOW_MS,
+  RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+  RECOMMENDED_ACK_TIMEOUT_MIN_MS,
+  REGISTER_WARMUP_WINDOW_MS,
+} from './plugin/channel-runtime-constants.ts';
+import type {
+  BncrBridgeRuntimePaths,
+  BncrChannelConfigRoot,
+  BncrChannelSendContext,
+  FileAckPayloadState,
+  PersistedState,
+} from './plugin/channel-runtime-types.ts';
+import { createBncrChannelSendRuntimeGroup } from './plugin/channel-send-runtime-group.ts';
+import {
+  asString,
+  backoffMs,
+  clampFiniteNumber,
+  finiteNonNegativeNumberOrNull,
+  finiteNumberOr,
+  isPlainObject,
+  now,
+  resolveOutboundFileName,
+} from './plugin/channel-utils.ts';
+import { BNCR_CONFIG_SURFACE } from './plugin/config.ts';
+import { createBncrConnectionStateRuntimeGroup } from './plugin/connection-state-runtime-group.ts';
+import { createBncrFileTransferRuntimeGroup } from './plugin/file-transfer-runtime-group.ts';
+import { BNCR_GATEWAY_METHODS } from './plugin/gateway-methods.ts';
+import { prepareBncrInboundAcceptance } from './plugin/inbound-acceptance.ts';
+import { createBncrInboundSurfaceHandlersGroup } from './plugin/inbound-surface-handlers-group.ts';
+import { createBncrMediaOrchestratorsRuntimeGroup } from './plugin/media-orchestrators-runtime-group.ts';
+import { BNCR_CHANNEL_META } from './plugin/meta.ts';
+import type { BncrOutboxAckOkTelemetryPatch } from './plugin/outbox-ack-outcome.ts';
+import { runBncrFileTransferOutboxPush } from './plugin/outbox-file-push-flow.ts';
+import { createBncrOutboxPushRouteRuntimeGroup } from './plugin/outbox-push-route-runtime-group.ts';
+import { runBncrTextOutboxPush } from './plugin/outbox-text-push-flow.ts';
+import {
+  createBncrDeadLetterDiagnosticsHelpers,
+  createBncrDiagnosticsSelectionHelpers,
+  createBncrOutboxDiagnosticsHelpers,
+  createBncrRuntimeAckObservabilityBuilder,
+} from './plugin/runtime-diagnostics-snapshot.ts';
+import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
+import { createBncrStateTransientRuntimeGroup } from './plugin/state-transient-runtime-group.ts';
+import { createBncrTargetStatusRuntimeGroup } from './plugin/target-status-runtime-group.ts';
+import { shouldEmitDedupLog as shouldEmitDedupLogFromRuntime } from './runtime/log-dedupe.ts';
+import { buildBncrRuntimeAckStrategy } from './runtime/outbound-ack-timeout.ts';
+import { resolveBncrOutboundAckRequired } from './runtime/outbound-flags.ts';
 import type { RegisterTraceRuntimeState } from './runtime/register-trace-runtime.ts';
 import {
   buildRegisterTraceRuntimeSummary,
   noteRegisterTraceRuntime,
 } from './runtime/register-trace-runtime.ts';
-
-function buildInboundAcceptedLifecycleDebugInfo(args: {
-  stage: 'accepted';
-  bridge: string;
-  accountId: string;
-  connId: string;
-  clientId?: string;
-  outboundReady: boolean;
-  preferredForOutbound: boolean;
-  inboundOnly: boolean;
-  onlineAfterSeen: boolean;
-  recentInboundReachable: boolean;
-  activeConnectionKey: string | null;
-  activeConnections: Array<{
-    connId: string;
-    clientId?: string;
-    connectedAt: number;
-    lastSeenAt: number;
-  }>;
-}) {
-  return {
-    stage: args.stage,
-    bridge: args.bridge,
-    accountId: args.accountId,
-    connId: args.connId,
-    clientId: args.clientId,
-    outboundReady: args.outboundReady,
-    preferredForOutbound: args.preferredForOutbound,
-    inboundOnly: args.inboundOnly,
-    onlineAfterSeen: args.onlineAfterSeen,
-    recentInboundReachable: args.recentInboundReachable,
-    activeConnectionKey: args.activeConnectionKey,
-    activeConnections: args.activeConnections,
-  };
-}
-
-function resolveInboundSessionContext(args: {
-  cfg: any;
-  accountId: string;
-  peer: { kind: string } & Record<string, unknown>;
-  route: BncrRoute;
-  sessionKeyFromRoute?: string;
-  canonicalAgentId: string;
-  taskKey?: string;
-  text: string;
-  extractedText?: string;
-  resolveAgentRoute: (params: { cfg: any; channel: string; accountId: string; peer: unknown }) => {
-    sessionKey: string;
-  };
-}) {
-  const resolvedRoute = args.resolveAgentRoute({
-    cfg: args.cfg,
-    channel: CHANNEL_ID,
-    accountId: args.accountId,
-    peer: args.peer,
-  });
-  const baseSessionKey =
-    normalizeInboundSessionKey(args.sessionKeyFromRoute, args.route, args.canonicalAgentId) ||
-    resolvedRoute.sessionKey;
-  const taskSessionKey = withTaskSessionKey(baseSessionKey, args.taskKey);
-  return {
-    resolvedRoute,
-    baseSessionKey,
-    taskSessionKey,
-    sessionKey: taskSessionKey || baseSessionKey,
-    inboundText: asString(args.extractedText || args.text || ''),
-  };
-}
-
-function buildInboundResponsePayload(
-  args:
-    | {
-        kind: 'stale-ignored';
-        accountId: string;
-        msgId?: string | null;
-      }
-    | {
-        kind: 'invalid-peer';
-      }
-    | {
-        kind: 'duplicated';
-        accountId: string;
-        msgId?: string | null;
-      }
-    | {
-        kind: 'gate-denied';
-        accountId: string;
-        msgId?: string | null;
-        reason: string;
-      }
-    | {
-        kind: 'accepted';
-        accountId: string;
-        sessionKey: string;
-        msgId?: string | null;
-        taskKey?: string | null;
-      },
-) {
-  switch (args.kind) {
-    case 'stale-ignored':
-      return {
-        accepted: false,
-        stale: true,
-        ignored: true,
-        accountId: args.accountId,
-        msgId: args.msgId ?? null,
-      };
-    case 'invalid-peer':
-      return { error: 'platform/groupId/userId required' };
-    case 'duplicated':
-      return {
-        accepted: true,
-        duplicated: true,
-        accountId: args.accountId,
-        msgId: args.msgId ?? null,
-      };
-    case 'gate-denied':
-      return {
-        accepted: false,
-        accountId: args.accountId,
-        msgId: args.msgId ?? null,
-        reason: args.reason,
-      };
-    case 'accepted':
-      return {
-        accepted: true,
-        accountId: args.accountId,
-        sessionKey: args.sessionKey,
-        msgId: args.msgId ?? null,
-        taskKey: args.taskKey ?? null,
-      };
-  }
-}
-
-import { buildBncrDurableQueuedResult } from './messaging/outbound/durable-queue-adapter.ts';
-import {
-  buildMediaTextFallback,
-  type MediaDedupeCacheEntry,
-  normalizeMessageText,
-  normalizeReplyToId,
-} from './messaging/outbound/media-dedupe.ts';
-import {
-  buildOutboxOnlineDebugInfo,
-  clampOutboxDrainDelay,
-  computeNextOutboxDelay,
-  computeOutboxRetryWait,
-  findDueOutboxEntry,
-  listAccountOutboxEntries,
-  selectOutboxFileTransferRouteCandidates,
-  selectOutboxRouteCandidates,
-  selectOutboxTargetAccounts,
-  updateMinOutboxDelay,
-} from './messaging/outbound/queue-selectors.ts';
-import {
-  OUTBOUND_DEGRADE_REASON,
-  OUTBOUND_FLUSH_REASON,
-  OUTBOUND_FLUSH_TRIGGER,
-  OUTBOUND_SCHEDULE_SOURCE,
-  OUTBOUND_TERMINAL_REASON,
-} from './messaging/outbound/reasons.ts';
-import {
-  enqueueNormalizedReplyPayload,
-  enqueueReplyMediaFallbackTextEntry,
-  enqueueReplyMediaFileTransferEntry,
-  enqueueReplyTextEntry,
-  enqueueSingleReplyMediaEntry,
-  hasReplyMediaEntries,
-  type NormalizedReplyPayload,
-  normalizeReplyPayload,
-  type OutboundReplyTargetPolicy,
-  type ReplyMediaEntriesParams,
-  type ReplyPayloadInput,
-} from './messaging/outbound/reply-enqueue.ts';
-import {
-  computePushFailureDecision,
-  computeRetryRerouteDecision,
-} from './messaging/outbound/retry-policy.ts';
-import { sendBncrMedia, sendBncrText } from './messaging/outbound/send.ts';
-import { BNCR_CHANNEL_CAPABILITIES } from './plugin/capabilities.ts';
-import { BNCR_CONFIG_SURFACE } from './plugin/config.ts';
-import { BNCR_GATEWAY_METHODS } from './plugin/gateway-methods.ts';
-import { createBncrGatewayRuntime } from './plugin/gateway-runtime.ts';
-import { BNCR_MESSAGE_RECEIVE_POLICY } from './plugin/message-policy.ts';
-import { createBncrMessageSend } from './plugin/message-send.ts';
-import { createBncrMessagingSurface } from './plugin/messaging.ts';
-import { BNCR_CHANNEL_META } from './plugin/meta.ts';
-import { createBncrOutboundRuntime } from './plugin/outbound.ts';
-import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
-import { createBncrStatusSurface } from './plugin/status.ts';
-import { shouldEmitDedupLog as shouldEmitDedupLogFromRuntime } from './runtime/log-dedupe.ts';
-import {
-  buildBncrRuntimeAckObservability,
-  buildBncrRuntimeAckStrategy,
-  resolveBncrRuntimeAckTimeoutDecision,
-} from './runtime/outbound-ack-timeout.ts';
-import {
-  buildBncrRuntimeFlags,
-  buildBncrRuntimeStatusInput,
-  resolveBncrOutboundAckRequired,
-} from './runtime/outbound-flags.ts';
-import {
-  applyBncrPushFailureDecisionToEntry,
-  applyBncrRetryRerouteDecisionToEntry,
-  buildBncrAckOkTelemetryPatch,
-  buildBncrAckRetryEntryPatch,
-  buildBncrOutboxFailureEntryPatch,
-  buildBncrOutboxPushSuccessEntryPatch,
-} from './runtime/outbox-transitions.ts';
-import { buildRuntimeStatusSnapshots } from './runtime/status-snapshots.ts';
 import {
   type ChannelAccountWorkerHandle,
   clearAllBncrStatusWorkers,
@@ -376,253 +199,19 @@ import {
   stopBncrStatusWorker,
 } from './runtime/status-worker.ts';
 
-const BRIDGE_VERSION = 2;
-const BNCR_PUSH_EVENT = 'plugin.bncr.push';
-const BNCR_FILE_INIT_EVENT = 'plugin.bncr.file.init';
-const BNCR_FILE_CHUNK_EVENT = 'plugin.bncr.file.chunk';
-const BNCR_FILE_COMPLETE_EVENT = 'plugin.bncr.file.complete';
-const BNCR_FILE_ABORT_EVENT = 'plugin.bncr.file.abort';
-const CONNECT_TTL_MS = 120_000;
-const RECENT_INBOUND_SEND_WINDOW_MS = 60_000;
-const MAX_RETRY = 10;
-const MAX_DEAD_LETTER_ENTRIES = 1000;
-const MAX_SESSION_ROUTE_ENTRIES = 1000;
-const MAX_ACCOUNT_ACTIVITY_ENTRIES = 1000;
-const PUSH_DRAIN_INTERVAL_MS = 500;
-const PUSH_DRAIN_ACCOUNT_BUDGET = 5;
-const PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS = 2_000;
-const PUSH_DRAIN_EXCEPTION_RETRY_LIMIT = 3;
-const PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS = 1_000;
-const PUSH_DRAIN_STUCK_WARN_MS = 30_000;
-const PRE_PUSH_GUARD_RETRY_DELAY_MS = 1_000;
-const PUSH_ACK_TIMEOUT_MS = 30_000;
-const ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED = true;
-const RECOMMENDED_ACK_TIMEOUT_MIN_MS = PUSH_ACK_TIMEOUT_MS;
-const RECOMMENDED_ACK_TIMEOUT_MAX_MS = 90_000;
-const ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS = 60 * 60 * 1000;
-const ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD = 3;
-const ADAPTIVE_ACK_TIMEOUT_LOG_THROTTLE_MS = 5 * 60 * 1000;
-const OUTBOUND_READY_TTL_MS = 30_000;
-const PREFERRED_OUTBOUND_TTL_MS = 12_000;
-const FILE_FORCE_CHUNK = true; // 统一走 WS 分块，保留 base64 仅作兜底
-const FILE_INLINE_THRESHOLD = 5 * 1024 * 1024; // fallback 阈值（仅 FILE_FORCE_CHUNK=false 时生效）
-const FILE_CHUNK_SIZE = 256 * 1024; // 256KB
-const INBOUND_FILE_TRANSFER_MAX_BYTES = 50 * 1024 * 1024;
-const INBOUND_FILE_TRANSFER_MAX_CHUNKS =
-  Math.ceil(INBOUND_FILE_TRANSFER_MAX_BYTES / FILE_CHUNK_SIZE) + 1;
-const FILE_ACK_TIMEOUT_MS = 30_000;
-const FILE_TRANSFER_ACK_TTL_MS = 30_000;
-const MAX_EARLY_FILE_ACKS = 1000;
-const INTERNAL_SLEEP_MAX_MS = 120_000;
-const FILE_TRANSFER_KEEP_MS = 6 * 60 * 60 * 1000;
-const FILE_TRANSFER_TERMINAL_KEEP_MS = 10 * 60 * 1000;
-const REGISTER_WARMUP_WINDOW_MS = 30_000;
+type BncrRuntimeStatusInput = Parameters<BncrBridgeRuntime['buildIntegratedDiagnostics']>[1];
+
 let BNCR_DEBUG_VERBOSE = false; // 全局调试日志开关（默认关闭）
 
-type FileSendTransferState = {
-  transferId: string;
-  accountId: string;
-  sessionKey: string;
-  route: BncrRoute;
-  fileName: string;
-  mimeType: string;
-  fileSize: number;
-  chunkSize: number;
-  totalChunks: number;
-  fileSha256: string;
-  startedAt: number;
-  status: 'init' | 'transferring' | 'completed' | 'aborted';
-  ackedChunks: Set<number>;
-  failedChunks: Map<number, string>;
-  ownerConnId?: string;
-  ownerClientId?: string;
-  completedPath?: string;
-  terminalAt?: number;
-  error?: string;
-};
-
-type FileRecvTransferState = {
-  transferId: string;
-  accountId: string;
-  sessionKey: string;
-  route: BncrRoute;
-  fileName: string;
-  mimeType: string;
-  fileSize: number;
-  chunkSize: number;
-  totalChunks: number;
-  fileSha256: string;
-  startedAt: number;
-  status: 'init' | 'transferring' | 'completed' | 'aborted';
-  bufferByChunk: Map<number, Buffer>;
-  receivedChunks: Set<number>;
-  ownerConnId?: string;
-  ownerClientId?: string;
-  completedPath?: string;
-  terminalAt?: number;
-  error?: string;
-};
-
-type FileAckPayloadState = {
-  payload: Record<string, unknown>;
-  ok: boolean;
-  at: number;
-};
-
-type ChannelMessageActionAdapter = {
-  describeMessageTool: (ctx: { cfg: any }) => { actions: string[]; capabilities: unknown[] } | null;
-  supportsAction: (ctx: { action: string }) => boolean;
-  extractToolSend: (ctx: { args: unknown }) => unknown;
-  handleAction: (ctx: {
-    action: string;
-    params: unknown;
-    accountId: string;
-    mediaLocalRoots?: string[];
-  }) => Promise<unknown>;
-};
-
-type PersistedState = {
-  outbox: OutboxEntry[];
-  deadLetter: OutboxEntry[];
-  sessionRoutes: Array<{
-    sessionKey: string;
-    accountId: string;
-    route: BncrRoute;
-    updatedAt: number;
-  }>;
-  lastSessionByAccount?: Array<{
-    accountId: string;
-    sessionKey: string;
-    scope: string;
-    updatedAt: number;
-  }>;
-  lastActivityByAccount?: Array<{
-    accountId: string;
-    updatedAt: number;
-  }>;
-  lastInboundByAccount?: Array<{
-    accountId: string;
-    updatedAt: number;
-  }>;
-  lastOutboundByAccount?: Array<{
-    accountId: string;
-    updatedAt: number;
-  }>;
-  lastDriftSnapshot?: {
-    capturedAt: number;
-    registerCount: number | null;
-    apiGeneration: number | null;
-    postWarmupRegisterCount: number | null;
-    apiInstanceId: string | null;
-    registryFingerprint: string | null;
-    dominantBucket: string | null;
-    sourceBuckets: Record<string, number>;
-    traceWindowSize: number;
-    traceRecent: Array<Record<string, unknown>>;
-  } | null;
-};
-
-function now() {
-  return Date.now();
-}
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function finiteNonNegativeNumberOrNull(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-function clampFiniteNumber(value: unknown, fallback: number, min: number, max: number): number {
-  const n = Number(value);
-  const finite = Number.isFinite(n) ? n : fallback;
-  return Math.max(min, Math.min(finite, max));
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function backoffMs(retryCount: number): number {
-  // 1s,2s,4s,8s... capped by retry count checks
-  return Math.max(1_000, 1_000 * 2 ** Math.max(0, retryCount - 1));
-}
-
-function fileExtFromMime(mimeType?: string): string {
-  const mt = asString(mimeType || '').toLowerCase();
-  const map: Record<string, string> = {
-    'image/jpeg': '.jpg',
-    'image/jpg': '.jpg',
-    'image/png': '.png',
-    'image/webp': '.webp',
-    'image/gif': '.gif',
-    'video/mp4': '.mp4',
-    'video/webm': '.webm',
-    'video/quicktime': '.mov',
-    'audio/mpeg': '.mp3',
-    'audio/mp4': '.m4a',
-    'application/pdf': '.pdf',
-    'text/plain': '.txt',
-  };
-  return map[mt] || '';
-}
-
-function sanitizeFileName(rawName?: string, fallback = 'file.bin'): string {
-  const name = asString(rawName || '').trim();
-  const base = name || fallback;
-  const cleaned = Array.from(base, (ch) => {
-    const code = ch.charCodeAt(0);
-    if (code <= 0x1f) return '_';
-    if ('\\/:*?"<>|'.includes(ch)) return '_';
-    return ch;
-  })
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return cleaned || fallback;
-}
-
-function buildTimestampFileName(mimeType?: string): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  const ext = fileExtFromMime(mimeType) || '.bin';
-  return `bncr_${ts}_${Math.random().toString(16).slice(2, 8)}${ext}`;
-}
-
-function resolveOutboundFileName(params: {
-  mediaUrl?: string;
-  fileName?: string;
-  mimeType?: string;
-}): string {
-  const mediaUrl = asString(params.mediaUrl || '').trim();
-  const mimeType = asString(params.mimeType || '').trim();
-
-  // 线上下载的文件，统一用时间戳命名（避免超长/无意义文件名）
-  if (/^https?:\/\//i.test(mediaUrl)) {
-    return buildTimestampFileName(mimeType);
-  }
-
-  const candidate = sanitizeFileName(params.fileName, 'file.bin');
-  if (candidate.length <= 80) return candidate;
-
-  // 超长文件名做裁剪，尽量保留扩展名
-  const ext = path.extname(candidate);
-  const stem = candidate.slice(0, Math.max(1, 80 - ext.length));
-  return `${stem}${ext}`;
-}
+type BncrStatusWorkerContext = Parameters<typeof startBncrStatusWorker>[1];
 
 class BncrBridgeRuntime {
+  // Identity / lifecycle ----------------------------------------------------
   private api: OpenClawPluginApi;
+
+  private get runtimeApi(): OpenClawPluginApi {
+    return this.api;
+  }
   private statePath: string | null = null;
   private bridgeId = `${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
   private recentMediaDedupeBySession = new Map<string, Map<string, MediaDedupeCacheEntry>>();
@@ -651,6 +240,8 @@ class BncrBridgeRuntime {
       isPrimary: boolean;
     }
   >();
+
+  // Register trace / drift diagnostics --------------------------------------
   private staleCounters = {
     staleConnect: 0,
     staleInbound: 0,
@@ -665,6 +256,8 @@ class BncrBridgeRuntime {
   private lastApiInstanceId: string | null = null;
   private lastRegistryFingerprint: string | null = null;
   private lastDriftSnapshot: PersistedState['lastDriftSnapshot'] = null;
+  private pluginRoot: string | null = null;
+  private pluginFile: string | null = null;
   private registerTraceRecent: Array<{
     ts: number;
     bridgeId: string;
@@ -680,11 +273,13 @@ class BncrBridgeRuntime {
     stackBucket: string;
   }> = [];
 
+  // Connection / outbound ownership -----------------------------------------
   private connections = new Map<string, BncrConnection>(); // connectionKey -> connection
   private activeConnectionByAccount = new Map<string, string>(); // accountId -> connectionKey
   private outbox = new Map<string, OutboxEntry>(); // messageId -> entry
   private deadLetter: OutboxEntry[] = [];
 
+  // Session routing / account activity -------------------------------------
   private sessionRoutes = new Map<
     string,
     { accountId: string; route: BncrRoute; updatedAt: number }
@@ -711,6 +306,8 @@ class BncrBridgeRuntime {
   private lastAckPushLatencyMsByAccount = new Map<string, number>();
   private lastLateAckQueueLatencyMsByAccount = new Map<string, number>();
   private lastLateAckPushLatencyMsByAccount = new Map<string, number>();
+
+  // Adaptive ACK telemetry ---------------------------------------------------
   private adaptiveAckRecoveryOkCountByAccount = new Map<string, number>();
   private adaptiveAckTimeoutLogStateByAccount = new Map<
     string,
@@ -720,6 +317,7 @@ class BncrBridgeRuntime {
   private logDedupeState = new Map<string, { at: number; sig: string }>();
   private canonicalAgentId: string | null = null;
 
+  // Health / status counters ------------------------------------------------
   // 内置健康/回归计数（替代独立脚本）
   private startedAt = now();
   private stopped = false;
@@ -728,6 +326,7 @@ class BncrBridgeRuntime {
   private activityEventsByAccount = new Map<string, number>();
   private ackEventsByAccount = new Map<string, number>();
 
+  // Timers / background workers ---------------------------------------------
   private saveTimer: NodeJS.Timeout | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
   private pushDrainRunningAccounts = new Set<string>();
@@ -756,6 +355,7 @@ class BncrBridgeRuntime {
   >();
   private gatewayContext: GatewayRequestHandlerOptions['context'] | null = null;
 
+  // File transfer runtime ----------------------------------------------------
   // 文件互传状态（V1：尽力而为，重连不续传）
   private fileSendTransfers = new Map<string, FileSendTransferState>(); // OpenClaw -> Bncr（服务端发起）
   private fileRecvTransfers = new Map<string, FileRecvTransferState>(); // Bncr -> OpenClaw（客户端发起）
@@ -770,26 +370,64 @@ class BncrBridgeRuntime {
   >();
   private earlyFileAcks = new Map<string, FileAckPayloadState>();
 
-  private rememberEarlyFileAck(key: string, state: FileAckPayloadState) {
-    this.earlyFileAcks.set(key, state);
-    while (this.earlyFileAcks.size > MAX_EARLY_FILE_ACKS) {
-      const oldestKey = this.earlyFileAcks.keys().next().value;
-      if (!oldestKey) break;
-      this.earlyFileAcks.delete(oldestKey);
-    }
+  private readonly bridgeSupportRuntime = createBridgeSupportRuntime({
+    isStopped: () => this.stopped,
+    hasSaveTimer: () => Boolean(this.saveTimer),
+    setSaveTimer: (timer) => {
+      this.saveTimer = timer;
+    },
+    flushState: () => this.flushState(),
+    normalizeAccountId,
+    getCounterValue: (map, accountId) => map.get(accountId) || 0,
+    getRuntimeConfig: () => getOpenClawRuntimeConfig(this.api),
+    channelId: CHANNEL_ID,
+    readCurrentCanonicalAgentId: () => this.canonicalAgentId,
+    resolveAgentRoute: (args) =>
+      resolveOpenClawAgentRoute(this.api as OpenClawChannelRuntimeApiHolder, {
+        ...args,
+        peer: args.peer as unknown,
+      }),
+    readCachedCanonicalAgentId: () => this.canonicalAgentId,
+    writeCachedCanonicalAgentId: (agentId) => {
+      this.canonicalAgentId = agentId;
+    },
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+    readDebugVerbose: () => BNCR_DEBUG_VERBOSE,
+    writeDebugVerbose: (value) => {
+      BNCR_DEBUG_VERBOSE = value;
+    },
+  });
+
+  constructor(api: OpenClawPluginApi, runtimePaths: BncrBridgeRuntimePaths = {}) {
+    this.api = api;
+    this.bindRuntimePaths(runtimePaths);
   }
 
-  constructor(api: OpenClawPluginApi) {
-    this.api = api;
-  }
+  // Lifecycle / logging / register tracing ---------------------------------
+  // Read this block first: it establishes bridge identity, logging, status
+  // worker wiring, and register-trace state before the message/runtime flows.
+
+  // Basic bridge identity / binding ----------------------------------------
 
   bindApi(api: OpenClawPluginApi) {
     this.api = api;
   }
 
+  bindRuntimePaths(runtimePaths: BncrBridgeRuntimePaths = {}) {
+    if (typeof runtimePaths.pluginRoot === 'string' && runtimePaths.pluginRoot.trim()) {
+      this.pluginRoot = runtimePaths.pluginRoot;
+    }
+    if (typeof runtimePaths.pluginFile === 'string' && runtimePaths.pluginFile.trim()) {
+      this.pluginFile = runtimePaths.pluginFile;
+    }
+  }
+
   getBridgeId() {
     return this.bridgeId;
   }
+
+  // Logging helpers ---------------------------------------------------------
 
   private logInfo(scope: string | undefined, message: string, options?: { debugOnly?: boolean }) {
     emitBncrLog('info', scope, message, options, () => this.isDebugEnabled());
@@ -849,6 +487,8 @@ class BncrBridgeRuntime {
     return formatDisplayScope(route);
   }
 
+  // Inbound / outbound summary logs ----------------------------------------
+
   private logInboundSummary(params: {
     accountId: string;
     route: BncrRoute;
@@ -856,7 +496,7 @@ class BncrBridgeRuntime {
     text: string;
     hasMedia: boolean;
   }) {
-    const type = params.hasMedia ? `${params.msgType}+media` : params.msgType;
+    const type = params.msgType;
     const preview = this.summarizeTextPreview(params.text);
     this.logInfo('inbound', [type, this.summarizeScope(params.route), preview].join('|'));
   }
@@ -874,46 +514,16 @@ class BncrBridgeRuntime {
   }
 
   private buildStatusWorkerRuntime() {
-    return {
-      workers: this.channelAccountWorkers,
-      bridgeId: this.bridgeId,
-      hooks: {
-        isOnline: (accountId: string) => this.isOnline(accountId),
-        hasRecentInboundReachability: (accountId: string) =>
-          this.hasRecentInboundReachability(accountId),
-        getLastActivityAt: (accountId: string, previous: Record<string, any>) =>
-          this.lastActivityByAccount.get(accountId) ||
-          this.lastInboundByAccount.get(accountId) ||
-          this.lastOutboundByAccount.get(accountId) ||
-          previous?.lastEventAt ||
-          null,
-        getActiveConnectionKey: (accountId: string) =>
-          this.activeConnectionByAccount.get(accountId) || null,
-        getActiveConnections: (accountId: string) =>
-          Array.from(this.connections.values())
-            .filter((c) => c.accountId === accountId)
-            .map((c) => ({
-              connId: c.connId,
-              clientId: c.clientId,
-              inboundOnly: c.inboundOnly === true,
-              outboundReady: c.outboundReady === true,
-              preferredForOutbound: c.preferredForOutbound === true,
-            })),
-        buildStatusMeta: (accountId: string) => this.buildStatusMeta(accountId),
-        logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) =>
-          this.logInfo(scope, message, options),
-        logInfoDedup: (
-          scope: string | undefined,
-          message: string,
-          options: { key: string; sig: string; debugOnly?: boolean; windowMs?: number },
-        ) => this.logInfoDedup(scope, message, options),
-      },
-    };
+    return this.bridgeStatusWorkerFacade;
   }
+
+  // Status-worker lifecycle -------------------------------------------------
 
   private clearAllChannelAccountWorkers(reason: string) {
     clearAllBncrStatusWorkers(this.buildStatusWorkerRuntime(), reason);
   }
+
+  // Register trace state bridges -------------------------------------------
 
   private getRegisterTraceRuntimeState(): RegisterTraceRuntimeState {
     return {
@@ -926,7 +536,7 @@ class BncrBridgeRuntime {
       pluginVersion: this.pluginVersion,
       lastApiInstanceId: this.lastApiInstanceId,
       lastRegistryFingerprint: this.lastRegistryFingerprint,
-      lastDriftSnapshot: this.lastDriftSnapshot,
+      lastDriftSnapshot: this.lastDriftSnapshot ?? null,
       registerTraceRecent: this.registerTraceRecent,
     };
   }
@@ -951,6 +561,8 @@ class BncrBridgeRuntime {
       warmupWindowMs: REGISTER_WARMUP_WINDOW_MS,
     });
   }
+
+  // Register observation / lease bookkeeping -------------------------------
 
   noteRegister(meta: {
     source?: string;
@@ -1079,84 +691,112 @@ class BncrBridgeRuntime {
   }
 
   private buildRuntimeSurfaceDiagnostics() {
-    return buildOpenClawChannelRuntimeSurfaceDiagnostics(this.api);
+    return this.bridgeRuntimeSurfaceFacade.buildRuntimeSurfaceDiagnostics();
   }
 
-  private buildExtendedDiagnostics(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    const diagnostics = this.buildIntegratedDiagnostics(acc) as Record<string, any>;
-    const outboxDiagnostics = this.buildOutboxDiagnostics(acc);
-    const ackObservability = this.buildRuntimeAckObservability(acc);
-    const prePushGuardSkipCount = this.getCounter(this.prePushGuardSkipCountByAccount, acc);
-    const lastPrePushGuardSkipAt = this.lastPrePushGuardSkipAtByAccount.get(acc) || null;
-    const lastPrePushGuardSkipReason = this.lastPrePushGuardSkipReasonByAccount.get(acc) || null;
-    const hasGatewayContext = Boolean(this.gatewayContext);
-    return buildExtendedDiagnosticsFromRuntime({
-      diagnostics,
-      runtimeSurface: this.buildRuntimeSurfaceDiagnostics(),
-      register: {
-        bridgeId: this.bridgeId,
-        gatewayPid: this.gatewayPid,
-        pluginVersion: this.pluginVersion,
-        source: this.pluginSource,
-        apiInstanceId: this.lastApiInstanceId,
-        registryFingerprint: this.lastRegistryFingerprint,
-        registerCount: this.registerCount,
-        firstRegisterAt: this.firstRegisterAt,
-        lastRegisterAt: this.lastRegisterAt,
-        lastApiRebindAt: this.lastApiRebindAt,
-        apiGeneration: this.apiGeneration,
-        traceRecent: this.registerTraceRecent,
-        traceSummary: this.buildRegisterTraceSummary(),
-        lastDriftSnapshot: this.lastDriftSnapshot,
-      },
-      connection: {
-        active: this.activeConnectionCount(acc),
-        primaryLeaseId: this.primaryLeaseId,
-        primaryEpoch: this.connectionEpoch || null,
-        acceptedConnections: this.acceptedConnections,
-        lastConnectAt: this.lastConnectAt,
-        lastDisconnectAt: this.lastDisconnectAt,
-        lastActivityAt: this.lastActivityAtGlobal,
-        lastInboundAt: this.lastInboundAtGlobal,
-        lastAckAt: this.lastAckAtGlobal,
-        hasGatewayContext: Boolean(this.gatewayContext),
-        lastGatewayContextAt: this.lastGatewayContextAt,
-        recent: Array.from(this.recentConnections.entries()).map(([leaseId, entry]) => ({
-          leaseId,
-          epoch: entry.epoch,
-          connectedAt: entry.connectedAt,
-          lastActivityAt: entry.lastActivityAt,
-          isPrimary: entry.isPrimary,
-        })),
-      },
-      outbound: buildExtendedOutboundDiagnostics({
-        outbox: outboxDiagnostics,
-        enqueueCount: this.getCounter(this.outboundEnqueueCountByAccount, acc),
-        lastEnqueueAt: this.lastOutboundEnqueueAtByAccount.get(acc) || null,
-        prePushGuardSkipCount,
-        lastPrePushGuardSkipAt,
-        lastPrePushGuardSkipReason,
-        hasGatewayContext,
-        lastGatewayContextAt: this.lastGatewayContextAt,
-        ackObservability,
-        nowMs: now(),
-      }),
-      deadLetterSummary: this.buildDeadLetterDiagnostics(acc),
-      protocol: {
-        bridgeVersion: BRIDGE_VERSION,
-        protocolVersion: 2,
-        minClientProtocol: 1,
-        features: {
-          leaseId: true,
-          connectionEpoch: true,
-          staleObserveOnly: true,
-          staleRejectAck: false,
-          staleRejectFile: false,
-        },
-      },
-      stale: this.staleCounters,
+  private buildBridgeStatusProjectionRuntime() {
+    return buildBridgeStatusProjectionRuntime({
+      buildAccountQueueCounters: (accountId: string) => this.buildAccountQueueCounters(accountId),
+      buildExtendedDiagnostics: (
+        accountId: string,
+        args?: Parameters<typeof this.buildExtendedDiagnostics>[1],
+      ) => this.buildExtendedDiagnostics(accountId, args),
+      buildRuntimeFlags: (accountId?: string) => this.buildRuntimeFlags(accountId),
+      buildRuntimeStatusInput: (
+        accountId: string,
+        overrides: Parameters<typeof this.buildRuntimeStatusInput>[1],
+      ) => this.buildRuntimeStatusInput(accountId, overrides),
+      getAccountRuntimeSnapshot: (
+        accountId: string,
+        runtimeStatusInput: Parameters<typeof this.getAccountRuntimeSnapshot>[1],
+      ) => this.getAccountRuntimeSnapshot(accountId, runtimeStatusInput),
+      buildIntegratedDiagnostics: (
+        accountId: string,
+        runtimeStatusInput: Parameters<typeof this.buildIntegratedDiagnostics>[1],
+      ) => this.buildIntegratedDiagnostics(accountId, runtimeStatusInput),
+      buildDownlinkHealth: (accountId: string) => this.buildDownlinkHealth(accountId),
+      resolveChannelRoot: () => resolveBncrChannelRoot(this.pluginRoot || ''),
     });
+  }
+
+  private buildBridgeDrainTriggers() {
+    return buildBridgeDrainTriggers({
+      flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
+    });
+  }
+
+  private buildBridgeLifecycleMarkers() {
+    return buildBridgeLifecycleMarkers({
+      markLastActivityAt: () => {
+        this.lastActivityAtGlobal = now();
+      },
+      markLastAckAt: () => {
+        this.lastAckAtGlobal = now();
+      },
+    });
+  }
+
+  private buildInboundSurfaceActivityRuntime() {
+    return buildInboundSurfaceActivityRuntime({
+      markInboundGlobalActivity: () => {
+        this.lastInboundAtGlobal = now();
+      },
+      incrementInboundEvents: (accountId: string) => {
+        this.incrementCounter(this.inboundEventsByAccount, accountId);
+      },
+      setLastInboundByAccount: (accountId: string, at: number) => {
+        this.lastInboundByAccount.set(accountId, at);
+      },
+      markActivity: (accountId: string, at: number) => {
+        this.markActivity(accountId, at);
+      },
+    });
+  }
+
+  private buildInboundSurfaceConnectionRuntime() {
+    return buildInboundSurfaceConnectionRuntime({
+      shouldIgnoreStaleEvent: (args: Parameters<typeof this.shouldIgnoreStaleEvent>[0]) =>
+        this.shouldIgnoreStaleEvent(args),
+      observeLease: (
+        kind: Parameters<typeof this.observeLease>[0],
+        payload: Parameters<typeof this.observeLease>[1],
+      ) => this.observeLease(kind, payload),
+      matchesTransferOwner: (args: Parameters<typeof this.matchesTransferOwner>[0]) =>
+        this.matchesTransferOwner(args),
+      refreshAcceptedFileTransferLiveState: (
+        args: Parameters<typeof this.refreshAcceptedFileTransferLiveState>[0],
+      ) => this.refreshAcceptedFileTransferLiveState(args),
+      refreshLiveConnectionState: (args: Parameters<typeof this.refreshLiveConnectionState>[0]) =>
+        this.refreshLiveConnectionState(args),
+      isOnline: (accountId: string) => this.isOnline(accountId),
+      hasRecentInboundReachability: (accountId: string) =>
+        this.hasRecentInboundReachability(accountId),
+      getActiveConnectionKey: (accountId: string) =>
+        this.activeConnectionByAccount.get(accountId) || null,
+      buildActiveConnectionDebugList: (accountId: string) =>
+        this.buildActiveConnectionDebugList(accountId),
+    });
+  }
+
+  private buildChannelSendTargetRuntime() {
+    return buildChannelSendTargetRuntime({
+      resolveVerifiedTarget: (to: string, accountId: string) =>
+        this.resolveVerifiedTarget(to, accountId),
+      rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) =>
+        this.rememberSessionRoute(sessionKey, accountId, route),
+      enqueueFromReply: (args: Parameters<BncrBridgeRuntime['enqueueFromReply']>[0]) =>
+        this.enqueueFromReply(args),
+    });
+  }
+
+  private buildExtendedDiagnostics(
+    accountId: string,
+    options: {
+      runtimeStatusInput?: BncrRuntimeStatusInput;
+      integratedDiagnostics?: BncrDiagnosticsSummary;
+    } = {},
+  ): BncrExtendedDiagnostics {
+    return this.bridgeExtendedDiagnosticsFacade.buildExtendedDiagnostics(accountId, options);
   }
 
   isDebugEnabled(): boolean {
@@ -1164,231 +804,172 @@ class BncrBridgeRuntime {
   }
 
   startService = async (ctx: OpenClawPluginServiceContext, debug?: boolean) => {
-    this.stopped = false;
-    this.statePath = path.join(ctx.stateDir, 'bncr-bridge-state.json');
-    try {
-      const cfg = getOpenClawRuntimeConfig(this.api);
-      this.initializeCanonicalAgentId(cfg);
-      for (const warning of resolveBncrConfigWarnings(cfg?.channels?.[CHANNEL_ID] || {})) {
-        this.logWarn('config', warning);
-      }
-    } catch {
-      // ignore startup canonical agent initialization errors
-    }
-    await this.loadState();
-    if (typeof debug === 'boolean') BNCR_DEBUG_VERBOSE = debug;
-    await this.refreshDebugFlagFromConfig({ forceLog: true });
-    const bootDiag = this.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
-    this.logInfo(
-      'startup',
-      `bridge=${this.bridgeId} routes=${bootDiag.regression.totalKnownRoutes}`,
-    );
-    this.logInfo(
-      'debug',
-      `service started bridge=${this.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter} debug=${BNCR_DEBUG_VERBOSE}`,
-      { debugOnly: true },
+    await startBncrBridgeService(
+      {
+        bridgeId: this.bridgeId,
+        setStopped: (value) => {
+          this.stopped = value;
+        },
+        setStatePath: (value) => {
+          this.statePath = value;
+        },
+        getRuntimeConfig: () => getOpenClawRuntimeConfig(this.api),
+        initializeCanonicalAgentId: (cfg) => this.initializeCanonicalAgentId(cfg),
+        logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+        loadState: () => this.loadState(),
+        setDebugFlag: (value) => {
+          BNCR_DEBUG_VERBOSE = value;
+        },
+        refreshDebugFlagFromConfig: (options) => this.refreshDebugFlagFromConfig(options),
+        buildIntegratedDiagnostics: (accountId) => this.buildIntegratedDiagnostics(accountId),
+        logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+        getChannelConfigRoot: (cfg) =>
+          (((cfg as BncrChannelConfigRoot | null | undefined)?.channels || null)?.[CHANNEL_ID] as
+            | Record<string, unknown>
+            | undefined) || {},
+      },
+      ctx,
+      debug,
     );
   };
 
   stopService = async () => {
-    this.cleanupRuntimeWaitersAndTimers('service stopped');
-    await this.flushState();
-    this.logInfo('debug', 'service stopped', { debugOnly: true });
+    await stopBncrBridgeService({
+      cleanupRuntime: (reason) => this.cleanupRuntimeWaitersAndTimers(reason),
+      flushState: () => this.flushState(),
+      logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    });
   };
 
   shutdown() {
-    this.cleanupRuntimeWaitersAndTimers('shutdown');
+    shutdownBncrBridgeService({
+      cleanupRuntime: (reason) => this.cleanupRuntimeWaitersAndTimers(reason),
+    });
   }
 
   private cleanupRuntimeWaitersAndTimers(reason: string) {
-    this.logInfo(
-      'lifecycle',
-      `cleanup ${JSON.stringify({
-        bridge: this.bridgeId,
-        reason,
-        messageAckWaiters: this.messageAckWaiters.size,
-        fileAckWaiters: this.fileAckWaiters.size,
-        earlyFileAcks: this.earlyFileAcks.size,
-        outbox: this.outbox.size,
-        runningDrainAccounts: this.pushDrainRunningAccounts.size,
-        channelAccountWorkers: this.channelAccountWorkers.size,
-        hasSaveTimer: !!this.saveTimer,
-        hasPushTimer: !!this.pushTimer,
-      })}`,
-      { debugOnly: true },
+    cleanupBncrBridgeRuntime(
+      {
+        bridgeId: this.bridgeId,
+        logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+        setStopped: (value) => {
+          this.stopped = value;
+        },
+        clearAllChannelAccountWorkers: (cleanupReason) =>
+          this.clearAllChannelAccountWorkers(cleanupReason),
+        getMessageAckWaiterCount: () => this.messageAckWaiters.size,
+        getFileAckWaiterCount: () => this.fileAckWaiters.size,
+        getEarlyFileAckCount: () => this.earlyFileAcks.size,
+        getOutboxCount: () => this.outbox.size,
+        getRunningDrainAccountCount: () => this.pushDrainRunningAccounts.size,
+        getChannelAccountWorkerCount: () => this.channelAccountWorkers.size,
+        hasSaveTimer: () => Boolean(this.saveTimer),
+        hasPushTimer: () => Boolean(this.pushTimer),
+        clearSaveTimer: () => {
+          if (!this.saveTimer) return;
+          clearTimeout(this.saveTimer);
+          this.saveTimer = null;
+        },
+        clearPushTimer: () => {
+          if (!this.pushTimer) return;
+          clearTimeout(this.pushTimer);
+          this.pushTimer = null;
+        },
+        clearAllMessageAckWaiters: (result) =>
+          this.messageAckRuntime.clearAllMessageAckWaiters(result),
+        clearAllFileAckWaiters: (cleanupReason) =>
+          this.fileAckRuntime.clearAllFileAckWaiters(cleanupReason),
+      },
+      reason,
     );
-    this.stopped = true;
-    this.clearAllChannelAccountWorkers(reason);
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-    if (this.pushTimer) {
-      clearTimeout(this.pushTimer);
-      this.pushTimer = null;
-    }
-    for (const waiter of this.messageAckWaiters.values()) {
-      clearTimeout(waiter.timer);
-      waiter.resolve('timeout');
-    }
-    this.messageAckWaiters.clear();
-    for (const waiter of this.fileAckWaiters.values()) {
-      clearTimeout(waiter.timer);
-      waiter.reject(new Error(reason));
-    }
-    this.fileAckWaiters.clear();
-    this.earlyFileAcks.clear();
   }
 
+  // Persistence / counters / lightweight bookkeeping -----------------------
+  // These helpers manage bounded maps, persistence timers, dead-letter summary
+  // helpers, and configuration-derived diagnostics flags shared by later flows.
+
   private scheduleSave() {
-    if (this.stopped) return;
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      if (this.stopped) return;
-      void this.flushState();
-    }, 300);
+    this.bridgeSupportRuntime.scheduleSave();
   }
 
   private incrementCounter(map: Map<string, number>, accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    map.set(acc, (map.get(acc) || 0) + 1);
+    this.bridgeSupportRuntime.incrementCounter(map, accountId);
   }
 
   private getCounter(map: Map<string, number>, accountId: string): number {
-    return map.get(normalizeAccountId(accountId)) || 0;
+    return this.bridgeSupportRuntime.getCounter(map, accountId);
   }
 
   private buildDeadLetterDiagnostics(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    return buildDeadLetterDiagnosticsFromRuntime({
-      entries: this.getAccountDeadLetterEntries(acc),
-      allAccountsTotal: this.deadLetter.length,
-      sinceStart: this.getCounter(this.deadLetterSinceStartByAccount, acc),
-      cappedAt: MAX_DEAD_LETTER_ENTRIES,
-    });
+    return this.deadLetterDiagnosticsHelpers.buildDeadLetterDiagnostics(accountId);
   }
 
+  // Dead-letter / outbox diagnostics helpers -------------------------------
+
   private logDeadLetterSummary(accountId: string, options?: { force?: boolean; source?: string }) {
-    const acc = normalizeAccountId(accountId);
-    const summary = this.buildDeadLetterDiagnostics(acc);
-    const message = [
-      `${acc}|total=${summary.total}`,
-      `all=${summary.allAccountsTotal}`,
-      `sinceStart=${summary.sinceStart}`,
-      `top=${formatDeadLetterTopReasons(summary.topReasons)}`,
-      `source=${options?.source || 'update'}`,
-    ].join('|');
-    if (options?.force) {
-      this.logInfo('deadLetter summary', message);
-      return;
-    }
-    this.logInfoDedup('deadLetter summary', message, {
-      key: `dead-letter-summary:${acc}:update`,
-      sig: 'dead-letter-summary',
-      windowMs: 5 * 60 * 1000,
-    });
+    this.deadLetterDiagnosticsHelpers.logDeadLetterSummary(accountId, options);
   }
 
   private buildOutboxDiagnostics(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    return buildOutboxQueueDiagnostics({
-      accountId: acc,
-      outboxEntries: this.outbox.values(),
-      pendingAllAccounts: this.outbox.size,
-      pushConnIds: this.resolvePushConnIds(acc),
-    });
+    return this.outboxDiagnosticsHelpers.buildOutboxDiagnostics(accountId);
   }
+
+  private readonly outboxDiagnosticsHelpers = createBncrOutboxDiagnosticsHelpers({
+    normalizeAccountId,
+    outboxValues: () => this.outbox.values(),
+    pendingAllAccounts: () => this.outbox.size,
+    resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
+  });
+
+  private readonly deadLetterDiagnosticsHelpers = createBncrDeadLetterDiagnosticsHelpers({
+    normalizeAccountId,
+    getDeadLetterEntries: () => this.deadLetter,
+    maxDeadLetterEntries: MAX_DEAD_LETTER_ENTRIES,
+    getCounter: (map, accountId) => this.getCounter(map, accountId),
+    deadLetterSinceStartByAccount: this.deadLetterSinceStartByAccount,
+    getAccountDeadLetterEntries: (accountId) => this.getAccountDeadLetterEntries(accountId),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logInfoDedup: (scope, message, options) => this.logInfoDedup(scope, message, options),
+  });
 
   private filterDeadLetterEntries(params: {
     accountId: string;
     reason?: string | null;
     olderThan?: number | null;
   }) {
-    const acc = normalizeAccountId(params.accountId);
-    const reason = asString(params.reason || '').trim();
-    return this.getAccountDeadLetterEntries(acc).filter((entry) => {
-      if (reason && entry.lastError !== reason) return false;
-      if (typeof params.olderThan === 'number') {
-        const createdAt = Number(entry.createdAt);
-        if (!Number.isFinite(createdAt) || createdAt >= params.olderThan) return false;
-      }
-      return true;
-    });
+    return this.deadLetterDiagnosticsHelpers.filterDeadLetterEntries(params);
   }
 
+  // Debug flag / canonical agent resolution --------------------------------
+
   private async refreshDebugFlagFromConfig(options?: { forceLog?: boolean }) {
-    try {
-      const cfg = getOpenClawRuntimeConfig(this.api);
-      const raw = (cfg as any)?.channels?.[CHANNEL_ID]?.debug?.verbose;
-      const next = typeof raw === 'boolean' ? raw : false;
-      const changed = next !== BNCR_DEBUG_VERBOSE;
-      BNCR_DEBUG_VERBOSE = next;
-      if (changed || options?.forceLog) {
-        this.logInfo('debug', `verbose=${BNCR_DEBUG_VERBOSE}`, { debugOnly: true });
-      }
-    } catch {
-      // ignore config read errors
-    }
+    await this.bridgeSupportRuntime.refreshDebugFlagFromConfig(options);
   }
 
   private async syncDebugFlag() {
-    await this.refreshDebugFlagFromConfig();
+    await this.bridgeSupportRuntime.syncDebugFlag();
   }
 
   private tryResolveBindingAgentId(args: {
-    cfg: any;
+    cfg: BncrChannelConfigRoot;
     accountId: string;
-    peer?: any;
+    peer?: unknown;
     channelId?: string;
   }): string | null {
-    try {
-      const resolved = resolveOpenClawAgentRoute(this.api, {
-        cfg: args.cfg,
-        channel: args.channelId || CHANNEL_ID,
-        accountId: normalizeAccountId(args.accountId),
-        peer: args.peer,
-      });
-      const agentId = asString(resolved?.agentId || '').trim();
-      return agentId || null;
-    } catch {
-      return null;
-    }
+    return this.bridgeSupportRuntime.tryResolveBindingAgentId(args);
   }
 
-  private initializeCanonicalAgentId(cfg: any) {
-    if (this.canonicalAgentId) return;
-    const agentId = this.tryResolveBindingAgentId({
-      cfg,
-      accountId: BNCR_DEFAULT_ACCOUNT_ID,
-      channelId: CHANNEL_ID,
-      peer: { kind: 'direct', id: 'bootstrap' },
-    });
-    if (!agentId) return;
-    this.canonicalAgentId = agentId;
+  private initializeCanonicalAgentId(cfg: BncrChannelConfigRoot) {
+    this.bridgeSupportRuntime.initializeCanonicalAgentId(cfg);
   }
 
-  private ensureCanonicalAgentId(args: {
-    cfg: any;
+  ensureCanonicalAgentId(args: {
+    cfg: BncrChannelConfigRoot;
     accountId: string;
-    peer?: any;
+    peer?: unknown;
     channelId?: string;
   }): string {
-    if (this.canonicalAgentId) return this.canonicalAgentId;
-
-    const agentId = this.tryResolveBindingAgentId(args);
-    if (agentId) {
-      this.canonicalAgentId = agentId;
-      return agentId;
-    }
-
-    this.canonicalAgentId = 'main';
-    this.logWarn(
-      'target',
-      'binding agent unresolved; fallback to main for current process lifetime',
-      { debugOnly: true },
-    );
-    return this.canonicalAgentId;
+    return this.bridgeSupportRuntime.ensureCanonicalAgentId(args);
   }
 
   private countInvalidOutboxSessionKeys(accountId: string): number {
@@ -1411,394 +992,105 @@ class BncrBridgeRuntime {
     });
   }
 
-  private buildIntegratedDiagnostics(accountId: string) {
-    const ackObservability = this.buildRuntimeAckObservability(accountId);
-    const ackStrategy = this.buildRuntimeAckStrategy(ackObservability);
-    return {
-      ...buildIntegratedDiagnosticsFromRuntime(this.buildRuntimeStatusInput(accountId)),
-      ackObservability,
-      ackStrategy,
-    };
+  private buildIntegratedDiagnostics(
+    accountId: string,
+    runtimeStatusInput?: NonNullable<typeof this.runtimeStatusInputType>,
+  ) {
+    return this.bridgeDiagnosticsFacade.buildIntegratedDiagnostics(accountId, runtimeStatusInput);
   }
 
   private buildDownlinkHealth(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    return buildDownlinkHealthFromRuntime({
-      accountId: acc,
-      now: now(),
-      outboxEntries: this.outbox.values(),
-      lastAckOkAt: this.lastAckOkByAccount.get(acc) || null,
-      lastAckTimeoutAt: this.lastAckTimeoutByAccount.get(acc) || null,
-      recentAckTimeoutCount: this.getCounter(this.ackTimeoutCountByAccount, acc),
-      activeConnectionCount: this.activeConnectionCount(acc),
-      lastInboundAt: this.lastInboundByAccount.get(acc) || null,
-      lastActivityAt: this.lastActivityByAccount.get(acc) || null,
-      onlineByConn: this.isOnline(acc),
-    });
+    return this.bridgeDiagnosticsFacade.buildDownlinkHealth(accountId);
   }
 
-  private normalizePersistedOutboxEntry(entry: any): OutboxEntry | null {
+  // Persistence facade ------------------------------------------------------
+  // These methods keep bridge-owned load/dump call sites readable while the
+  // actual bounded-state normalization lives in the transient runtime group.
+
+  private normalizePersistedOutboxEntry(entry: unknown): OutboxEntry | null {
     return normalizePersistedOutboxEntryFromRuntime({
-      entry,
-      canonicalAgentId: this.canonicalAgentId,
+      entry: entry as Parameters<typeof normalizePersistedOutboxEntryFromRuntime>[0]['entry'],
+      canonicalAgentId: this.canonicalAgentId || '',
       now,
     });
   }
 
   private loadPersistedAccountTimestampMap(target: Map<string, number>, persisted: unknown): void {
-    target.clear();
-    const items = Array.isArray(persisted) ? persisted.slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES) : [];
-    for (const item of items) {
-      const accountId = normalizeAccountId(item?.accountId);
-      const updatedAt = finiteNumberOr(item?.updatedAt, 0);
-      if (updatedAt <= 0) continue;
-      target.set(accountId, updatedAt);
-    }
+    this.stateStore.loadPersistedAccountTimestampMap(target, persisted);
   }
 
   private dumpPersistedAccountTimestampMap(source: Map<string, number>) {
-    return Array.from(source.entries())
-      .map(([accountId, updatedAt]) => ({
-        accountId,
-        updatedAt,
-      }))
-      .slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES);
+    return this.stateStore.dumpPersistedAccountTimestampMap(source);
   }
 
   private loadPersistedLastSessionMap(persisted: unknown): void {
-    this.lastSessionByAccount.clear();
-    const items = Array.isArray(persisted) ? persisted.slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES) : [];
-    for (const item of items) {
-      const accountId = normalizeAccountId(item?.accountId);
-      const normalized = normalizeStoredSessionKey(
-        asString(item?.sessionKey || ''),
-        this.canonicalAgentId,
-      );
-      const updatedAt = finiteNumberOr(item?.updatedAt, 0);
-      if (!normalized || updatedAt <= 0) continue;
-
-      this.lastSessionByAccount.set(accountId, {
-        sessionKey: normalized.sessionKey,
-        // 展示统一为 Bncr-platform:group:user
-        scope: formatDisplayScope(normalized.route),
-        updatedAt,
-      });
-    }
+    this.stateStore.loadPersistedLastSessionMap(persisted);
   }
 
   private dumpPersistedLastSessionMap() {
-    return Array.from(this.lastSessionByAccount.entries())
-      .map(([accountId, v]) => ({
-        accountId,
-        sessionKey: v.sessionKey,
-        scope: v.scope,
-        updatedAt: v.updatedAt,
-      }))
-      .slice(-MAX_ACCOUNT_ACTIVITY_ENTRIES);
+    return this.stateStore.dumpPersistedLastSessionMap();
   }
 
   private loadPersistedSessionRoutes(persisted: unknown): void {
-    this.sessionRoutes.clear();
-    this.routeAliases.clear();
-    const items = Array.isArray(persisted) ? persisted.slice(-MAX_SESSION_ROUTE_ENTRIES) : [];
-    for (const item of items) {
-      const normalized = normalizeStoredSessionKey(
-        asString(item?.sessionKey || ''),
-        this.canonicalAgentId,
-      );
-      if (!normalized) continue;
-
-      const route = parseRouteLike(item?.route) || normalized.route;
-      const accountId = normalizeAccountId(item?.accountId);
-      const updatedAt = finiteNumberOr(item?.updatedAt, now());
-      const info = { accountId, route, updatedAt };
-
-      this.sessionRoutes.set(normalized.sessionKey, info);
-      this.routeAliases.set(routeKey(accountId, route), info);
-    }
+    this.stateStore.loadPersistedSessionRoutes(persisted);
   }
 
   private dumpPersistedSessionRoutes() {
-    return Array.from(this.sessionRoutes.entries())
-      .map(([sessionKey, v]) => ({
-        sessionKey,
-        accountId: v.accountId,
-        route: v.route,
-        updatedAt: v.updatedAt,
-      }))
-      .slice(-MAX_SESSION_ROUTE_ENTRIES);
+    return this.stateStore.dumpPersistedSessionRoutes();
   }
 
   private backfillAccountActivityFromSessionRoutes(): void {
-    if (this.lastSessionByAccount.size > 0 || this.sessionRoutes.size === 0) return;
-
-    for (const [sessionKey, info] of this.sessionRoutes.entries()) {
-      const acc = normalizeAccountId(info.accountId);
-      const updatedAt = finiteNumberOr(info.updatedAt, 0);
-      if (updatedAt <= 0) continue;
-
-      const current = this.lastSessionByAccount.get(acc);
-      if (!current || updatedAt >= current.updatedAt) {
-        this.lastSessionByAccount.set(acc, {
-          sessionKey,
-          // 回填时统一展示为 Bncr-platform:group:user
-          scope: formatDisplayScope(info.route),
-          updatedAt,
-        });
-      }
-
-      const lastAct = this.lastActivityByAccount.get(acc) || 0;
-      if (updatedAt > lastAct) this.lastActivityByAccount.set(acc, updatedAt);
-
-      const lastIn = this.lastInboundByAccount.get(acc) || 0;
-      if (updatedAt > lastIn) this.lastInboundByAccount.set(acc, updatedAt);
-    }
+    this.stateStore.backfillAccountActivityFromSessionRoutes();
   }
 
   private async loadState() {
-    if (!this.statePath) return;
-    const loaded = await readOpenClawJsonFileWithFallback(this.statePath, {
-      outbox: [],
-      deadLetter: [],
-      sessionRoutes: [],
-    });
-    const data = loaded.value as PersistedState;
-
-    this.outbox.clear();
-    for (const entry of data.outbox || []) {
-      const migratedEntry = this.normalizePersistedOutboxEntry(entry);
-      if (!migratedEntry) continue;
-      this.outbox.set(migratedEntry.messageId, migratedEntry);
-    }
-
-    this.deadLetter = [];
-    const persistedDeadLetter = Array.isArray(data.deadLetter)
-      ? data.deadLetter.slice(-MAX_DEAD_LETTER_ENTRIES)
-      : [];
-    for (const entry of persistedDeadLetter) {
-      const migratedEntry = this.normalizePersistedOutboxEntry(entry);
-      if (!migratedEntry) continue;
-      this.deadLetter.push(migratedEntry);
-    }
-
-    this.loadPersistedSessionRoutes(data.sessionRoutes);
-
-    this.loadPersistedLastSessionMap(data.lastSessionByAccount);
-    this.loadPersistedAccountTimestampMap(this.lastActivityByAccount, data.lastActivityByAccount);
-    this.loadPersistedAccountTimestampMap(this.lastInboundByAccount, data.lastInboundByAccount);
-    this.loadPersistedAccountTimestampMap(this.lastOutboundByAccount, data.lastOutboundByAccount);
-
-    this.lastDriftSnapshot = normalizeRegisterDriftSnapshot(data.lastDriftSnapshot);
-
-    // 兼容旧状态文件：若尚未持久化 lastSession*/lastActivity*，从 sessionRoutes 回填。
-    this.backfillAccountActivityFromSessionRoutes();
+    await this.stateStore.loadState();
   }
 
   private async flushState() {
-    if (!this.statePath) return;
-
-    const data: PersistedState = {
-      outbox: Array.from(this.outbox.values()),
-      deadLetter: this.deadLetter.slice(-MAX_DEAD_LETTER_ENTRIES),
-      sessionRoutes: this.dumpPersistedSessionRoutes(),
-      lastSessionByAccount: this.dumpPersistedLastSessionMap(),
-      lastActivityByAccount: this.dumpPersistedAccountTimestampMap(this.lastActivityByAccount),
-      lastInboundByAccount: this.dumpPersistedAccountTimestampMap(this.lastInboundByAccount),
-      lastOutboundByAccount: this.dumpPersistedAccountTimestampMap(this.lastOutboundByAccount),
-      lastDriftSnapshot: dumpRegisterDriftSnapshot(this.lastDriftSnapshot),
-    };
-
-    await writeOpenClawJsonFileAtomically(this.statePath, data);
+    await this.stateStore.flushState();
   }
 
   private resolveMessageAck(messageId: string, result: 'acked' | 'timeout' = 'acked') {
-    const key = asString(messageId).trim();
-    if (!key) return false;
-    const waiter = this.messageAckWaiters.get(key);
-    if (!waiter) return false;
-    this.messageAckWaiters.delete(key);
-    clearTimeout(waiter.timer);
-    waiter.resolve(result);
-    return true;
+    return this.messageAckRuntime.resolveMessageAck(messageId, result);
   }
+
+  // Connection / reachability / transfer-owner facades ---------------------
+  // This section bridges high-level runtime callers into the connection-state
+  // and outbox-route models that decide current owner/reachability state.
+
+  // Gateway context bookkeeping --------------------------------------------
 
   private rememberGatewayContext(context: GatewayRequestHandlerOptions['context']) {
-    if (!context) return;
-    this.gatewayContext = context;
-    this.lastGatewayContextAt = now();
+    this.bridgeConnectionFacade.rememberGatewayContext(context);
   }
 
+  // Outbound route/owner facades -------------------------------------------
+  // These are the narrow bridge-owned entrypoints that ask the route model for
+  // current push ownership and recent inbound reachability facts.
+
   private resolveOutboxPushOwner(accountId: string): BncrConnection | null {
-    const acc = normalizeAccountId(accountId);
-    const t = now();
-    const primaryKey = this.activeConnectionByAccount.get(acc);
-    const primary = primaryKey ? this.connections.get(primaryKey) : null;
-
-    const recentInboundConnIds = this.resolveRecentInboundConnIds(acc);
-
-    if (
-      isEligibleOutboundPushConnection({
-        connection: primary,
-        now: t,
-        connectTtlMs: CONNECT_TTL_MS,
-      })
-    ) {
-      const preferredForOutboundUntil = finiteNumberOr(
-        (primary as any).preferredForOutboundUntil,
-        0,
-      );
-      const outboundReadyUntil = finiteNumberOr((primary as any).outboundReadyUntil, 0);
-      if (preferredForOutboundUntil > t || outboundReadyUntil > t) return primary;
-    }
-
-    const candidates = selectOrderedOutboundPushConnections({
-      accountId: acc,
-      now: t,
-      connectTtlMs: CONNECT_TTL_MS,
-      recentInboundConnIds,
-      connections: this.connections.values(),
-    });
-
-    const next = candidates[0] || null;
-    if (!next) return null;
-
-    const nextKey = this.connectionKey(acc, next.clientId);
-    if (primaryKey !== nextKey) {
-      this.activeConnectionByAccount.set(acc, nextKey);
-      this.logInfo(
-        'connection',
-        `owner:promote ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId: acc,
-          previousActiveKey: primaryKey || null,
-          previousActiveConn: primary || null,
-          nextActiveKey: nextKey,
-          nextActiveConn: {
-            connId: next.connId,
-            clientId: next.clientId,
-            connectedAt: next.connectedAt,
-            lastSeenAt: next.lastSeenAt,
-            outboundReadyUntil: (next as any).outboundReadyUntil || null,
-            preferredForOutboundUntil: (next as any).preferredForOutboundUntil || null,
-            inboundOnly: (next as any).inboundOnly === true,
-          },
-          reason: 'better-outbound-candidate',
-        })}`,
-        { debugOnly: true },
-      );
-    }
-
-    return next;
+    return this.bridgeConnectionFacade.resolveOutboxPushOwner(accountId);
   }
 
   private resolvePushConnIds(accountId: string): Set<string> {
-    // Refactor boundary note (route selection):
-    // This selector is not a pure lookup. It combines active-owner preference, outbound readiness,
-    // preferred-for-outbound windows, recent inbound reachability, timeout penalties, and a final
-    // fallback pass over live connections. If this logic is extracted later, first isolate the
-    // candidate scoring / ordering into a pure function and keep the current fallback semantics intact.
-    const acc = normalizeAccountId(accountId);
-    const t = now();
-    const connIds = new Set<string>();
-
-    const recentInboundConnIds = this.resolveRecentInboundConnIds(acc);
-
-    const primaryKey = this.activeConnectionByAccount.get(acc);
-    if (primaryKey) {
-      const primary = this.connections.get(primaryKey);
-      if (
-        isEligibleOutboundPushConnection({
-          connection: primary,
-          now: t,
-          connectTtlMs: CONNECT_TTL_MS,
-        })
-      ) {
-        connIds.add(primary.connId);
-      }
-    }
-
-    const candidates = selectOrderedOutboundPushConnections({
-      accountId: acc,
-      now: t,
-      connectTtlMs: CONNECT_TTL_MS,
-      recentInboundConnIds,
-      connections: this.connections.values(),
-    });
-
-    for (const c of candidates) {
-      connIds.add(c.connId);
-    }
-
-    if (connIds.size > 0) return connIds;
-
-    for (const c of this.connections.values()) {
-      if (c.accountId !== acc) continue;
-      if (!c.connId) continue;
-      if (t - c.lastSeenAt > CONNECT_TTL_MS) continue;
-      connIds.add(c.connId);
-    }
-
-    return connIds;
+    return this.bridgeConnectionFacade.resolvePushConnIds(accountId);
   }
 
   private hasRecentInboundReachability(accountId: string): boolean {
-    const acc = normalizeAccountId(accountId);
-    return hasRecentInboundReachabilityFromRuntime({
-      now: now(),
-      windowMs: RECENT_INBOUND_SEND_WINDOW_MS,
-      lastInboundAt: this.lastInboundByAccount.get(acc) || 0,
-      lastActivityAt: this.lastActivityByAccount.get(acc) || 0,
-    });
+    return this.bridgeConnectionFacade.hasRecentInboundReachability(accountId);
   }
 
   private resolveRecentInboundConnIds(accountId: string): Set<string> {
-    const acc = normalizeAccountId(accountId);
-    return resolveRecentInboundConnIdsFromRuntime({
-      accountId: acc,
-      now: now(),
-      connectTtlMs: CONNECT_TTL_MS,
-      recentInboundReachable: this.hasRecentInboundReachability(acc),
-      connections: this.connections.values(),
-    });
+    return this.bridgeConnectionFacade.resolveRecentInboundConnIds(accountId);
   }
 
   private isRecentlyReachableConn(accountId: string, connId?: string, clientId?: string): boolean {
-    const acc = normalizeAccountId(accountId);
-    const activeKey = this.activeConnectionByAccount.get(acc);
-    const active = activeKey ? this.connections.get(activeKey) || null : null;
-    return isRecentlyReachableConnFromRuntime({
-      accountId: acc,
-      connId,
-      clientId,
-      recentConnIds: this.resolveRecentInboundConnIds(acc),
-      activeConnection: active,
-    });
+    return this.bridgeConnectionFacade.isRecentlyReachableConn(accountId, connId, clientId);
   }
 
   private isRevalidatedAttemptedConn(entry: OutboxEntry, connId: string): boolean {
-    const acc = normalizeAccountId(entry.accountId);
-    const revalidated = getRevalidatedAttemptReason({
-      entry,
-      connId,
-      accountId: acc,
-      now: now(),
-      connectTtlMs: CONNECT_TTL_MS,
-      recentInboundReachable: this.hasRecentInboundReachability(acc),
-      connections: this.connections.values(),
-    });
-    if (!revalidated) return false;
-
-    this.logInfo(
-      'outbox',
-      `revalidated-retry ${JSON.stringify({
-        messageId: entry.messageId,
-        accountId: acc,
-        connId: String(connId || '').trim(),
-        ...revalidated,
-      })}`,
-      { debugOnly: true },
-    );
-    return true;
+    return this.bridgeConnectionFacade.isRevalidatedAttemptedConn(entry, connId);
   }
 
   private tryAdoptTransferOwner(args: {
@@ -1807,38 +1099,16 @@ class BncrBridgeRuntime {
     connId: string;
     clientId?: string;
   }): boolean {
-    const { accountId, transfer, connId, clientId } = args;
-    if (!transfer) return false;
-    if (!this.hasRecentInboundReachability(accountId)) return false;
-    if (!this.isRecentlyReachableConn(accountId, connId, clientId)) return false;
-
-    transfer.ownerConnId = connId;
-    transfer.ownerClientId = asString(clientId || '').trim() || undefined;
-    return true;
+    return this.bridgeConnectionFacade.tryAdoptTransferOwner(args);
   }
 
   private isRetryableFileTransferError(error: unknown): boolean {
-    const msg = asString((error as any)?.message || error || '')
-      .trim()
-      .toLowerCase();
-    if (!msg) return true;
-
-    const retryableMarkers = [
-      'gateway context unavailable',
-      'no active bncr client for file chunk transfer',
-      'chunk ack timeout',
-      'complete ack timeout',
-      'transfer state missing',
-      'transfer aborted',
-      'temporarily unavailable',
-      'timeout',
-      'econn',
-      'socket',
-      'network',
-    ];
-
-    return retryableMarkers.some((marker) => msg.includes(marker));
+    return this.bridgeConnectionFacade.isRetryableFileTransferError(error);
   }
+
+  // File-transfer outbound flow --------------------------------------------
+  // This block prepares media, chooses transfer mode, sends chunk/complete
+  // frames, and feeds successful media pushes back into the shared outbox path.
 
   private async pushFileTransferSuccessPath(args: {
     entry: OutboxEntry;
@@ -1849,164 +1119,39 @@ class BncrBridgeRuntime {
     routeReason: string;
     mediaUrl: string;
   }): Promise<void> {
-    const media = await this.transferMediaToBncrClient({
-      accountId: args.entry.accountId,
-      sessionKey: args.entry.sessionKey,
-      route: args.entry.route,
-      mediaUrl: args.mediaUrl,
-      mediaLocalRoots: Array.isArray(args.meta.mediaLocalRoots)
-        ? args.meta.mediaLocalRoots.filter((v): v is string => typeof v === 'string')
-        : undefined,
-    });
-    const frame = this.buildFileTransferOutboundFrame({
-      entry: args.entry,
-      meta: args.meta,
-      media,
-      mediaUrl: args.mediaUrl,
-    });
-
-    this.gatewayContext!.broadcastToConnIds(
-      BNCR_PUSH_EVENT,
-      buildFileTransferBroadcastPayload({
-        frame,
-        messageId: args.entry.messageId,
-      }),
-      args.connIds,
-    );
-    this.logOutboxRouteSelect(
-      buildFileTransferRouteSelectArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        routeReason: args.routeReason,
-        recentInboundReachable: args.recentInboundReachable,
-        owner: args.owner,
-        event: BNCR_PUSH_EVENT,
-      }),
-    );
-    this.recordOutboxPushSuccess(
-      buildFileTransferPushSuccessArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        owner: args.owner,
-      }),
-    );
-    this.logOutboxPushOkSummary(args.entry.messageId);
-    this.logOutboxPushOk(
-      buildFileTransferPushOkArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        recentInboundReachable: args.recentInboundReachable,
-        event: BNCR_PUSH_EVENT,
-      }),
-    );
+    await this.fileTransferPushFacade.pushFileTransferSuccessPath(args);
   }
 
   private handleFileTransferPushFailure(args: { entry: OutboxEntry; error: unknown }) {
-    this.recordOutboxPushFailure({
-      entry: args.entry,
-      error: args.error,
-      fallbackError: 'file-transfer-error',
-      persist: true,
-    });
-    const failure = resolveFileTransferFailureState({
-      entry: args.entry,
-      error: args.error,
-      isRetryableFileTransferError: (value) => this.isRetryableFileTransferError(value),
-    });
-    this.logOutboxPushFailureSummary(args.entry.messageId, args.entry.lastError);
-    this.logOutboxPushFailure(
-      buildFileTransferPushFailureArgs({
-        entry: args.entry,
-        retryable: failure.retryable,
-      }),
-    );
-    if (!failure.retryable) {
-      this.moveToDeadLetter(args.entry, failure.deadLetterReason);
-    }
+    this.fileTransferPushFacade.handleFileTransferPushFailure(args);
   }
 
-  private handleFileTransferPushGuardFailure(args: {
-    entry: OutboxEntry;
-    guard: Exclude<ReturnType<typeof resolveFileTransferGuard>, { ok: true }>;
-  }) {
-    this.recordOutboxPrePushFailure({
-      entry: args.entry,
-      lastError: args.guard.lastError,
-      persist: true,
-    });
-    if (args.guard.reason === 'media-url-missing') {
-      this.logOutboxPushFailure({
-        messageId: args.entry.messageId,
-        accountId: args.entry.accountId,
-        retryCount: args.entry.retryCount,
-        kind: 'file-transfer',
-        lastError: args.entry.lastError,
-      });
-      return;
-    }
-    this.logOutboxPushSkip({
-      messageId: args.entry.messageId,
-      accountId: args.entry.accountId,
-      kind: 'file-transfer',
-      reason:
-        args.guard.reason === 'no-gateway-context' ? 'no-gateway-context' : 'no-active-connection',
-      recentInboundReachable:
-        args.guard.reason === 'no-active-connection'
-          ? args.guard.recentInboundReachable
-          : undefined,
-    });
+  private handleFileTransferPushGuardFailure(
+    args: Parameters<typeof this.fileTransferPushFacade.handleFileTransferPushGuardFailure>[0],
+  ) {
+    this.fileTransferPushFacade.handleFileTransferPushGuardFailure(args);
   }
+
+  // File-transfer outbound entry builders / dedupe -------------------------
 
   private async tryPushFileTransferEntry(
     entry: OutboxEntry,
     meta: Record<string, unknown>,
   ): Promise<boolean> {
-    const ctx = this.gatewayContext;
-    const owner = this.resolveOutboxPushOwner(entry.accountId);
-    const selection = prepareFileTransferRouteSelection({
+    return await runBncrFileTransferOutboxPush({
       entry,
-      owner,
+      meta,
+      gatewayContext: this.gatewayContext,
+      owner: this.resolveOutboxPushOwner(entry.accountId),
       resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
       resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
       hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
       isRevalidatedAttemptedConn: (connId) => this.isRevalidatedAttemptedConn(entry, connId),
-      selectOutboxFileTransferRouteCandidates,
+      handleFileTransferPushGuardFailure: (flowArgs) =>
+        this.handleFileTransferPushGuardFailure(flowArgs),
+      pushFileTransferSuccessPath: (flowArgs) => this.pushFileTransferSuccessPath(flowArgs),
+      handleFileTransferPushFailure: (flowArgs) => this.handleFileTransferPushFailure(flowArgs),
     });
-    const guard = resolveFileTransferGuard({
-      gatewayContext: ctx,
-      entry,
-      owner,
-      routeSelection: selection,
-      mediaUrl: asString(meta.mediaUrl || '').trim(),
-    });
-    if (!guard.ok) {
-      this.handleFileTransferPushGuardFailure({
-        entry,
-        guard,
-      });
-      return false;
-    }
-
-    const { connIds, recentInboundReachable, routeReason, mediaUrl } = guard;
-
-    try {
-      await this.pushFileTransferSuccessPath({
-        entry,
-        meta,
-        owner,
-        connIds,
-        recentInboundReachable,
-        routeReason,
-        mediaUrl,
-      });
-      return true;
-    } catch (error) {
-      this.handleFileTransferPushFailure({
-        entry,
-        error,
-      });
-      return false;
-    }
   }
 
   private buildFileTransferOutboxEntry(params: {
@@ -2018,6 +1163,7 @@ class BncrBridgeRuntime {
     text?: string;
     asVoice?: boolean;
     audioAsVoice?: boolean;
+    type?: string;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
@@ -2035,6 +1181,7 @@ class BncrBridgeRuntime {
       text: asString(params.text || ''),
       asVoice: params.asVoice,
       audioAsVoice: params.audioAsVoice,
+      type: params.type,
       kind: params.kind,
       replyToId: asString(params.replyToId || '').trim() || undefined,
       replyTargetPolicy: params.replyTargetPolicy,
@@ -2042,18 +1189,7 @@ class BncrBridgeRuntime {
   }
 
   private pruneMediaDedupeCache(sessionKey: string, currentTime = now()) {
-    const sessionCache = this.recentMediaDedupeBySession.get(sessionKey);
-    if (!sessionCache) return;
-
-    for (const [mediaUrl, entry] of sessionCache.entries()) {
-      if (currentTime - entry.createdAt > 10_000) {
-        sessionCache.delete(mediaUrl);
-      }
-    }
-
-    if (sessionCache.size === 0) {
-      this.recentMediaDedupeBySession.delete(sessionKey);
-    }
+    this.mediaDedupeRuntime.pruneMediaDedupeCache(sessionKey, currentTime);
   }
 
   private rememberRecentMediaSend(params: {
@@ -2063,23 +1199,7 @@ class BncrBridgeRuntime {
     replyToId: string;
     createdAt?: number;
   }) {
-    const sessionKey = asString(params.sessionKey || '').trim();
-    const mediaUrl = asString(params.mediaUrl || '').trim();
-    if (!sessionKey || !mediaUrl) return;
-
-    const createdAt = typeof params.createdAt === 'number' ? params.createdAt : now();
-    this.pruneMediaDedupeCache(sessionKey, createdAt);
-    let sessionCache = this.recentMediaDedupeBySession.get(sessionKey);
-    if (!sessionCache) {
-      sessionCache = new Map<string, MediaDedupeCacheEntry>();
-      this.recentMediaDedupeBySession.set(sessionKey, sessionCache);
-    }
-    sessionCache.set(mediaUrl, {
-      mediaUrl,
-      text: normalizeMessageText(params.text),
-      replyToId: normalizeReplyToId(params.replyToId),
-      createdAt,
-    });
+    this.mediaDedupeRuntime.rememberRecentMediaSend(params);
   }
 
   private tryBuildMediaDedupeFallback(params: {
@@ -2089,23 +1209,7 @@ class BncrBridgeRuntime {
     replyToId: string;
     currentTime?: number;
   }): { text: string; reason: 'same-text-sent-checkmark' | 'text-changed-downgrade' } | null {
-    const sessionKey = asString(params.sessionKey || '').trim();
-    const mediaUrl = asString(params.mediaUrl || '').trim();
-    if (!sessionKey || !mediaUrl) return null;
-
-    const currentTime = typeof params.currentTime === 'number' ? params.currentTime : now();
-    this.pruneMediaDedupeCache(sessionKey, currentTime);
-    const sessionCache = this.recentMediaDedupeBySession.get(sessionKey);
-    const previous = sessionCache?.get(mediaUrl);
-    if (!previous) return null;
-    if (currentTime - previous.createdAt > 10_000) return null;
-
-    return buildMediaTextFallback({
-      currentText: normalizeMessageText(params.text),
-      previousText: previous.text,
-      currentReplyToId: normalizeReplyToId(params.replyToId),
-      previousReplyToId: previous.replyToId,
-    });
+    return this.mediaDedupeRuntime.tryBuildMediaDedupeFallback(params);
   }
 
   private buildFileTransferOutboundFrame(params: {
@@ -2126,7 +1230,13 @@ class BncrBridgeRuntime {
       messageId: params.entry.messageId,
       sessionKey: params.entry.sessionKey,
       route: params.entry.route,
-      media: params.media,
+      media: {
+        mode: params.media.path ? 'chunk' : 'base64',
+        mimeType: params.media.mimeType,
+        fileName: params.media.fileName,
+        mediaBase64: params.media.base64,
+        path: params.media.path,
+      },
       mediaUrl: params.mediaUrl,
       mediaMsg: asString(params.meta.text || ''),
       fileName: resolveOutboundFileName({
@@ -2134,12 +1244,16 @@ class BncrBridgeRuntime {
         fileName: params.media.fileName,
         mimeType: params.media.mimeType,
       }),
-      hintedType: wantsVoice ? 'voice' : undefined,
+      hintedType: wantsVoice ? 'voice' : asString(params.meta.type || '') || undefined,
       kind: messageKind,
       replyToId: normalizeReplyToId(params.meta.replyToId) || undefined,
       now: now(),
     });
   }
+
+  // Outbound enqueue / push / ACK / retry flow -----------------------------
+  // This is the core outbound state machine: build entries, enqueue them,
+  // push them, observe ACK outcomes, and terminate in retry or dead-letter.
 
   private buildTextOutboxEntry(params: {
     accountId: string;
@@ -2182,112 +1296,33 @@ class BncrBridgeRuntime {
     routeReason: string;
     ownerConnId?: string;
   }) {
-    this.gatewayContext!.broadcastToConnIds(
-      BNCR_PUSH_EVENT,
-      buildTextPushBroadcastPayload({
-        payload: args.entry.payload,
-        messageId: args.entry.messageId,
-      }),
-      args.connIds,
-    );
-    this.logOutboxRouteSelect(
-      buildTextPushRouteSelectArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        routeReason: args.routeReason,
-        recentInboundReachable: args.recentInboundReachable,
-        owner: args.owner,
-        event: BNCR_PUSH_EVENT,
-      }),
-    );
-    this.recordOutboxPushSuccess(
-      buildTextPushSuccessArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        ownerConnId: args.ownerConnId,
-        ownerClientId: args.ownerConnId ? args.owner?.clientId : undefined,
-      }),
-    );
-    this.logOutboxPushOkSummary(args.entry.messageId);
-    this.logOutboxPushOk(
-      buildTextPushOkArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        recentInboundReachable: args.recentInboundReachable,
-        event: BNCR_PUSH_EVENT,
-      }),
-    );
+    this.outboxPush.pushTextSuccessPath(args);
   }
 
   private handleTextPushFailure(args: { entry: OutboxEntry; error: unknown }) {
-    this.recordOutboxPushFailure({
-      entry: args.entry,
-      error: args.error,
-      fallbackError: 'push-error',
-    });
-    this.logOutboxPushFailureSummary(args.entry.messageId, args.entry.lastError);
-    this.logOutboxPushFailure(buildTextPushFailureArgs({ entry: args.entry }));
+    this.outboxPush.handleTextPushFailure(args);
   }
 
+  // Text outbound push runtime bridge --------------------------------------
+
+  // Outbound diagnostics/logging helpers -----------------------------------
+  // Keep the compact logging helpers adjacent to the outbound state machine so
+  // queue transitions and emitted diagnostics remain easy to correlate.
+
   private async tryPushTextEntry(entry: OutboxEntry): Promise<boolean> {
-    const ctx = this.gatewayContext;
-    const owner = this.resolveOutboxPushOwner(entry.accountId);
-    const selection = prepareTextPushRouteSelection({
+    return await runBncrTextOutboxPush({
       entry,
-      owner,
+      gatewayContext: this.gatewayContext,
+      owner: this.resolveOutboxPushOwner(entry.accountId),
       resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
       resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
       hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
       isRevalidatedAttemptedConn: (connId) => this.isRevalidatedAttemptedConn(entry, connId),
-      selectOutboxRouteCandidates,
+      recordOutboxPrePushFailure: (flowArgs) => this.recordOutboxPrePushFailure(flowArgs),
+      logOutboxPushSkip: (flowArgs) => this.logOutboxPushSkip(flowArgs),
+      pushTextSuccessPath: (flowArgs) => this.pushTextSuccessPath(flowArgs),
+      handleTextPushFailure: (flowArgs) => this.handleTextPushFailure(flowArgs),
     });
-    const guard = resolveTextPushGuard({
-      gatewayContext: ctx,
-      entry,
-      routeSelection: selection,
-    });
-    if (!guard.ok) {
-      this.recordOutboxPrePushFailure({
-        entry,
-        lastError:
-          guard.reason === 'no-gateway-context'
-            ? 'gateway context unavailable'
-            : 'no active bncr client',
-        persist: true,
-      });
-      this.logOutboxPushSkip({
-        messageId: entry.messageId,
-        accountId: entry.accountId,
-        reason: guard.reason,
-        recentInboundReachable:
-          guard.reason === 'no-active-connection' ? guard.recentInboundReachable : undefined,
-        routeReason: selection.routeReason,
-        connIds: selection.connIds,
-        ownerConnId: selection.ownerConnId,
-        ownerClientId: owner?.clientId,
-      });
-      return false;
-    }
-
-    const { connIds, recentInboundReachable, routeReason, ownerConnId } = guard;
-
-    try {
-      this.pushTextSuccessPath({
-        entry,
-        owner,
-        connIds,
-        recentInboundReachable,
-        routeReason,
-        ownerConnId,
-      });
-      return true;
-    } catch (error) {
-      this.handleTextPushFailure({
-        entry,
-        error,
-      });
-      return false;
-    }
   }
 
   private logOutboxPushSkip(args: {
@@ -2301,22 +1336,7 @@ class BncrBridgeRuntime {
     ownerConnId?: string;
     ownerClientId?: string;
   }) {
-    this.recordPrePushGuardSkip({ accountId: args.accountId, reason: args.reason });
-    this.logInfo(
-      'outbox push skip',
-      `mid=${args.messageId}|q=${this.outbox.size}|reason=${args.reason}${args.kind ? `|kind=${args.kind}` : ''}`,
-    );
-    this.logInfo(
-      'outbox',
-      `push-skip ${JSON.stringify(
-        buildOutboxPushSkipDebugInfo({
-          ...args,
-          activeConnectionCount: this.activeConnectionCount(args.accountId),
-          connections: this.connections.values(),
-        }),
-      )}`,
-      { debugOnly: true },
-    );
+    this.outboxPush.logOutboxPushSkip(args);
   }
 
   private logOutboxRouteSelect(args: {
@@ -2330,11 +1350,7 @@ class BncrBridgeRuntime {
     recentInboundReachable: boolean;
     event: string;
   }) {
-    this.logInfo(
-      'outbox',
-      `route-select ${JSON.stringify(buildOutboxRouteSelectDebugInfo(args))}`,
-      { debugOnly: true },
-    );
+    this.outboxPush.logOutboxRouteSelect(args);
   }
 
   private logOutboxPushFailure(args: {
@@ -2345,17 +1361,15 @@ class BncrBridgeRuntime {
     retryable?: boolean;
     lastError?: string;
   }) {
-    this.logInfo('outbox', `push-fail ${JSON.stringify(buildPushFailureDebugInfo(args))}`, {
-      debugOnly: true,
-    });
+    this.outboxPush.logOutboxPushFailure(args);
   }
 
   private logOutboxPushOkSummary(messageId: string) {
-    this.logInfo('outbox push', `mid=${messageId}|q=${this.outbox.size}`);
+    this.outboxPush.logOutboxPushOkSummary(messageId);
   }
 
   private logOutboxPushFailureSummary(messageId: string, lastError?: string) {
-    this.logInfo('outbox push fail', `mid=${messageId}|q=${this.outbox.size}|err=${lastError}`);
+    this.outboxPush.logOutboxPushFailureSummary(messageId, lastError);
   }
 
   private logOutboxAckSummary(
@@ -2375,12 +1389,7 @@ class BncrBridgeRuntime {
       waitMs?: number | null;
     },
   ) {
-    const parts = [`mid=${args.messageId}`, `q=${this.outbox.size}`];
-    if (typeof args.queueMs === 'number') parts.push(`queueMs=${args.queueMs}`);
-    if (typeof args.pushMs === 'number') parts.push(`pushMs=${args.pushMs}`);
-    if (typeof args.waitMs === 'number') parts.push(`waitMs=${args.waitMs}`);
-    if (args.err) parts.push(`err=${args.err}`);
-    this.logInfo(scope, parts.join('|'));
+    this.outboxAckLogs.logOutboxAckSummary(scope, args);
   }
 
   private logOutboxAckWait(args: {
@@ -2391,98 +1400,15 @@ class BncrBridgeRuntime {
     recentInboundReachable: boolean;
     ackTimeoutMs?: number | null;
   }) {
-    this.logInfo(
-      'outbox',
-      `ack ${JSON.stringify(
-        buildOutboxAckDebugInfo({
-          messageId: args.entry.messageId,
-          accountId: args.entry.accountId,
-          sessionKey: args.entry.sessionKey,
-          to: formatDisplayScope(args.entry.route),
-          kind:
-            isPlainObject(args.entry.payload?._meta) &&
-            args.entry.payload?._meta?.kind === 'file-transfer'
-              ? 'file-transfer'
-              : undefined,
-          requireAck: args.requireAck,
-          ackResult: args.ackResult,
-          ackStage: 'message',
-          ackOutcome: args.ackResult,
-          reason:
-            args.ackResult === 'timeout'
-              ? OUTBOUND_TERMINAL_REASON.PUSH_ACK_TIMEOUT
-              : 'message-acked',
-          ackTimeoutMs: typeof args.ackTimeoutMs === 'number' ? args.ackTimeoutMs : undefined,
-          adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
-          onlineNow: args.onlineNow,
-          recentInboundReachable: args.recentInboundReachable,
-          connIds: args.entry.lastPushConnId ? [args.entry.lastPushConnId] : [],
-          ownerConnId: args.entry.lastPushConnId,
-          ownerClientId: args.entry.lastPushClientId,
-          event: BNCR_PUSH_EVENT,
-        }),
-      )}`,
-      { debugOnly: true },
-    );
+    this.outboxAckLogs.logOutboxAckWait(args);
   }
 
-  private logOutboxAckReroute(args: {
-    accountId: string;
-    entry: OutboxEntry;
-    requireAck: boolean;
-    currentConnId: string;
-    availableConnIds: string[];
-    decision: ReturnType<typeof computeRetryRerouteDecision>;
-    localNextDelay: number | null;
-    ackTimeoutMs?: number | null;
-  }) {
-    this.logOutboxAckSummary(args.requireAck ? 'outbox ack timeout' : 'outbox ack retry', {
-      messageId: args.entry.messageId,
-      connId: args.entry.lastPushConnId,
-      clientId: args.entry.lastPushClientId,
-      err: args.requireAck ? undefined : args.entry.lastError,
-      waitMs: args.requireAck ? args.ackTimeoutMs : undefined,
-    });
-    this.logInfo(
-      'outbox',
-      `retry-reroute ${JSON.stringify(
-        buildRetryRerouteDebugInfo({
-          messageId: args.entry.messageId,
-          accountId: args.accountId,
-          currentConnId: args.currentConnId,
-          decision: args.decision,
-          availableConnIds: args.availableConnIds,
-        }),
-      )}`,
-      { debugOnly: true },
-    );
-
-    this.logInfo(
-      'outbox',
-      `schedule ${JSON.stringify(
-        buildOutboxScheduleDebugInfo({
-          bridgeId: this.bridgeId,
-          accountId: args.accountId,
-          messageId: args.entry.messageId,
-          source: OUTBOUND_SCHEDULE_SOURCE.RETRY_REROUTE_WAIT,
-          wait: computeOutboxRetryWait(args.decision.nextAttemptAt, now()),
-          localNextDelay: args.localNextDelay,
-        }),
-      )}`,
-      { debugOnly: true },
-    );
-  }
-
-  private respondAckResult(
-    respond: GatewayRequestHandlerOptions['respond'],
-    stale: boolean,
-    result: { ok: true; movedToDeadLetter?: true; willRetry?: true },
-  ) {
-    respond(true, stale ? { ...result, stale: true, staleAccepted: true } : result);
+  private logOutboxAckReroute(args: Parameters<typeof this.outboxAckLogs.logOutboxAckReroute>[0]) {
+    this.outboxAckLogs.logOutboxAckReroute(args);
   }
 
   private prepareAckHandling(args: {
-    params: any;
+    params: GatewayRequestHandlerOptions['params'];
     respond: GatewayRequestHandlerOptions['respond'];
     client: GatewayRequestHandlerOptions['client'];
     context: GatewayRequestHandlerOptions['context'];
@@ -2494,75 +1420,53 @@ class BncrBridgeRuntime {
     entry: OutboxEntry;
     staleObserved: { stale: boolean };
   } | null {
-    const { params, respond, client, context } = args;
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    const messageId = asString(params?.messageId || '').trim();
-    const staleObserved = this.observeLease('ack', params ?? {});
+    return this.messageAckRuntime.prepareAckHandling(args);
+  }
 
-    this.logInfo(
-      'outbox',
-      `ack ${JSON.stringify({
+  // ACK telemetry and queue outcome transitions ----------------------------
+  // This section records account-scoped ACK observability and delegates the
+  // concrete queue transition to the dedicated ACK outcome runtime.
+
+  private recordAckOkTelemetry(args: {
+    accountId: string;
+    entry: OutboxEntry;
+    telemetryPatch: BncrOutboxAckOkTelemetryPatch;
+  }) {
+    const { accountId, entry, telemetryPatch } = args;
+    const { ackAt, ackQueueLatencyMs, ackPushLatencyMs } = telemetryPatch;
+    this.lastAckOkByAccount.set(accountId, ackAt);
+    this.lastAckQueueLatencyMsByAccount.set(accountId, ackQueueLatencyMs);
+    if (typeof ackPushLatencyMs === 'number') {
+      this.lastAckPushLatencyMsByAccount.set(accountId, ackPushLatencyMs);
+    }
+    if (telemetryPatch.shouldResetAdaptiveAckRecovery) {
+      this.adaptiveAckRecoveryOkCountByAccount.set(accountId, 0);
+      this.lateAckOkCountByAccount.set(
         accountId,
-        messageId,
-        ok: params?.ok !== false,
-        fatal: params?.fatal === true,
-        error: asString(params?.error || ''),
-        stale: staleObserved.stale,
-      })}`,
-      { debugOnly: true },
-    );
-    if (!messageId) {
-      respond(false, { error: 'messageId required' });
-      return null;
-    }
-
-    if (this.stopped) {
-      respond(true, { ok: true, ignored: true, reason: 'service-stopped' });
-      return null;
-    }
-
-    const entry = this.outbox.get(messageId);
-    if (!entry) {
-      respond(true, { ok: true, message: 'already-acked-or-missing', stale: staleObserved.stale });
-      return null;
-    }
-
-    if (entry.accountId !== accountId) {
-      respond(false, { error: 'account mismatch' });
-      return null;
-    }
-
-    if (staleObserved.stale) {
-      const sameConn = !!entry.lastPushConnId && entry.lastPushConnId === connId;
-      const sameClient =
-        !entry.lastPushConnId &&
-        !!entry.lastPushClientId &&
-        !!clientId &&
-        entry.lastPushClientId === clientId;
-      if (!(sameConn || sameClient)) {
-        this.logWarn(
-          'stale',
-          `ignore kind=ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} messageId=${messageId} reason=owner-mismatch lastPushConnId=${entry.lastPushConnId || '-'} lastPushClientId=${entry.lastPushClientId || '-'}`,
-          { debugOnly: true },
-        );
-        respond(true, { ok: true, stale: true, ignored: true });
-        return null;
+        this.getCounter(this.lateAckOkCountByAccount, accountId) + 1,
+      );
+      this.lastLateAckOkByAccount.set(accountId, ackAt);
+      this.lastLateAckQueueLatencyMsByAccount.set(accountId, ackQueueLatencyMs);
+      if (typeof ackPushLatencyMs === 'number') {
+        this.lastLateAckPushLatencyMsByAccount.set(accountId, ackPushLatencyMs);
       }
-    } else {
-      this.rememberGatewayContext(context);
-      this.markSeen(accountId, connId, clientId);
+      entry.awaitingRetryPush = false;
+      entry.lastError = undefined;
+    } else if (telemetryPatch.shouldIncrementAdaptiveAckRecovery) {
+      this.adaptiveAckRecoveryOkCountByAccount.set(
+        accountId,
+        this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, accountId) + 1,
+      );
     }
+  }
 
-    return {
+  private recordAckTimeoutTelemetry(accountId: string) {
+    this.lastAckTimeoutByAccount.set(accountId, now());
+    this.ackTimeoutCountByAccount.set(
       accountId,
-      connId,
-      clientId,
-      messageId,
-      entry,
-      staleObserved,
-    };
+      this.getCounter(this.ackTimeoutCountByAccount, accountId) + 1,
+    );
+    this.adaptiveAckRecoveryOkCountByAccount.set(accountId, 0);
   }
 
   private handleAckOk(args: {
@@ -2573,54 +1477,7 @@ class BncrBridgeRuntime {
     stale: boolean;
     entry: OutboxEntry;
   }) {
-    this.markOutboundCapability({
-      accountId: args.accountId,
-      connId: args.connId,
-      clientId: args.clientId,
-      outboundReady: true,
-      preferredForOutbound: true,
-    });
-    const telemetryPatch = buildBncrAckOkTelemetryPatch({
-      entry: args.entry,
-      ackAt: now(),
-      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
-    });
-    const { ackAt, ackQueueLatencyMs, ackPushLatencyMs, lateAccepted } = telemetryPatch;
-    this.lastAckOkByAccount.set(args.accountId, ackAt);
-    this.lastAckQueueLatencyMsByAccount.set(args.accountId, ackQueueLatencyMs);
-    if (typeof ackPushLatencyMs === 'number') {
-      this.lastAckPushLatencyMsByAccount.set(args.accountId, ackPushLatencyMs);
-    }
-    if (telemetryPatch.shouldResetAdaptiveAckRecovery) {
-      this.adaptiveAckRecoveryOkCountByAccount.set(args.accountId, 0);
-      this.lateAckOkCountByAccount.set(
-        args.accountId,
-        this.getCounter(this.lateAckOkCountByAccount, args.accountId) + 1,
-      );
-      this.lastLateAckOkByAccount.set(args.accountId, ackAt);
-      this.lastLateAckQueueLatencyMsByAccount.set(args.accountId, ackQueueLatencyMs);
-      if (typeof ackPushLatencyMs === 'number') {
-        this.lastLateAckPushLatencyMsByAccount.set(args.accountId, ackPushLatencyMs);
-      }
-      args.entry.awaitingRetryPush = false;
-      args.entry.lastError = undefined;
-    } else if (telemetryPatch.shouldIncrementAdaptiveAckRecovery) {
-      this.adaptiveAckRecoveryOkCountByAccount.set(
-        args.accountId,
-        this.getCounter(this.adaptiveAckRecoveryOkCountByAccount, args.accountId) + 1,
-      );
-    }
-    this.outbox.delete(args.messageId);
-    this.scheduleSave();
-    this.resolveMessageAck(args.messageId, 'acked');
-    this.logOutboxAckSummary(lateAccepted ? 'outbox ack ok late' : 'outbox ack ok', {
-      messageId: args.messageId,
-      connId: args.connId,
-      clientId: args.clientId,
-      queueMs: ackQueueLatencyMs,
-      pushMs: ackPushLatencyMs,
-      err: lateAccepted ? 'accepted-after-timeout' : undefined,
-    });
+    this.outboxAckOutcome.handleAckOk(args);
   }
 
   private handleAckFatal(args: {
@@ -2630,13 +1487,7 @@ class BncrBridgeRuntime {
     clientId?: string;
     error: string;
   }) {
-    this.moveToDeadLetter(args.entry, args.error);
-    this.logOutboxAckSummary('outbox ack fatal', {
-      messageId: args.messageId,
-      connId: args.connId,
-      clientId: args.clientId,
-      err: args.error,
-    });
+    this.outboxAckOutcome.handleAckFatal(args);
   }
 
   private handleAckRetry(args: {
@@ -2646,23 +1497,11 @@ class BncrBridgeRuntime {
     clientId?: string;
     error: string;
   }) {
-    const nextEntry = buildBncrAckRetryEntryPatch({
-      entry: args.entry,
-      error: args.error,
-      nextAttemptAt: now() + 1_000,
-    });
-    this.outbox.set(args.messageId, nextEntry);
-    this.scheduleSave();
-    this.logOutboxAckSummary('outbox ack retry', {
-      messageId: args.messageId,
-      connId: args.connId,
-      clientId: args.clientId,
-      err: nextEntry.lastError,
-    });
+    this.outboxAckOutcome.handleAckRetry(args);
   }
 
   private handleAckOutcome(args: {
-    params: any;
+    params: GatewayRequestHandlerOptions['params'];
     respond: GatewayRequestHandlerOptions['respond'];
     accountId: string;
     connId: string;
@@ -2671,57 +1510,12 @@ class BncrBridgeRuntime {
     entry: OutboxEntry;
     staleObserved: { stale: boolean };
   }) {
-    const { params, respond, accountId, connId, clientId, messageId, entry, staleObserved } = args;
-    const ok = params?.ok !== false;
-    const fatal = params?.fatal === true;
-
-    if (ok) {
-      this.handleAckOk({
-        accountId,
-        messageId,
-        connId,
-        clientId,
-        stale: staleObserved.stale,
-        entry,
-      });
-      this.respondAckResult(respond, staleObserved.stale, { ok: true });
-      this.flushPushQueueBestEffort({
-        accountId,
-        trigger: OUTBOUND_FLUSH_TRIGGER.ACK_OK,
-        reason: OUTBOUND_FLUSH_REASON.MESSAGE_ACKED,
-      });
-      return;
-    }
-
-    if (fatal) {
-      const error = asString(params?.error || 'fatal-ack');
-      this.handleAckFatal({
-        entry,
-        messageId,
-        connId,
-        clientId,
-        error,
-      });
-      this.respondAckResult(respond, staleObserved.stale, {
-        ok: true,
-        movedToDeadLetter: true,
-      });
-      return;
-    }
-
-    this.handleAckRetry({
-      entry,
-      messageId,
-      connId,
-      clientId,
-      error: asString(params?.error || 'retryable-ack'),
-    });
-
-    this.respondAckResult(respond, staleObserved.stale, {
-      ok: true,
-      willRetry: true,
-    });
+    this.messageAckRuntime.handleAckOutcome(args);
   }
+
+  // Inbound acceptance bridge ----------------------------------------------
+  // Keep this handoff near ACK/outbound flow because inbound acceptance feeds
+  // reply enqueue and dedupe state that later re-enters the same outbox path.
 
   private async prepareInboundAcceptance(args: {
     parsed: ReturnType<typeof parseBncrInboundParams>;
@@ -2740,82 +1534,22 @@ class BncrBridgeRuntime {
         payload: ReturnType<typeof buildInboundResponsePayload>;
       }
   > {
-    const { parsed, canonicalAgentId } = args;
-    const {
-      accountId,
-      platform,
-      groupId,
-      userId,
-      sessionKeyfromroute,
-      route,
-      text,
-      mediaBase64,
-      mediaPathFromTransfer,
-      msgId,
-      peer,
-      extracted,
-      dedupKey,
-    } = parsed;
-
-    if (!platform || (!userId && !groupId)) {
-      return {
-        ok: false,
-        status: false,
-        payload: buildInboundResponsePayload({ kind: 'invalid-peer' }),
-      };
-    }
-    if (this.markInboundDedupSeen(dedupKey)) {
-      return {
-        ok: false,
-        status: true,
-        payload: buildInboundResponsePayload({
-          kind: 'duplicated',
-          accountId,
-          msgId: msgId ?? null,
-        }),
-      };
-    }
-
-    const cfg = getOpenClawRuntimeConfig(this.api);
-    const gate = await checkBncrMessageGate({
-      parsed,
-      cfg,
-      account: resolveAccount(cfg, accountId),
+    return await prepareBncrInboundAcceptance({
+      api: this.api,
+      parsed: args.parsed,
+      canonicalAgentId: args.canonicalAgentId,
+      asString,
+      getRuntimeConfig: (api) => getOpenClawRuntimeConfig(api as OpenClawChannelRuntimeApiHolder),
+      resolveAgentRoute: (params) =>
+        resolveOpenClawAgentRoute(this.api as OpenClawChannelRuntimeApiHolder, params),
+      buildInboundResponsePayload,
+      markInboundDedupSeen: (key) => this.markInboundDedupSeen(key),
     });
-    if (!gate.allowed) {
-      return {
-        ok: false,
-        status: true,
-        payload: buildInboundResponsePayload({
-          kind: 'gate-denied',
-          accountId,
-          msgId: msgId ?? null,
-          reason: gate.reason,
-        }),
-      };
-    }
-
-    const { sessionKey, inboundText } = resolveInboundSessionContext({
-      cfg,
-      accountId,
-      peer,
-      route,
-      sessionKeyFromRoute: sessionKeyfromroute,
-      canonicalAgentId,
-      taskKey: extracted.taskKey,
-      text,
-      extractedText: extracted.text,
-      resolveAgentRoute: (params) => resolveOpenClawAgentRoute(this.api, params),
-    });
-
-    return {
-      ok: true,
-      accountId,
-      sessionKey,
-      inboundText,
-      hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
-    };
   }
+
+  // Live connection refresh after outbound/inbound events ------------------
+  // ACK/push/inbound outcomes may refresh or degrade live connection state.
+  // Keep these bridge facades near the outbound flow so causal review stays local.
 
   private refreshLiveConnectionState(args: {
     accountId: string;
@@ -2826,29 +1560,7 @@ class BncrBridgeRuntime {
     inboundOnly: boolean;
     context: GatewayRequestHandlerOptions['context'];
   }) {
-    const {
-      accountId,
-      connId,
-      clientId,
-      outboundReady,
-      preferredForOutbound,
-      inboundOnly,
-      context,
-    } = args;
-    this.refreshAcceptedFileTransferLiveState({
-      accountId,
-      connId,
-      clientId,
-      context,
-    });
-    this.markOutboundCapability({
-      accountId,
-      connId,
-      clientId,
-      outboundReady,
-      preferredForOutbound,
-      inboundOnly,
-    });
+    this.bridgeConnectionFacade.refreshLiveConnectionState(args);
   }
 
   private refreshAcceptedFileTransferLiveState(args: {
@@ -2857,10 +1569,7 @@ class BncrBridgeRuntime {
     clientId?: string;
     context: GatewayRequestHandlerOptions['context'];
   }) {
-    const { accountId, connId, clientId, context } = args;
-    this.rememberGatewayContext(context);
-    this.markSeen(accountId, connId, clientId);
-    this.markActivity(accountId);
+    this.bridgeConnectionFacade.refreshAcceptedFileTransferLiveState(args);
   }
 
   private logOutboxPushOk(args: {
@@ -2873,42 +1582,25 @@ class BncrBridgeRuntime {
     recentInboundReachable: boolean;
     event: string;
   }) {
-    this.logInfo('outbox', `push ${JSON.stringify(buildOutboxPushOkDebugInfo(args))}`, {
-      debugOnly: true,
-    });
+    this.outboxPush.logOutboxPushOk(args);
   }
+
+  // Outbox mutation / scheduler helpers ------------------------------------
 
   private recordOutboxPrePushFailure(args: {
     entry: OutboxEntry;
     lastError: string;
     persist?: boolean;
   }) {
-    const nextEntry = buildBncrOutboxFailureEntryPatch({
-      entry: args.entry,
-      lastError: args.lastError,
-    });
-    Object.assign(args.entry, nextEntry);
-    this.outbox.set(nextEntry.messageId, args.entry);
-    if (args.persist) this.scheduleSave();
-  }
-
-  private isPrePushGuardReason(reason: string) {
-    return reason === 'no-gateway-context' || reason === 'no-active-connection';
+    this.bridgeOutboxFacade.recordOutboxPrePushFailure(args);
   }
 
   private recordPrePushGuardSkip(args: { accountId: string; reason: string }) {
-    if (!this.isPrePushGuardReason(args.reason)) return;
-    const acc = normalizeAccountId(args.accountId);
-    this.incrementCounter(this.prePushGuardSkipCountByAccount, acc);
-    this.lastPrePushGuardSkipAtByAccount.set(acc, now());
-    this.lastPrePushGuardSkipReasonByAccount.set(acc, args.reason);
+    this.bridgeOutboxFacade.recordPrePushGuardSkip(args);
   }
 
   private isPrePushGuardDeferral(entry: OutboxEntry) {
-    return (
-      entry.lastError === 'gateway context unavailable' ||
-      entry.lastError === 'no active bncr client'
-    );
+    return this.bridgeOutboxFacade.isPrePushGuardDeferral(entry);
   }
 
   private recordOutboxPushFailure(args: {
@@ -2917,13 +1609,7 @@ class BncrBridgeRuntime {
     fallbackError: string;
     persist?: boolean;
   }) {
-    const nextEntry = buildBncrOutboxFailureEntryPatch({
-      entry: args.entry,
-      lastError: asString((args.error as any)?.message || args.error || args.fallbackError),
-    });
-    Object.assign(args.entry, nextEntry);
-    this.outbox.set(nextEntry.messageId, args.entry);
-    if (args.persist) this.scheduleSave();
+    this.bridgeOutboxFacade.recordOutboxPushFailure(args);
   }
 
   private recordOutboxPushSuccess(args: {
@@ -2933,50 +1619,11 @@ class BncrBridgeRuntime {
     ownerClientId?: string;
     clearLastError?: boolean;
   }) {
-    const pushedAt = now();
-    const nextEntry = buildBncrOutboxPushSuccessEntryPatch({
-      entry: args.entry,
-      connIds: args.connIds,
-      pushedAt,
-      ownerConnId: args.ownerConnId,
-      ownerClientId: args.ownerClientId,
-      clearLastError: args.clearLastError,
-    });
-    Object.assign(args.entry, nextEntry);
-    this.outbox.set(nextEntry.messageId, args.entry);
-    this.lastOutboundByAccount.set(nextEntry.accountId, pushedAt);
-    this.markActivity(nextEntry.accountId, pushedAt);
-    this.scheduleSave();
+    this.bridgeOutboxFacade.recordOutboxPushSuccess(args);
   }
 
   private schedulePushDrain(delayMs = 0) {
-    if (this.stopped) return;
-    // Structure note (drain scheduler):
-    // This is the single-timer gate for outbound retry scheduling. It intentionally coalesces
-    // multiple nudges into one pending timer and delegates all actual decision-making to
-    // flushPushQueue. If extracted later, preserve the current "one pending timer per bridge"
-    // behavior so retry cadence and burst control do not change accidentally.
-    if (this.pushTimer) return;
-    const delay = clampOutboxDrainDelay(delayMs);
-    this.logInfo(
-      'outbox',
-      `schedule ${JSON.stringify(
-        buildOutboxScheduleDebugInfo({
-          bridgeId: this.bridgeId,
-          source: OUTBOUND_SCHEDULE_SOURCE.SCHEDULE_PUSH_DRAIN,
-          wait: delay,
-        }),
-      )}`,
-      { debugOnly: true },
-    );
-    this.pushTimer = setTimeout(() => {
-      this.pushTimer = null;
-      if (this.stopped) return;
-      this.flushPushQueueBestEffort({
-        trigger: OUTBOUND_FLUSH_TRIGGER.TIMER,
-        reason: OUTBOUND_FLUSH_REASON.SCHEDULED_DRAIN,
-      });
-    }, delay);
+    this.bridgeDrainFacade.schedulePushDrain(delayMs);
   }
 
   private flushPushQueueBestEffort(args?: {
@@ -2984,126 +1631,579 @@ class BncrBridgeRuntime {
     trigger?: string;
     reason?: string;
   }) {
-    void this.flushPushQueue(args)
-      .then(() => {
-        this.pushDrainExceptionRetryCount = 0;
-      })
-      .catch((error) => {
-        const accountId = args?.accountId ? normalizeAccountId(args.accountId) : '';
-        const reason = asString(args?.reason || args?.trigger || 'flush-error');
-        const err = asString((error as any)?.message || error || 'flush-error');
-        const nextRetryCount = this.pushDrainExceptionRetryCount + 1;
-        const willRetry = nextRetryCount <= PUSH_DRAIN_EXCEPTION_RETRY_LIMIT;
-        this.pushDrainExceptionRetryCount = nextRetryCount;
-        this.logError(
-          'outbox drain fail',
-          `accountId=${accountId || '-'}|reason=${reason}|err=${err}|retry=${willRetry ? nextRetryCount : 'false'}|limit=${PUSH_DRAIN_EXCEPTION_RETRY_LIMIT}`,
-        );
-        if (willRetry) {
-          this.schedulePushDrain(PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS);
-        }
-      });
+    this.bridgeDrainFacade.flushPushQueueBestEffort(args);
   }
 
   private isOutboundAckRequired(accountId?: string) {
-    return resolveBncrOutboundAckRequired({ api: this.api, accountId });
+    return this.bridgeDrainFacade.isOutboundAckRequired(accountId);
   }
 
+  // Runtime group assembly --------------------------------------------------
+
+  // Runtime group assembly --------------------------------------------------
+  // Read this block top-to-bottom as the bridge composition root:
+  // 1) connection / lease ownership
+  // 2) outbound ACK + drain state machine
+  // 3) file-transfer lifecycle
+  // 4) route / outbox push selection
+  // 5) persistence + status projections
+  // 6) bridge-owned facades and host surfaces
+  //
+  // Wiring rule: once a runtime slice grows, prefer grouped dependencies
+  // (state / io / policy / helpers) over widening one anonymous callback bag.
+  // The bridge owns composition; leaf runtimes should receive focused slices.
+
+  // Phase 1: connection / lease / reachability ------------------------------
+  private readonly connectionStateRuntimeGroup = createBncrConnectionStateRuntimeGroup({
+    bridgeId: this.bridgeId,
+    now,
+    asString,
+    connectTtlMs: CONNECT_TTL_MS,
+    recentInboundSendWindowMs: RECENT_INBOUND_SEND_WINDOW_MS,
+    outboundReadyTtlMs: OUTBOUND_READY_TTL_MS,
+    preferredOutboundTtlMs: PREFERRED_OUTBOUND_TTL_MS,
+    connections: this.connections,
+    activeConnectionByAccount: this.activeConnectionByAccount,
+    lastInboundByAccount: this.lastInboundByAccount,
+    lastActivityByAccount: this.lastActivityByAccount,
+    gcTransientState: () => this.gcTransientState(),
+    connectionKey: (accountId, clientId) => this.connectionKey(accountId, clientId),
+    buildActiveConnectionDebugList: (accountId, options) =>
+      this.buildActiveConnectionDebugList(accountId, options),
+    rememberGatewayContext: (context) => this.rememberGatewayContext(context),
+    markActivity: (accountId, at) => this.markActivity(accountId, at),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logInfoDedupJson: (scope, label, payload, options) =>
+      this.logInfoDedupJson(scope, label, isPlainObject(payload) ? payload : { payload }, {
+        key: options?.key || label,
+        sig: options?.sig || JSON.stringify(payload),
+        debugOnly: options?.debugOnly,
+      }),
+  });
+
+  private readonly connectionState = this.connectionStateRuntimeGroup.connectionState;
+
+  // Phase 2: outbound ACK / drain -------------------------------------------
+  private readonly ackOutboxRuntimeGroup = createBncrAckOutboxRuntimeGroup({
+    bridgeId: this.bridgeId,
+    pushEvent: BNCR_PUSH_EVENT,
+    now,
+    asString,
+    backoffMs,
+    isPlainObject,
+    clampFiniteNumber: (value, fallback, min, max) =>
+      clampFiniteNumber(value, fallback, min ?? fallback, max ?? fallback),
+    normalizeAccountId,
+    formatDisplayScope,
+    isFileTransferEntry: (entry) =>
+      isPlainObject(entry.payload?._meta) && entry.payload?._meta?.kind === 'file-transfer',
+    recommendedAckTimeoutMaxMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+    adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+    defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+    stopped: () => this.stopped,
+    outbox: this.outbox,
+    deadLetter: () => this.deadLetter,
+    connectionsValues: () => this.connections.values(),
+    gatewayContextAvailable: () => Boolean(this.gatewayContext),
+    messageAckWaiters: this.messageAckWaiters,
+    fileAckWaiterCount: () => this.fileAckWaiters.size,
+    activeConnectionCount: (accountId) => this.activeConnectionCount(accountId),
+    getAccountPendingOutboxEntries: (accountId) => this.getAccountPendingOutboxEntries(accountId),
+    pushDrainRunningAccounts: this.pushDrainRunningAccounts,
+    pushDrainRunningSinceByAccount: this.pushDrainRunningSinceByAccount,
+    pushDrainStuckWarnedAtByAccount: this.pushDrainStuckWarnedAtByAccount,
+    isOnline: (accountId) => this.isOnline(accountId),
+    hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
+    isOutboundAckRequired: (accountId) => this.isOutboundAckRequired(accountId),
+    resolveMessageAckTimeoutMs: (accountId) => this.resolveMessageAckTimeoutMs(accountId),
+    waitForMessageAck: (messageId, waitMs) => this.waitForMessageAck(messageId, waitMs),
+    resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
+    sleepMs: (ms) => this.sleepMs(ms),
+    schedulePushDrain: (delayMs) => this.schedulePushDrain(delayMs),
+    tryPushEntry: (entry) => this.tryPushEntry(entry),
+    handleFileTransferPushFailure: (args) => this.handleFileTransferPushFailure(args),
+    handleTextPushFailure: (args) => this.handleTextPushFailure(args),
+    isPrePushGuardDeferral: (entry) => this.isPrePushGuardDeferral(entry),
+    scheduleSave: () => this.scheduleSave(),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+    logError: (scope, message) => this.logError(scope, message),
+    observeLease: (kind, payload) => this.observeLease(kind, payload),
+    rememberGatewayContext: (context) => this.rememberGatewayContext(context),
+    markSeen: (accountId, connId, clientId) => this.markSeen(accountId, connId, clientId),
+    markOutboundCapability: (args) => this.markOutboundCapability(args),
+    recordAckOkTelemetry: (args) => this.recordAckOkTelemetry(args),
+    deleteOutboxEntry: (messageId) => this.outbox.delete(messageId),
+    setOutboxEntry: (messageId, entry) => this.outbox.set(messageId, entry),
+    resolveMessageAck: (messageId, result) => this.resolveMessageAck(messageId, result),
+    moveToDeadLetter: (entry, reason) => this.moveToDeadLetter(entry, reason),
+    recordAckTimeoutTelemetry: (accountId) => this.recordAckTimeoutTelemetry(accountId),
+    degradeOutboundCapability: (args) => this.degradeOutboundCapability(args),
+    flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
+    flushTriggerTimer: OUTBOUND_FLUSH_TRIGGER.TIMER,
+    flushReasonScheduledDrain: OUTBOUND_FLUSH_REASON.SCHEDULED_DRAIN,
+    outboundFlushTriggerAckOk: OUTBOUND_FLUSH_TRIGGER.ACK_OK,
+    outboundFlushReasonMessageAcked: OUTBOUND_FLUSH_REASON.MESSAGE_ACKED,
+    pushDrainExceptionRetryLimit: PUSH_DRAIN_EXCEPTION_RETRY_LIMIT,
+    pushDrainExceptionRetryDelayMs: PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS,
+    pushDrainStuckWarnMs: PUSH_DRAIN_STUCK_WARN_MS,
+    pushDrainIntervalMs: PUSH_DRAIN_INTERVAL_MS,
+    pushDrainAccountTimeBudgetMs: PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS,
+    pushDrainAccountBudget: PUSH_DRAIN_ACCOUNT_BUDGET,
+    pushAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+    maxRetry: MAX_RETRY,
+    prePushGuardRetryDelayMs: PRE_PUSH_GUARD_RETRY_DELAY_MS,
+  });
+
+  private readonly outboxAckLogs = this.ackOutboxRuntimeGroup.outboxAckLogs;
+  private readonly outboxAckOutcome = this.ackOutboxRuntimeGroup.outboxAckOutcome;
+  private readonly messageAckRuntime = this.ackOutboxRuntimeGroup.messageAckRuntime;
+  private readonly outboxDrainAck = this.ackOutboxRuntimeGroup.outboxDrainAck;
+  private readonly outboxDrainSchedule = this.ackOutboxRuntimeGroup.outboxDrainSchedule;
+  private readonly outboxDrainRuntime = this.ackOutboxRuntimeGroup.outboxDrainRuntime;
+
+  // Phase 3: file transfer --------------------------------------------------
+  // Keep file-transfer wiring adjacent to ACK/outbox wiring because chunk
+  // waits, waiter cleanup, and outbound delivery all share the same queue
+  // lifecycle and shutdown boundaries.
+
+  private readonly fileTransferRuntimeGroup = createBncrFileTransferRuntimeGroup({
+    bridgeId: this.bridgeId,
+    now,
+    asString,
+    clampFiniteNumber: (value, fallback, min, max) =>
+      clampFiniteNumber(value, fallback, min ?? fallback, max ?? fallback),
+    fileAckTimeoutMs: FILE_ACK_TIMEOUT_MS,
+    maxEarlyFileAcks: MAX_EARLY_FILE_ACKS,
+    fileAckWaiters: this.fileAckWaiters,
+    earlyFileAcks: this.earlyFileAcks,
+    getFileAckOwnerInfo: (transferId) => this.fileAckOwnerInfo(transferId),
+    fileForceChunk: FILE_FORCE_CHUNK,
+    fileInlineThreshold: FILE_INLINE_THRESHOLD,
+    normalizeAccountId,
+    loadOutboundTransferMedia: (args) => this.loadOutboundTransferMedia(args),
+    resolveOutboxPushOwner: (accountId) => this.resolveOutboxPushOwner(accountId),
+    hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
+    buildTransferRouteDiagnostics: (args) =>
+      this.buildTransferRouteDiagnostics(args) as {
+        activeConnectionKey: string | null;
+        directConnIds: Set<string>;
+        recentConnIds: Set<string>;
+        accountConnections: Array<{
+          connId: string;
+          clientId?: string;
+          connectedAt: number;
+          lastSeenAt: number;
+        }>;
+      },
+    selectTransferConnIds: (args) => new Set(this.selectTransferConnIds(args)),
+    broadcastToConnIds: (event, payload, connIds) =>
+      this.gatewayContext!.broadcastToConnIds(event, payload, connIds),
+    chunkEvent: BNCR_FILE_CHUNK_EVENT,
+    completeEvent: BNCR_FILE_COMPLETE_EVENT,
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+  });
+
+  private readonly fileAckRuntime = this.fileTransferRuntimeGroup.fileAckRuntime;
+  private readonly fileTransferLogs = this.fileTransferRuntimeGroup.fileTransferLogs;
+  private readonly fileTransferSetup = this.fileTransferRuntimeGroup.fileTransferSetup;
+  private readonly fileTransferSend = this.fileTransferRuntimeGroup.fileTransferSend;
+
+  // Runtime wiring: route selection / push bookkeeping ----------------------
+
+  // Phase 4: route / push selection ----------------------------------------
+  private readonly outboxPushRouteRuntimeGroup = createBncrOutboxPushRouteRuntimeGroup({
+    bridgeId: this.bridgeId,
+    pushEvent: BNCR_PUSH_EVENT,
+    now,
+    connectTtlMs: CONNECT_TTL_MS,
+    finiteNumberOr,
+    outboxSize: () => this.outbox.size,
+    gatewayBroadcastToConnIds: (event, payload, connIds) =>
+      this.gatewayContext!.broadcastToConnIds(event, payload, connIds),
+    recordOutboxPushSuccess: (args) => this.recordOutboxPushSuccess(args),
+    recordOutboxPushFailure: (args) => this.recordOutboxPushFailure(args),
+    recordOutboxPrePushFailure: (args) => this.recordOutboxPrePushFailure(args),
+    recordPrePushGuardSkip: (args) => this.recordPrePushGuardSkip(args),
+    moveToDeadLetter: (entry, reason) => this.moveToDeadLetter(entry, reason),
+    activeConnectionCount: (accountId) => this.activeConnectionCount(accountId),
+    connections: this.connections,
+    connectionsValues: () => this.connections.values(),
+    activeConnectionByAccount: this.activeConnectionByAccount,
+    resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
+    connectionKey: (accountId, clientId) => this.connectionKey(accountId, clientId),
+    isRetryableFileTransferError: (value) => this.isRetryableFileTransferError(value),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    buildActiveConnectionDebugList: (accountId, options) =>
+      this.buildActiveConnectionDebugList(accountId, options),
+  });
+
+  private readonly outboxPush = this.outboxPushRouteRuntimeGroup.outboxPush;
+  private readonly outboxRoute = this.outboxPushRouteRuntimeGroup.outboxRoute;
+
+  // Runtime wiring: persistence / transient cleanup -------------------------
+  // Phase 5: persistence / transient state ---------------------------------
+  private readonly stateTransientRuntimeGroup = createBncrStateTransientRuntimeGroup({
+    bridgeId: this.bridgeId,
+    getStatePath: () => this.statePath,
+    now,
+    asString,
+    finiteNumberOr,
+    normalizeAccountId,
+    normalizeStoredSessionKey,
+    parseRouteLike,
+    routeKey,
+    formatDisplayScope,
+    canonicalAgentId: () => this.canonicalAgentId || '',
+    normalizePersistedOutboxEntry: (entry) => this.normalizePersistedOutboxEntry(entry),
+    maxDeadLetterEntries: MAX_DEAD_LETTER_ENTRIES,
+    maxSessionRouteEntries: MAX_SESSION_ROUTE_ENTRIES,
+    maxAccountActivityEntries: MAX_ACCOUNT_ACTIVITY_ENTRIES,
+    outbox: this.outbox,
+    getDeadLetter: () => this.deadLetter,
+    setDeadLetter: (entries) => {
+      this.deadLetter = entries;
+    },
+    sessionRoutes: this.sessionRoutes,
+    routeAliases: this.routeAliases,
+    lastSessionByAccount: this.lastSessionByAccount,
+    lastActivityByAccount: this.lastActivityByAccount,
+    lastInboundByAccount: this.lastInboundByAccount,
+    lastOutboundByAccount: this.lastOutboundByAccount,
+    getLastDriftSnapshot: () => this.lastDriftSnapshot,
+    setLastDriftSnapshot: (value) => {
+      this.lastDriftSnapshot = value;
+    },
+    connectTtlMs: CONNECT_TTL_MS,
+    fileTransferKeepMs: FILE_TRANSFER_KEEP_MS,
+    fileTransferTerminalKeepMs: FILE_TRANSFER_TERMINAL_KEEP_MS,
+    fileTransferAckTtlMs: FILE_TRANSFER_ACK_TTL_MS,
+    connections: this.connections,
+    activeConnectionByAccount: this.activeConnectionByAccount,
+    recentInbound: this.recentInbound,
+    fileSendTransfers: this.fileSendTransfers,
+    fileRecvTransfers: this.fileRecvTransfers,
+    earlyFileAcks: this.earlyFileAcks,
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+  });
+
+  private readonly stateStore = this.stateTransientRuntimeGroup.stateStore;
+  private readonly transientStateRuntime = this.stateTransientRuntimeGroup.transientStateRuntime;
+
+  // Runtime wiring: session routing / target / media dedupe -----------------
+  // Phase 6: status / target projections -----------------------------------
+  private readonly targetStatusRuntimeGroup = createBncrTargetStatusRuntimeGroup({
+    api: this.runtimeApi,
+    channelId: CHANNEL_ID,
+    canonicalAgentId: this.canonicalAgentId,
+    getPluginRoot: () => this.pluginRoot,
+    startedAt: this.startedAt,
+    debugVerbose: BNCR_DEBUG_VERBOSE,
+    adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+    defaultMessageAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+    fileAckTimeoutMs: FILE_ACK_TIMEOUT_MS,
+    maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+    now,
+    normalizeAccountId,
+    sessionRoutes: this.sessionRoutes,
+    routeAliases: this.routeAliases,
+    lastSessionByAccount: this.lastSessionByAccount,
+    markActivity: (accountId, at) => this.markActivity(accountId, at),
+    scheduleSave: () => this.scheduleSave(),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+    ensureCanonicalAgentId: (args) => this.ensureCanonicalAgentId(args),
+    recentMediaDedupeBySession: this.recentMediaDedupeBySession,
+    resolveMessageAckTimeoutMs: (accountId) => this.resolveMessageAckTimeoutMs(accountId),
+    isOnline: (accountId) => this.isOnline(accountId),
+    outboxValues: () => this.outbox.values(),
+    deadLetterEntries: () => this.deadLetter,
+    sessionRouteValues: () => this.sessionRoutes.values(),
+    countInvalidOutboxSessionKeys: (accountId) => this.countInvalidOutboxSessionKeys(accountId),
+    countLegacyAccountResidue: (accountId) => this.countLegacyAccountResidue(accountId),
+    connectEventsByAccount: this.connectEventsByAccount,
+    inboundEventsByAccount: this.inboundEventsByAccount,
+    activityEventsByAccount: this.activityEventsByAccount,
+    ackEventsByAccount: this.ackEventsByAccount,
+    activeConnectionCount: (accountId) => this.activeConnectionCount(accountId),
+    lastActivityByAccount: this.lastActivityByAccount,
+    lastInboundByAccount: this.lastInboundByAccount,
+    lastOutboundByAccount: this.lastOutboundByAccount,
+    buildRuntimeAckObservability: (accountId) => this.buildRuntimeAckObservability(accountId),
+    buildRuntimeAckStrategy: (ackObservability) => this.buildRuntimeAckStrategy(ackObservability),
+    lastAckOkByAccount: this.lastAckOkByAccount,
+    lastAckTimeoutByAccount: this.lastAckTimeoutByAccount,
+    getAckTimeoutCount: (accountId) => this.getCounter(this.ackTimeoutCountByAccount, accountId),
+    getAccountPendingOutboxEntries: (accountId) => this.getAccountPendingOutboxEntries(accountId),
+    getAccountDeadLetterEntries: (accountId) => this.getAccountDeadLetterEntries(accountId),
+    connectionsValues: () => this.connections.values(),
+    connectTtlMs: CONNECT_TTL_MS,
+  });
+
+  private readonly targetRuntime = this.targetStatusRuntimeGroup.targetRuntime;
+  private readonly mediaDedupeRuntime = this.targetStatusRuntimeGroup.mediaDedupeRuntime;
+
+  // Runtime wiring: status / diagnostics ------------------------------------
+  private readonly statusRuntime = this.targetStatusRuntimeGroup.statusRuntime;
+  private declare readonly runtimeStatusInputType?: Parameters<
+    typeof this.statusRuntime.buildIntegratedDiagnostics
+  >[1];
+
+  // Phase 7: bridge-owned facades ------------------------------------------
+  // These facades expose stable replacement points for lifecycle, status,
+  // diagnostics, drain, and media behavior without leaking the bridge's full
+  // internal state surface into every caller.
+  private readonly bridgeStatusFacade = createBncrBridgeStatusFacade({
+    statusProjection: buildBncrStatusProjectionRuntime({
+      buildRuntimeStatusInput: (accountId, overrides) =>
+        this.statusRuntime.buildRuntimeStatusInput(accountId, overrides),
+      buildStatusMeta: (accountId) => this.statusRuntime.buildStatusMeta(accountId),
+      getAccountRuntimeSnapshot: (accountId, runtimeStatusInput) =>
+        this.statusRuntime.getAccountRuntimeSnapshot(accountId, runtimeStatusInput),
+      buildStatusHeadline: (accountId) => this.statusRuntime.buildStatusHeadline(accountId),
+      getStatusHeadline: (accountId) => this.statusRuntime.getStatusHeadline(accountId),
+      getChannelSummary: (defaultAccountId) =>
+        this.statusRuntime.getChannelSummary(defaultAccountId),
+    }),
+    ackDiagnostics: buildBncrAckDiagnosticsRuntime({
+      buildRuntimeAckObservability: (accountId) => this.runtimeAckObservabilityBuilder(accountId),
+      buildRuntimeAckStrategy: (ackObservability) =>
+        buildBncrRuntimeAckStrategy({
+          ackObservability,
+          defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+          maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+        }),
+    }),
+  });
+
+  private readonly bridgeDiagnosticsFacade = createBncrBridgeDiagnosticsFacade({
+    buildRuntimeFlags: (accountId) => this.statusRuntime.buildRuntimeFlags(accountId),
+    buildAccountQueueCounters: (accountId) =>
+      this.statusRuntime.buildAccountQueueCounters(accountId),
+    buildIntegratedDiagnostics: (accountId, runtimeStatusInput?: BncrRuntimeStatusInput) =>
+      this.statusRuntime.buildIntegratedDiagnostics(accountId, runtimeStatusInput),
+    buildDownlinkHealth: (accountId) => this.statusRuntime.buildDownlinkHealth(accountId),
+  });
+
+  private readonly bridgeRuntimeSurfaceFacade = createBncrBridgeRuntimeSurfaceFacade({
+    getApi: () => this.api,
+  });
+
+  private readonly bridgeStatusWorkerFacade = createBncrBridgeStatusWorkerFacade({
+    workers: this.channelAccountWorkers,
+    bridgeId: this.bridgeId,
+    isOnline: (accountId) => this.isOnline(accountId),
+    hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
+    lastActivityByAccount: this.lastActivityByAccount,
+    lastInboundByAccount: this.lastInboundByAccount,
+    lastOutboundByAccount: this.lastOutboundByAccount,
+    getActiveConnectionKey: (accountId) => this.activeConnectionByAccount.get(accountId) || null,
+    connectionsValues: () => this.connections.values(),
+    buildStatusMeta: (accountId) => this.buildStatusMeta(accountId),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logInfoDedup: (scope, message, options) => this.logInfoDedup(scope, message, options),
+  });
+
+  private readonly bridgeExtendedDiagnosticsFacade = createBncrBridgeExtendedDiagnosticsFacade({
+    normalizeAccountId,
+    buildIntegratedDiagnostics: (accountId, runtimeStatusInput) =>
+      this.buildIntegratedDiagnostics(accountId, runtimeStatusInput),
+    buildOutboxDiagnostics: (accountId) => this.buildOutboxDiagnostics(accountId),
+    buildRuntimeAckObservability: (accountId) => this.buildRuntimeAckObservability(accountId),
+    getCounter: (map, accountId) => this.getCounter(map, accountId),
+    prePushGuardSkipCountByAccount: this.prePushGuardSkipCountByAccount,
+    lastPrePushGuardSkipAtByAccount: this.lastPrePushGuardSkipAtByAccount,
+    lastPrePushGuardSkipReasonByAccount: this.lastPrePushGuardSkipReasonByAccount,
+    hasGatewayContext: () => Boolean(this.gatewayContext),
+    buildRuntimeSurfaceDiagnostics: () => this.buildRuntimeSurfaceDiagnostics(),
+    getRegisterState: () => ({
+      bridgeId: this.bridgeId,
+      gatewayPid: this.gatewayPid,
+      pluginVersion: this.pluginVersion,
+      pluginSource: this.pluginSource,
+      lastApiInstanceId: this.lastApiInstanceId,
+      lastRegistryFingerprint: this.lastRegistryFingerprint,
+      registerCount: this.registerCount,
+      firstRegisterAt: this.firstRegisterAt,
+      lastRegisterAt: this.lastRegisterAt,
+      lastApiRebindAt: this.lastApiRebindAt,
+      apiGeneration: this.apiGeneration,
+      registerTraceRecent: this.registerTraceRecent,
+      lastDriftSnapshot: this.lastDriftSnapshot ?? null,
+    }),
+    buildRegisterTraceSummary: () => this.buildRegisterTraceSummary(),
+    activeConnectionCount: (accountId) => this.activeConnectionCount(accountId),
+    getConnectionState: () => ({
+      lastGatewayContextAt: this.lastGatewayContextAt,
+      primaryLeaseId: this.primaryLeaseId,
+      connectionEpoch: this.connectionEpoch,
+      acceptedConnections: this.acceptedConnections,
+      lastConnectAt: this.lastConnectAt,
+      lastDisconnectAt: this.lastDisconnectAt,
+      lastActivityAtGlobal: this.lastActivityAtGlobal,
+      lastInboundAtGlobal: this.lastInboundAtGlobal,
+      lastAckAtGlobal: this.lastAckAtGlobal,
+      recentConnections: this.recentConnections,
+    }),
+    getOutboundState: () => ({
+      outboundEnqueueCountByAccount: this.outboundEnqueueCountByAccount,
+      lastOutboundEnqueueAtByAccount: this.lastOutboundEnqueueAtByAccount,
+    }),
+    buildDeadLetterDiagnostics: (accountId) => this.buildDeadLetterDiagnostics(accountId),
+    bridgeVersion: BRIDGE_VERSION,
+    staleCounters: this.staleCounters,
+    now,
+  });
+
+  private readonly bridgeAckFacade = createBncrBridgeAckFacade({
+    normalizeAccountId,
+    now,
+    pushAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+    adaptiveAckTimeoutDefaultEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+    adaptiveAckTimeoutLogThrottleMs: ADAPTIVE_ACK_TIMEOUT_LOG_THROTTLE_MS,
+    adaptiveAckTimeoutObservationTtlMs: ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS,
+    adaptiveAckTimeoutRecoveryOkThreshold: ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
+    recommendedAckTimeoutMinMs: RECOMMENDED_ACK_TIMEOUT_MIN_MS,
+    recommendedAckTimeoutMaxMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+    getCounter: (map, accountId) => this.getCounter(map, accountId),
+    ackTimeoutCountByAccount: this.ackTimeoutCountByAccount,
+    lateAckOkCountByAccount: this.lateAckOkCountByAccount,
+    lastLateAckPushLatencyMsByAccount: this.lastLateAckPushLatencyMsByAccount,
+    lastLateAckOkByAccount: this.lastLateAckOkByAccount,
+    adaptiveAckRecoveryOkCountByAccount: this.adaptiveAckRecoveryOkCountByAccount,
+    adaptiveAckTimeoutLogStateByAccount: this.adaptiveAckTimeoutLogStateByAccount,
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    buildRuntimeAckObservability: (accountId) =>
+      this.bridgeStatusFacade.buildRuntimeAckObservability(accountId),
+    buildRuntimeAckStrategy: (ackObservability) =>
+      this.bridgeStatusFacade.buildRuntimeAckStrategy(ackObservability),
+    waitForMessageAck: (messageId, waitMs) =>
+      this.messageAckRuntime.waitForMessageAck(messageId, waitMs),
+    resolveMessageAck: (messageId, result) =>
+      this.messageAckRuntime.resolveMessageAck(messageId, result),
+    fileAckKey: (transferId, stage, chunkIndex) =>
+      this.fileAckRuntime.fileAckKey(transferId, stage, chunkIndex),
+    waitForFileAck: (params) => this.fileAckRuntime.waitForFileAck(params),
+    resolveFileAck: (params) => this.fileAckRuntime.resolveFileAck(params),
+  });
+
+  private readonly bridgeConnectionFacade = createBncrBridgeConnectionFacade({
+    now,
+    asString,
+    normalizeAccountId,
+    connectionState: this.connectionState,
+    outboxRoute: this.outboxRoute,
+    rememberGatewayContext: (context) => {
+      this.gatewayContext = context;
+      this.lastGatewayContextAt = now();
+    },
+    markActivity: (accountId, at) => {
+      this.lastActivityByAccount.set(normalizeAccountId(accountId), at ?? now());
+    },
+  });
+
+  private readonly bridgeOutboxFacade = createBncrBridgeOutboxFacade({
+    bridgeId: this.bridgeId,
+    normalizeAccountId,
+    asString,
+    now,
+    backoffMs,
+    maxRetry: MAX_RETRY,
+    maxDeadLetterEntries: MAX_DEAD_LETTER_ENTRIES,
+    outbox: this.outbox,
+    getDeadLetter: () => this.deadLetter,
+    setDeadLetter: (entries) => {
+      this.deadLetter = entries;
+    },
+    incrementCounter: (map, accountId) => this.incrementCounter(map, accountId),
+    outboundEnqueueCountByAccount: this.outboundEnqueueCountByAccount,
+    lastOutboundEnqueueAtByAccount: this.lastOutboundEnqueueAtByAccount,
+    prePushGuardSkipCountByAccount: this.prePushGuardSkipCountByAccount,
+    lastPrePushGuardSkipAtByAccount: this.lastPrePushGuardSkipAtByAccount,
+    lastPrePushGuardSkipReasonByAccount: this.lastPrePushGuardSkipReasonByAccount,
+    deadLetterSinceStartByAccount: this.deadLetterSinceStartByAccount,
+    lastOutboundByAccount: this.lastOutboundByAccount,
+    scheduleSave: () => this.scheduleSave(),
+    flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logOutboundSummary: (entry) => this.logOutboundSummary(entry),
+    logDeadLetterSummary: (accountId, options) => this.logDeadLetterSummary(accountId, options),
+    resolveMessageAck: (messageId, result) =>
+      this.messageAckRuntime.resolveMessageAck(messageId, result),
+    markActivity: (accountId, at) => this.markActivity(accountId, at),
+  });
+
+  private readonly bridgeDrainFacade = createBncrBridgeDrainFacade({
+    bridgeId: this.bridgeId,
+    asString,
+    normalizeAccountId,
+    getApi: () => this.api,
+    getStopped: () => this.stopped,
+    getPushTimer: () => this.pushTimer,
+    setPushTimer: (timer) => {
+      this.pushTimer = timer;
+    },
+    getRetryCount: () => this.pushDrainExceptionRetryCount,
+    setRetryCount: (count) => {
+      this.pushDrainExceptionRetryCount = count;
+    },
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logError: (scope, message) => this.logError(scope, message),
+    flushPushQueue: (args) => this.flushPushQueue(args),
+    schedulePushDrain: (delayMs = 0) => this.schedulePushDrain(delayMs),
+    resolveOutboundAckRequired: (args) => resolveBncrOutboundAckRequired(args),
+    retryLimit: PUSH_DRAIN_EXCEPTION_RETRY_LIMIT,
+    retryDelayMs: PUSH_DRAIN_EXCEPTION_RETRY_DELAY_MS,
+  });
+
+  // Runtime-backed bridge facades ------------------------------------------
+  // These methods sit after the runtime groups so the bridge-owned public and
+  // semi-public helpers still read as one contiguous facade layer.
+
   private buildRuntimeFlags(accountId?: string) {
-    return buildBncrRuntimeFlags({
-      api: this.api,
-      accountId,
-      resolveMessageAckTimeoutMs: (acc?: string) => this.resolveMessageAckTimeoutMs(acc),
-      adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
-      defaultMessageAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
-      fileAckTimeoutMs: FILE_ACK_TIMEOUT_MS,
-      debugVerbose: BNCR_DEBUG_VERBOSE,
-    });
+    return this.bridgeDiagnosticsFacade.buildRuntimeFlags(accountId);
   }
 
   private getAccountPendingOutboxEntries(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    return Array.from(this.outbox.values()).filter((entry) => entry.accountId === acc);
+    return this.diagnosticsSelectionHelpers.getAccountPendingOutboxEntries(accountId);
   }
 
   private getAccountDeadLetterEntries(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    return this.deadLetter.filter((entry) => entry.accountId === acc);
+    return this.diagnosticsSelectionHelpers.getAccountDeadLetterEntries(accountId);
   }
 
   private buildAccountQueueCounters(accountId: string) {
-    return {
-      activeConnections: this.activeConnectionCount(accountId),
-      pending: this.getAccountPendingOutboxEntries(accountId).length,
-      deadLetter: this.getAccountDeadLetterEntries(accountId).length,
-    };
+    return this.bridgeDiagnosticsFacade.buildAccountQueueCounters(accountId);
   }
 
   private buildActiveConnectionDebugList(
     accountId: string,
     options?: { includeOutboundState?: boolean },
   ) {
-    const acc = normalizeAccountId(accountId);
-    return Array.from(this.connections.values())
-      .filter((conn) => conn.accountId === acc)
-      .map((conn) => ({
-        connId: conn.connId,
-        clientId: conn.clientId,
-        connectedAt: conn.connectedAt,
-        lastSeenAt: conn.lastSeenAt,
-        ...(options?.includeOutboundState
-          ? {
-              outboundReadyUntil: (conn as any).outboundReadyUntil || null,
-              preferredForOutboundUntil: (conn as any).preferredForOutboundUntil || null,
-              inboundOnly: (conn as any).inboundOnly === true,
-            }
-          : {}),
-      }));
+    return this.diagnosticsSelectionHelpers.buildActiveConnectionDebugList(accountId, options);
   }
 
+  private readonly diagnosticsSelectionHelpers = createBncrDiagnosticsSelectionHelpers({
+    normalizeAccountId,
+    outboxValues: () => this.outbox.values(),
+    getDeadLetterEntries: () => this.deadLetter,
+    connectionsValues: () => this.connections.values(),
+  });
+
+  // Outbox drain/runtime bridges -------------------------------------------
+
   private maybeLogOutboxDrainStuck(args: { accountId: string; trigger: string; reason: string }) {
-    const acc = normalizeAccountId(args.accountId);
-    const startedAt = this.pushDrainRunningSinceByAccount.get(acc) || 0;
-    if (!startedAt) return;
+    this.outboxDrainRuntime.maybeLogOutboxDrainStuck(args);
+  }
 
-    const t = now();
-    const runningMs = Math.max(0, t - startedAt);
-    if (runningMs < PUSH_DRAIN_STUCK_WARN_MS) return;
-
-    const lastWarnedAt = this.pushDrainStuckWarnedAtByAccount.get(acc) || 0;
-    if (lastWarnedAt && t - lastWarnedAt < PUSH_DRAIN_STUCK_WARN_MS) return;
-
-    const pendingEntries = this.getAccountPendingOutboxEntries(acc);
-    const pending = pendingEntries.length;
-    if (!pending) return;
-
-    this.pushDrainStuckWarnedAtByAccount.set(acc, t);
-    this.logWarn(
-      'outbox drain stuck',
-      `accountId=${acc}|pending=${pending}|runningMs=${runningMs}|waiters=${this.messageAckWaiters.size}/${this.fileAckWaiters.size}`,
-    );
-    this.logInfo(
-      'outbox',
-      `drain-stuck ${JSON.stringify(
-        buildOutboxDrainStuckDebugInfo({
-          bridgeId: this.bridgeId,
-          accountId: acc,
-          reason: args.reason,
-          trigger: args.trigger,
-          outboxSize: this.outbox.size,
-          pending,
-          runningMs,
-          runningSince: startedAt,
-          hasGatewayContext: Boolean(this.gatewayContext),
-          activeConnectionCount: this.activeConnectionCount(acc),
-          messageAckWaiters: this.messageAckWaiters.size,
-          fileAckWaiters: this.fileAckWaiters.size,
-          pendingEntries,
-          connections: this.connections.values(),
-        }),
-      )}`,
-      { debugOnly: true },
-    );
+  private async runAccountDrainCycle(args: {
+    accountId: string;
+    trigger: string;
+    reason?: string;
+    globalNextDelay: number | null;
+  }): Promise<number | null> {
+    return await this.outboxDrainRuntime.runAccountDrainCycle(args);
   }
 
   private async flushPushQueue(args?: {
@@ -3111,451 +2211,14 @@ class BncrBridgeRuntime {
     trigger?: string;
     reason?: string;
   }): Promise<void> {
-    if (this.stopped) return;
-    // Structure guide for future safe extraction:
-    // - pre-check: choose target accounts, skip accounts already draining, emit flush context logs
-    // - tryPush: pick one due entry per account and attempt actual outbound delivery
-    // - ack wait: wait for message ack when policy requires it, then decide whether queue can advance
-    // - degrade: mark timed-out / unconfirmed outbound capability on the attempted owner connection
-    // - reroute: avoid the timed-out route, optionally revalidate a previously-attempted conn, then retry once
-    // - retry scheduling: keep the entry in outbox, compute backoff / nextAttemptAt, and schedule next drain
-    // - dead letter: after max retries, move the entry out of the active outbox into deadLetter
-    //
-    // Wake-source note:
-    // flushPushQueue is entered from several distinct wake sources with different meanings:
-    // - enqueue/manual: a new outbound entry was added and may be due immediately
-    // - timer/scheduled-drain: retry scheduling says a previously-deferred entry is now worth retrying
-    // - connect/ws-online: a transport became available again
-    // - ack-ok/message-acked: one completed message may let the queue advance to the next
-    // - activity/activity-heartbeat: capability/liveness was refreshed
-    // - inbound/inbound-accepted: inbound traffic provided a fresh reachability signal
-    // Keep these wake reasons explicit in future refactors; they are observability and behavior boundaries,
-    // not just log decoration.
-    //
-    // Refactor boundary note:
-    // flushPushQueue is the core outbound state machine. It currently couples queue selection,
-    // route choice, ack policy, degrade/failover, retry timing, and dead-letter transitions.
-    // Future extraction should preserve these semantics first; do not split behavior and routing in
-    // the same change unless tests already lock the full lifecycle.
-    const filterAcc = args?.accountId ? normalizeAccountId(args.accountId) : null;
-    const trigger = asString(args?.trigger || '').trim() || 'manual';
-    const reason = asString(args?.reason || '').trim() || undefined;
-    const targetAccounts = selectOutboxTargetAccounts({
-      accountId: filterAcc,
-      outboxEntries: this.outbox.values(),
-      normalizeAccountId,
-    });
-    this.logInfo(
-      'outbox',
-      `flush ${JSON.stringify(
-        buildFlushDebugInfo({
-          bridgeId: this.bridgeId,
-          accountId: filterAcc,
-          targetAccounts,
-          outboxSize: this.outbox.size,
-          trigger,
-          reason,
-        }),
-      )}`,
-      { debugOnly: true },
-    );
-
-    let globalNextDelay: number | null = null;
-
-    for (const acc of targetAccounts) {
-      if (!acc) continue;
-      if (this.pushDrainRunningAccounts.has(acc)) {
-        this.logInfo(
-          'outbox',
-          `drain-skip ${JSON.stringify(
-            buildOutboxDrainSkipDebugInfo({
-              bridgeId: this.bridgeId,
-              accountId: acc,
-              reason: 'already-running',
-              outboxSize: this.outbox.size,
-              trigger,
-            }),
-          )}`,
-          { debugOnly: true },
-        );
-        this.maybeLogOutboxDrainStuck({
-          accountId: acc,
-          trigger,
-          reason: reason || 'already-running',
-        });
-        continue;
-      }
-      const online = this.isOnline(acc);
-      const recentInboundReachable = this.hasRecentInboundReachability(acc);
-      this.logInfo(
-        'outbox',
-        `online ${JSON.stringify(
-          buildOutboxOnlineDebugInfo({
-            bridgeId: this.bridgeId,
-            accountId: acc,
-            online,
-            recentInboundReachable,
-            connections: this.connections.values(),
-          }),
-        )}`,
-        { debugOnly: true },
-      );
-      this.pushDrainRunningAccounts.add(acc);
-      this.pushDrainRunningSinceByAccount.set(acc, now());
-      this.pushDrainStuckWarnedAtByAccount.delete(acc);
-      try {
-        let localNextDelay: number | null = null;
-        let processedThisRun = 0;
-        const accountDrainStartedAt = now();
-
-        while (true) {
-          if (this.stopped) break;
-          if (
-            processedThisRun > 0 &&
-            now() - accountDrainStartedAt >= PUSH_DRAIN_ACCOUNT_TIME_BUDGET_MS
-          ) {
-            localNextDelay = updateMinOutboxDelay(localNextDelay, 0);
-            this.logInfo(
-              'outbox',
-              `schedule ${JSON.stringify(
-                buildOutboxScheduleDebugInfo({
-                  bridgeId: this.bridgeId,
-                  accountId: acc,
-                  source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_TIME_BUDGET_YIELD,
-                  wait: 0,
-                  localNextDelay,
-                }),
-              )}`,
-              { debugOnly: true },
-            );
-            break;
-          }
-          if (processedThisRun >= PUSH_DRAIN_ACCOUNT_BUDGET) {
-            localNextDelay = updateMinOutboxDelay(localNextDelay, 0);
-            this.logInfo(
-              'outbox',
-              `schedule ${JSON.stringify(
-                buildOutboxScheduleDebugInfo({
-                  bridgeId: this.bridgeId,
-                  accountId: acc,
-                  source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_BUDGET_YIELD,
-                  wait: 0,
-                  localNextDelay,
-                }),
-              )}`,
-              { debugOnly: true },
-            );
-            break;
-          }
-          const t = now();
-          const entries = listAccountOutboxEntries({
-            accountId: acc,
-            outboxEntries: this.outbox.values(),
-            normalizeAccountId,
-          });
-
-          if (!entries.length) break;
-
-          const entry = findDueOutboxEntry(entries, t);
-          if (!entry) {
-            const wait = computeNextOutboxDelay(entries, t);
-            if (wait != null) {
-              localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
-              this.logInfo(
-                'outbox',
-                `schedule ${JSON.stringify(
-                  buildOutboxScheduleDebugInfo({
-                    bridgeId: this.bridgeId,
-                    accountId: acc,
-                    source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_NO_DUE_ENTRY,
-                    wait,
-                    localNextDelay,
-                  }),
-                )}`,
-                { debugOnly: true },
-              );
-            }
-            break;
-          }
-
-          const onlineNow = this.isOnline(acc);
-          const recentInboundReachable = this.hasRecentInboundReachability(acc);
-          let pushed = false;
-          try {
-            pushed = await this.tryPushEntry(entry);
-          } catch (error) {
-            const meta = isPlainObject(entry.payload?._meta) ? entry.payload._meta : null;
-            if (meta?.kind === 'file-transfer') {
-              this.handleFileTransferPushFailure({
-                entry,
-                error,
-              });
-            } else {
-              this.handleTextPushFailure({
-                entry,
-                error,
-              });
-            }
-            pushed = false;
-          }
-          processedThisRun += 1;
-          if (pushed) {
-            const requireAck = this.isOutboundAckRequired(acc);
-            const ackTimeoutMs = requireAck ? this.resolveMessageAckTimeoutMs(acc) : null;
-            let ackResult: 'acked' | 'timeout' = requireAck ? 'timeout' : 'acked';
-            if (onlineNow && requireAck) {
-              this.logInfo(
-                'outbox',
-                `ack wait-start ${JSON.stringify(
-                  buildOutboxAckDebugInfo({
-                    messageId: entry.messageId,
-                    accountId: entry.accountId,
-                    sessionKey: entry.sessionKey,
-                    to: formatDisplayScope(entry.route),
-                    kind:
-                      isPlainObject(entry.payload?._meta) &&
-                      entry.payload?._meta?.kind === 'file-transfer'
-                        ? 'file-transfer'
-                        : undefined,
-                    requireAck,
-                    ackResult: 'timeout',
-                    ackStage: 'message',
-                    ackOutcome: 'waiting',
-                    ackTimeoutMs: ackTimeoutMs || PUSH_ACK_TIMEOUT_MS,
-                    adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
-                    onlineNow,
-                    recentInboundReachable,
-                    connIds: entry.lastPushConnId ? [entry.lastPushConnId] : [],
-                    ownerConnId: entry.lastPushConnId,
-                    ownerClientId: entry.lastPushClientId,
-                    event: BNCR_PUSH_EVENT,
-                  }),
-                )}`,
-                { debugOnly: true },
-              );
-              ackResult = await this.waitForMessageAck(
-                entry.messageId,
-                ackTimeoutMs || PUSH_ACK_TIMEOUT_MS,
-              );
-            }
-
-            this.logOutboxAckWait({
-              entry,
-              requireAck,
-              ackResult,
-              onlineNow,
-              recentInboundReachable,
-              ackTimeoutMs,
-            });
-
-            if (!this.outbox.has(entry.messageId)) {
-              await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
-              continue;
-            }
-
-            if (onlineNow && (!requireAck || ackResult !== 'timeout')) {
-              await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
-              continue;
-            }
-
-            if (entry.lastPushConnId || entry.lastPushClientId) {
-              this.degradeOutboundCapability({
-                accountId: acc,
-                connId: entry.lastPushConnId || undefined,
-                clientId: entry.lastPushClientId || undefined,
-                reason: requireAck
-                  ? OUTBOUND_DEGRADE_REASON.ACK_TIMEOUT
-                  : OUTBOUND_DEGRADE_REASON.PUSH_UNCONFIRMED,
-              });
-            }
-
-            const attemptedConnIds = Array.isArray(entry.routeAttemptConnIds)
-              ? entry.routeAttemptConnIds.filter((v): v is string => typeof v === 'string' && !!v)
-              : [];
-            const currentConnId = asString(entry.lastPushConnId || '').trim();
-            const availableConnIds = Array.from(this.resolvePushConnIds(acc));
-            const decision = computeRetryRerouteDecision(
-              {
-                nowMs: now(),
-                maxRetry: MAX_RETRY,
-                requireAck,
-                currentRetryCount: entry.retryCount,
-                currentRouteAttemptRound: Number(entry.routeAttemptRound || 0),
-                currentFastReroutePending: entry.fastReroutePending === true,
-                lastError: entry.lastError,
-                currentConnId: currentConnId || undefined,
-                attemptedConnIds,
-                availableConnIds,
-              },
-              { backoffMs },
-            );
-
-            if (decision.kind === 'dead-letter') {
-              this.logInfo(
-                'outbox ack fatal',
-                `mid=${entry.messageId}|q=${this.outbox.size}|err=${decision.terminalReason}`,
-              );
-              this.moveToDeadLetter(entry, decision.terminalReason);
-              continue;
-            }
-
-            const nextEntry = applyBncrRetryRerouteDecisionToEntry(entry, decision);
-            this.outbox.set(entry.messageId, nextEntry);
-            this.scheduleSave();
-            if (requireAck) {
-              this.lastAckTimeoutByAccount.set(acc, now());
-              this.ackTimeoutCountByAccount.set(
-                acc,
-                this.getCounter(this.ackTimeoutCountByAccount, acc) + 1,
-              );
-              this.adaptiveAckRecoveryOkCountByAccount.set(acc, 0);
-            }
-            const wait = computeOutboxRetryWait(decision.nextAttemptAt, now());
-            localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
-            this.logOutboxAckReroute({
-              accountId: acc,
-              entry: nextEntry,
-              requireAck,
-              currentConnId,
-              availableConnIds,
-              decision,
-              localNextDelay,
-              ackTimeoutMs,
-            });
-            await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
-            break;
-          }
-
-          if (!this.outbox.has(entry.messageId)) {
-            await this.sleepMs(PUSH_DRAIN_INTERVAL_MS);
-            continue;
-          }
-
-          if (this.isPrePushGuardDeferral(entry)) {
-            const wait = PRE_PUSH_GUARD_RETRY_DELAY_MS;
-            localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
-            this.logInfo(
-              'outbox',
-              `schedule ${JSON.stringify(
-                buildOutboxScheduleDebugInfo({
-                  bridgeId: this.bridgeId,
-                  accountId: acc,
-                  messageId: entry.messageId,
-                  source: OUTBOUND_SCHEDULE_SOURCE.PRE_PUSH_GUARD_WAIT,
-                  wait,
-                  localNextDelay,
-                }),
-              )}`,
-              { debugOnly: true },
-            );
-            break;
-          }
-
-          const decision = computePushFailureDecision(
-            {
-              nowMs: t,
-              maxRetry: MAX_RETRY,
-              currentRetryCount: entry.retryCount,
-              lastError: entry.lastError,
-            },
-            { backoffMs },
-          );
-          if (decision.kind === 'dead-letter') {
-            this.moveToDeadLetter(entry, decision.terminalReason);
-            continue;
-          }
-
-          const nextEntry = applyBncrPushFailureDecisionToEntry(entry, decision);
-          this.outbox.set(entry.messageId, nextEntry);
-          this.scheduleSave();
-
-          const wait = computeOutboxRetryWait(decision.nextAttemptAt, t);
-          localNextDelay = updateMinOutboxDelay(localNextDelay, wait);
-          this.logInfo(
-            'outbox',
-            `schedule ${JSON.stringify(
-              buildOutboxScheduleDebugInfo({
-                bridgeId: this.bridgeId,
-                accountId: acc,
-                messageId: entry.messageId,
-                source: OUTBOUND_SCHEDULE_SOURCE.PUSH_FAIL_WAIT,
-                wait,
-                localNextDelay,
-              }),
-            )}`,
-            { debugOnly: true },
-          );
-          break;
-        }
-
-        if (localNextDelay != null) {
-          globalNextDelay = updateMinOutboxDelay(globalNextDelay, localNextDelay);
-          this.logInfo(
-            'outbox',
-            `schedule ${JSON.stringify(
-              buildOutboxScheduleDebugInfo({
-                bridgeId: this.bridgeId,
-                accountId: acc,
-                source: OUTBOUND_SCHEDULE_SOURCE.ACCOUNT_NEXT_DELAY_MERGE,
-                localNextDelay,
-                globalNextDelay,
-              }),
-            )}`,
-            { debugOnly: true },
-          );
-        }
-      } finally {
-        this.pushDrainRunningAccounts.delete(acc);
-        this.pushDrainRunningSinceByAccount.delete(acc);
-        this.pushDrainStuckWarnedAtByAccount.delete(acc);
-      }
-    }
-
-    if (globalNextDelay != null) {
-      this.logInfo(
-        'outbox',
-        `schedule ${JSON.stringify(
-          buildOutboxScheduleDebugInfo({
-            bridgeId: this.bridgeId,
-            source: OUTBOUND_SCHEDULE_SOURCE.FLUSH_NEXT_DRAIN,
-            globalNextDelay,
-            wait: globalNextDelay,
-          }),
-        )}`,
-        { debugOnly: true },
-      );
-      this.schedulePushDrain(globalNextDelay);
-    }
+    await this.outboxDrainRuntime.flushPushQueue(args);
   }
 
   private async waitForMessageAck(messageId: string, waitMs: number): Promise<'acked' | 'timeout'> {
-    const key = asString(messageId).trim();
-    const timeoutMs = clampFiniteNumber(waitMs, 0, 0, RECOMMENDED_ACK_TIMEOUT_MAX_MS);
-    if (!key || !timeoutMs) return 'timeout';
-
-    const existing = this.messageAckWaiters.get(key);
-    if (existing) {
-      this.logWarn(
-        'outbox',
-        `message-ack-waiter-reuse ${JSON.stringify({ bridge: this.bridgeId, messageId: key })}`,
-        { debugOnly: true },
-      );
-      return await existing.promise;
-    }
-
-    let timer: NodeJS.Timeout;
-    let resolveWaiter!: (result: 'acked' | 'timeout') => void;
-    const promise = new Promise<'acked' | 'timeout'>((resolve) => {
-      resolveWaiter = resolve;
-      timer = setTimeout(() => {
-        this.messageAckWaiters.delete(key);
-        resolve('timeout');
-      }, timeoutMs);
-    });
-
-    this.messageAckWaiters.set(key, { promise, resolve: resolveWaiter, timer: timer! });
-    return await promise;
+    return await this.bridgeAckFacade.waitForMessageAck(messageId, waitMs);
   }
+
+  // Connection-state runtime bridges ---------------------------------------
 
   private connectionKey(accountId: string, clientId?: string): string {
     const acc = normalizeAccountId(accountId);
@@ -3564,162 +2227,15 @@ class BncrBridgeRuntime {
   }
 
   private gcTransientState() {
-    const t = now();
-
-    // 清理过期连接
-    const staleBefore = t - CONNECT_TTL_MS * 2;
-    for (const [key, c] of this.connections.entries()) {
-      if (c.lastSeenAt < staleBefore) {
-        this.logInfo(
-          'connection',
-          `gc ${JSON.stringify({
-            bridge: this.bridgeId,
-            key,
-            accountId: c.accountId,
-            connId: c.connId,
-            clientId: c.clientId,
-            lastSeenAt: c.lastSeenAt,
-            staleBefore,
-          })}`,
-          { debugOnly: true },
-        );
-        this.connections.delete(key);
-        if (this.activeConnectionByAccount.get(c.accountId) === key) {
-          this.activeConnectionByAccount.delete(c.accountId);
-        }
-      }
-    }
-
-    // 清理去重窗口（90s）
-    const dedupWindowMs = 90_000;
-    for (const [key, ts] of this.recentInbound.entries()) {
-      if (t - ts > dedupWindowMs) this.recentInbound.delete(key);
-    }
-
-    this.cleanupFileTransfers();
+    this.transientStateRuntime.gcTransientState();
   }
 
   private cleanupFileTransfers() {
-    const t = now();
-    const keepMsForTransfer = (st: { status: string; startedAt: number; terminalAt?: number }) => {
-      const startedAt = finiteNumberOr(st.startedAt, t);
-      if (st.status === 'completed' || st.status === 'aborted') {
-        return {
-          since: finiteNumberOr(st.terminalAt, startedAt),
-          keepMs: FILE_TRANSFER_TERMINAL_KEEP_MS,
-        };
-      }
-      return { since: startedAt, keepMs: FILE_TRANSFER_KEEP_MS };
-    };
-    for (const [id, st] of this.fileSendTransfers.entries()) {
-      const keep = keepMsForTransfer(st);
-      if (t - keep.since > keep.keepMs) this.fileSendTransfers.delete(id);
-    }
-    for (const [id, st] of this.fileRecvTransfers.entries()) {
-      const keep = keepMsForTransfer(st);
-      if (t - keep.since > keep.keepMs) this.fileRecvTransfers.delete(id);
-    }
-    for (const [key, ack] of this.earlyFileAcks.entries()) {
-      if (t - ack.at > FILE_TRANSFER_ACK_TTL_MS) this.earlyFileAcks.delete(key);
-    }
+    this.transientStateRuntime.cleanupFileTransfers();
   }
 
   private markSeen(accountId: string, connId: string, clientId?: string) {
-    this.gcTransientState();
-
-    const acc = normalizeAccountId(accountId);
-    const key = this.connectionKey(acc, clientId);
-    const t = now();
-    const prev = this.connections.get(key);
-    const previousActiveKey = this.activeConnectionByAccount.get(acc) || null;
-    const previousActiveConn = previousActiveKey
-      ? this.connections.get(previousActiveKey) || null
-      : null;
-
-    const nextConn = {
-      accountId: acc,
-      connId,
-      clientId: asString(clientId || '').trim() || undefined,
-      connectedAt: prev?.connectedAt || t,
-      lastSeenAt: t,
-      outboundReadyUntil: (prev as any)?.outboundReadyUntil,
-      preferredForOutboundUntil: (prev as any)?.preferredForOutboundUntil,
-      inboundOnly: (prev as any)?.inboundOnly,
-    } as BncrConnection & {
-      outboundReadyUntil?: number;
-      preferredForOutboundUntil?: number;
-      inboundOnly?: boolean;
-    };
-
-    this.connections.set(key, nextConn as BncrConnection);
-    const connectionSeenPayload = {
-      bridge: this.bridgeId,
-      accountId: acc,
-      connId,
-      clientId: nextConn.clientId,
-      connectedAt: nextConn.connectedAt,
-      lastSeenAt: nextConn.lastSeenAt,
-      outboundReadyUntil: nextConn.outboundReadyUntil || null,
-      preferredForOutboundUntil: nextConn.preferredForOutboundUntil || null,
-      inboundOnly: nextConn.inboundOnly === true,
-    };
-    const connectionSeenSig = JSON.stringify({
-      bridge: this.bridgeId,
-      accountId: acc,
-      connId,
-      clientId: nextConn.clientId || null,
-      inboundOnly: nextConn.inboundOnly === true,
-      outboundReadyActive: Number(nextConn.outboundReadyUntil || 0) > t,
-      preferredForOutboundActive: Number(nextConn.preferredForOutboundUntil || 0) > t,
-    });
-    this.logInfoDedupJson('connection', 'seen', connectionSeenPayload, {
-      key: `connection-seen:${acc}:${nextConn.clientId || connId}`,
-      sig: connectionSeenSig,
-      debugOnly: true,
-    });
-
-    const current = this.activeConnectionByAccount.get(acc);
-    if (!current) {
-      this.activeConnectionByAccount.set(acc, key);
-      this.logInfo(
-        'connection',
-        `seen:promote ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId: acc,
-          reason: 'no-current-active',
-          previousActiveKey,
-          previousActiveConn,
-          nextActiveKey: key,
-          nextActiveConn: nextConn,
-          activeConnections: this.buildActiveConnectionDebugList(acc, {
-            includeOutboundState: true,
-          }),
-        })}`,
-        { debugOnly: true },
-      );
-      return;
-    }
-
-    const curConn = this.connections.get(current);
-    if (!curConn || t - curConn.lastSeenAt > CONNECT_TTL_MS) {
-      this.activeConnectionByAccount.set(acc, key);
-      this.logInfo(
-        'connection',
-        `seen:promote ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId: acc,
-          reason: !curConn ? 'current-missing' : 'current-stale',
-          previousActiveKey,
-          previousActiveConn,
-          nextActiveKey: key,
-          nextActiveConn: nextConn,
-          activeConnections: this.buildActiveConnectionDebugList(acc, {
-            includeOutboundState: true,
-          }),
-        })}`,
-        { debugOnly: true },
-      );
-    }
+    this.connectionState.markSeen(accountId, connId, clientId);
   }
 
   private markOutboundCapability(args: {
@@ -3731,51 +2247,7 @@ class BncrBridgeRuntime {
     inboundOnly?: boolean;
     at?: number;
   }) {
-    const acc = normalizeAccountId(args.accountId);
-    const key = this.connectionKey(acc, args.clientId);
-    const t = Number(args.at || now());
-    const current = this.connections.get(key) as BncrConnection | undefined;
-    if (!current || current.connId !== args.connId) return;
-
-    const next = applyOutboundCapability({
-      connection: current,
-      at: t,
-      outboundReadyTtlMs: OUTBOUND_READY_TTL_MS,
-      preferredOutboundTtlMs: PREFERRED_OUTBOUND_TTL_MS,
-      outboundReady: args.outboundReady,
-      preferredForOutbound: args.preferredForOutbound,
-      inboundOnly: args.inboundOnly,
-    });
-
-    this.connections.set(key, next as BncrConnection);
-    const snapshot = buildCapabilitySnapshot(next);
-    const connectionCapabilityPayload = {
-      bridge: this.bridgeId,
-      accountId: acc,
-      connId: next.connId,
-      clientId: next.clientId,
-      outboundReady: args.outboundReady === true,
-      preferredForOutbound: args.preferredForOutbound === true,
-      inboundOnly: snapshot.inboundOnly,
-      outboundReadyUntil: snapshot.outboundReadyUntil,
-      preferredForOutboundUntil: snapshot.preferredForOutboundUntil,
-    };
-    const connectionCapabilitySig = JSON.stringify({
-      bridge: this.bridgeId,
-      accountId: acc,
-      connId: next.connId,
-      clientId: next.clientId || null,
-      outboundReady: args.outboundReady === true,
-      preferredForOutbound: args.preferredForOutbound === true,
-      inboundOnly: snapshot.inboundOnly,
-      outboundReadyActive: Number(snapshot.outboundReadyUntil || 0) > t,
-      preferredForOutboundActive: Number(snapshot.preferredForOutboundUntil || 0) > t,
-    });
-    this.logInfoDedupJson('connection', 'capability', connectionCapabilityPayload, {
-      key: `connection-capability:${acc}:${next.clientId || next.connId}`,
-      sig: connectionCapabilitySig,
-      debugOnly: true,
-    });
+    this.connectionState.markOutboundCapability(args);
   }
 
   private hasAlternativeLiveConnection(
@@ -3783,15 +2255,11 @@ class BncrBridgeRuntime {
     currentConnId?: string,
     currentClientId?: string,
   ): boolean {
-    const acc = normalizeAccountId(accountId);
-    return hasAlternativeLiveConnectionFromRuntime({
-      accountId: acc,
-      now: now(),
-      connectTtlMs: CONNECT_TTL_MS,
+    return this.connectionState.hasAlternativeLiveConnection(
+      accountId,
       currentConnId,
       currentClientId,
-      connections: this.connections.values(),
-    });
+    );
   }
 
   private degradeOutboundCapability(args: {
@@ -3801,86 +2269,22 @@ class BncrBridgeRuntime {
     reason: string;
     at?: number;
   }) {
-    const acc = normalizeAccountId(args.accountId);
-    const t = Number(args.at || now());
-    const hasAlternativeLiveConnection = this.hasAlternativeLiveConnection(
-      acc,
-      args.connId,
-      args.clientId,
-    );
-    const currentKey = this.activeConnectionByAccount.get(acc) || null;
-    const matched = findCapabilityConnection({
-      accountId: acc,
-      connId: args.connId,
-      clientId: args.clientId,
-      connections: this.connections.entries(),
-    });
-
-    if (!matched) return;
-
-    const before = buildCapabilitySnapshot(matched.connection);
-
-    if (!hasAlternativeLiveConnection) {
-      this.logInfo(
-        'connection',
-        `outbound-degrade skip ${JSON.stringify({
-          bridge: this.bridgeId,
-          accountId: acc,
-          connId: matched.connection.connId,
-          clientId: matched.connection.clientId,
-          reason: args.reason,
-          at: t,
-          currentActiveKey: currentKey,
-          degradedKey: matched.key,
-          skipReason: 'no-alternative-live-connection',
-          before,
-        })}`,
-        { debugOnly: true },
-      );
-      return;
-    }
-
-    const next = clearOutboundCapability(matched.connection);
-    this.connections.set(matched.key, next as BncrConnection);
-
-    this.logInfo(
-      'connection',
-      `outbound-degrade ${JSON.stringify({
-        bridge: this.bridgeId,
-        accountId: acc,
-        connId: next.connId,
-        clientId: next.clientId,
-        reason: args.reason,
-        at: t,
-        currentActiveKey: currentKey,
-        degradedKey: matched.key,
-        before,
-        after: buildCapabilitySnapshot(next),
-      })}`,
-      { debugOnly: true },
-    );
+    this.connectionState.degradeOutboundCapability(args);
   }
 
   private isOnline(accountId: string): boolean {
-    const acc = normalizeAccountId(accountId);
-    const t = now();
-    for (const c of this.connections.values()) {
-      if (c.accountId !== acc) continue;
-      if (t - c.lastSeenAt <= CONNECT_TTL_MS) return true;
-    }
-    return false;
+    return this.connectionState.isOnline(accountId);
   }
 
   private activeConnectionCount(accountId: string): number {
-    const acc = normalizeAccountId(accountId);
-    const t = now();
-    let n = 0;
-    for (const c of this.connections.values()) {
-      if (c.accountId !== acc) continue;
-      if (t - c.lastSeenAt <= CONNECT_TTL_MS) n += 1;
-    }
-    return n;
+    return this.connectionState.activeConnectionCount(accountId);
   }
+
+  // Session routing / status / public bridge surface -----------------------
+  // The tail of the bridge exposes account/session helpers, status facades,
+  // queue inspection, reply enqueue, and the final plugin/channel factories.
+
+  // Session routing and dedupe surface -------------------------------------
 
   private isPrimaryConnection(accountId: string, clientId?: string): boolean {
     const acc = normalizeAccountId(accountId);
@@ -3899,112 +2303,38 @@ class BncrBridgeRuntime {
     return typeof last === 'number' && t - last <= 90_000;
   }
 
-  private rememberSessionRoute(sessionKey: string, accountId: string, route: BncrRoute) {
-    const key = asString(sessionKey).trim();
-    if (!key) return;
-
-    const acc = normalizeAccountId(accountId);
-    const t = now();
-    const info = { accountId: acc, route, updatedAt: t };
-
-    this.sessionRoutes.set(key, info);
-    this.routeAliases.set(routeKey(acc, route), info);
-    this.lastSessionByAccount.set(acc, {
-      sessionKey: key,
-      // 状态展示统一为 Bncr-platform:group:user
-      scope: formatDisplayScope(route),
-      updatedAt: t,
-    });
-    this.markActivity(acc, t);
-    this.scheduleSave();
+  rememberSessionRoute(sessionKey: string, accountId: string, route: BncrRoute) {
+    this.targetRuntime.rememberSessionRoute(sessionKey, accountId, route);
   }
 
-  private resolveRouteBySession(sessionKey: string, accountId: string): BncrRoute | null {
-    const key = asString(sessionKey).trim();
-    const hit = this.sessionRoutes.get(key);
-    if (hit && normalizeAccountId(accountId) === normalizeAccountId(hit.accountId)) {
-      return hit.route;
-    }
-
-    const parsed = parseStrictBncrSessionKey(key);
-    if (!parsed) return null;
-
-    const alias = this.routeAliases.get(routeKey(normalizeAccountId(accountId), parsed.route));
-    return alias?.route || parsed.route;
+  resolveRouteBySession(sessionKey: string, accountId: string): BncrRoute | null {
+    return this.targetRuntime.resolveRouteBySession(sessionKey, accountId);
   }
 
   // 严谨目标解析：
   // 1) 标准 to 仅认 Bncr:<platform>:<groupId>:<userId> / Bncr:<platform>:<userId>
   // 2) 仍接受 strict sessionKey 作为内部兼容输入
   // 3) 其他旧格式直接失败，并输出标准格式提示日志
-  private resolveVerifiedTarget(
+  resolveVerifiedTarget(
     rawTarget: string,
     accountId: string,
   ): { sessionKey: string; route: BncrRoute; displayScope: string } {
-    const acc = normalizeAccountId(accountId);
-    const raw = asString(rawTarget).trim();
-    if (!raw) throw new Error('bncr invalid target(empty)');
-
-    this.logInfo('target', `incoming raw=${raw} accountId=${acc}`, { debugOnly: true });
-
-    let route: BncrRoute | null = null;
-
-    const strict = parseStrictBncrSessionKey(raw);
-    if (strict) {
-      route = strict.route;
-    } else {
-      route = parseRouteFromDisplayScope(raw) || this.resolveRouteBySession(raw, acc);
-    }
-
-    if (!route) {
-      this.logWarn(
-        'target',
-        `invalid raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=Bncr:<platform>:<groupId>:<userId>|Bncr:<platform>:<userId> standardSessionKey=agent:<agentId>:bncr:direct:<hex(scope)>`,
-        { debugOnly: true },
-      );
-      throw new Error(
-        `bncr invalid target(standard: Bncr:<platform>:<groupId>:<userId> | Bncr:<platform>:<userId>): ${raw}`,
-      );
-    }
-
-    const canonicalAgentId =
-      this.canonicalAgentId ||
-      this.ensureCanonicalAgentId({
-        cfg: getOpenClawRuntimeConfigOrDefault(this.api, {}),
-        accountId: acc,
-        channelId: CHANNEL_ID,
-        peer: { kind: 'direct', id: route.groupId === '0' ? route.userId : route.groupId },
-      });
-    const verified = {
-      sessionKey: buildCanonicalBncrSessionKey(route, canonicalAgentId),
-      route,
-      displayScope: formatDisplayScope(route),
-    };
-
-    this.logInfo(
-      'target',
-      `canonical raw=${raw} accountId=${acc} verified=${JSON.stringify(verified)}`,
-      { debugOnly: true },
-    );
-
-    // 发送链路命中目标时，同步刷新 lastSession，避免状态页显示过期会话。
-    this.lastSessionByAccount.set(acc, {
-      sessionKey: verified.sessionKey,
-      scope: verified.displayScope,
-      updatedAt: now(),
-    });
-    this.scheduleSave();
-
-    return verified;
+    return this.targetRuntime.resolveVerifiedTarget(rawTarget, accountId);
   }
 
   private markActivity(accountId: string, at = now()) {
-    this.lastActivityByAccount.set(normalizeAccountId(accountId), at);
+    this.bridgeConnectionFacade.markActivity(accountId, at);
   }
 
+  // File ACK surface helpers ------------------------------------------------
+
   private fileAckKey(transferId: string, stage: string, chunkIndex?: number): string {
-    return buildFileAckKey({ transferId, stage, chunkIndex });
+    return this.bridgeAckFacade.fileAckKey(transferId, stage, chunkIndex);
   }
+
+  // File ACK waiter/read-model facade --------------------------------------
+  // Keep file ACK keying, waiter wakeup, and transfer owner projection close
+  // together because they form one debugging and lifecycle boundary.
 
   private fileAckOwnerInfo(transferId: string) {
     const st = this.fileSendTransfers.get(transferId);
@@ -4020,119 +2350,7 @@ class BncrBridgeRuntime {
     chunkIndex?: number;
     timeoutMs?: number;
   }) {
-    const transferId = asString(params.transferId).trim();
-    const stage = asString(params.stage).trim();
-    const key = this.fileAckKey(transferId, stage, params.chunkIndex);
-    const timeoutMs = clampFiniteNumber(params.timeoutMs, FILE_ACK_TIMEOUT_MS, 1_000, 120_000);
-    const ownerInfo = this.fileAckOwnerInfo(transferId);
-
-    const cached = this.earlyFileAcks.get(key);
-    if (cached) {
-      this.earlyFileAcks.delete(key);
-      this.logInfo(
-        'file-ack-cache-hit',
-        JSON.stringify({
-          bridge: this.bridgeId,
-          transferId,
-          stage,
-          ackStage: stage,
-          ackOutcome: cached.ok ? 'acked' : 'failed',
-          waiterReused: false,
-          chunkIndex: Number.isFinite(Number(params.chunkIndex))
-            ? Number(params.chunkIndex)
-            : undefined,
-          key,
-          ...ownerInfo,
-          ok: cached.ok,
-          payload: cached.payload,
-        }),
-        { debugOnly: true },
-      );
-      if (cached.ok) return Promise.resolve(cached.payload);
-      return Promise.reject(
-        new Error(
-          asString(cached.payload?.errorMessage || cached.payload?.error || 'file ack failed'),
-        ),
-      );
-    }
-
-    const existing = this.fileAckWaiters.get(key);
-    if (existing) {
-      this.logWarn(
-        'file-ack-waiter-reuse',
-        JSON.stringify({
-          bridge: this.bridgeId,
-          transferId,
-          stage,
-          ackStage: stage,
-          ackOutcome: 'waiter-reused',
-          waiterReused: true,
-          chunkIndex: Number.isFinite(Number(params.chunkIndex))
-            ? Number(params.chunkIndex)
-            : undefined,
-          key,
-          ...ownerInfo,
-        }),
-        { debugOnly: true },
-      );
-      return existing.promise;
-    }
-
-    this.logInfo(
-      'file-ack-wait',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId,
-        stage,
-        ackStage: stage,
-        ackOutcome: 'waiting',
-        waiterReused: false,
-        chunkIndex: Number.isFinite(Number(params.chunkIndex))
-          ? Number(params.chunkIndex)
-          : undefined,
-        key,
-        ...ownerInfo,
-        timeoutMs,
-      }),
-      { debugOnly: true },
-    );
-
-    let timer: NodeJS.Timeout;
-    let resolveWaiter!: (payload: Record<string, unknown>) => void;
-    let rejectWaiter!: (err: Error) => void;
-    const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
-      resolveWaiter = resolve;
-      rejectWaiter = reject;
-      timer = setTimeout(() => {
-        this.fileAckWaiters.delete(key);
-        this.logWarn(
-          OUTBOUND_TERMINAL_REASON.FILE_ACK_TIMEOUT,
-          JSON.stringify({
-            bridge: this.bridgeId,
-            transferId,
-            stage,
-            ackStage: stage,
-            ackOutcome: 'timeout',
-            waiterReused: false,
-            chunkIndex: Number.isFinite(Number(params.chunkIndex))
-              ? Number(params.chunkIndex)
-              : undefined,
-            key,
-            ...ownerInfo,
-            timeoutMs,
-          }),
-          { debugOnly: true },
-        );
-        reject(new Error(`file ack timeout: ${key}`));
-      }, timeoutMs);
-    });
-    this.fileAckWaiters.set(key, {
-      promise,
-      resolve: resolveWaiter,
-      reject: rejectWaiter,
-      timer: timer!,
-    });
-    return promise;
+    return this.bridgeAckFacade.waitForFileAck(params);
   }
 
   private resolveFileAck(params: {
@@ -4142,70 +2360,13 @@ class BncrBridgeRuntime {
     payload: Record<string, unknown>;
     ok: boolean;
   }) {
-    const transferId = asString(params.transferId).trim();
-    const stage = asString(params.stage).trim();
-    const key = this.fileAckKey(transferId, stage, params.chunkIndex);
-    const ownerInfo = this.fileAckOwnerInfo(transferId);
-    const waiter = this.fileAckWaiters.get(key);
-    if (!waiter) {
-      this.rememberEarlyFileAck(key, {
-        payload: params.payload,
-        ok: params.ok,
-        at: now(),
-      });
-      this.logInfo(
-        'file-ack-early-cache',
-        JSON.stringify({
-          bridge: this.bridgeId,
-          transferId,
-          stage,
-          ackStage: stage,
-          ackOutcome: params.ok ? 'early-acked' : 'early-failed',
-          waiterReused: false,
-          chunkIndex: Number.isFinite(Number(params.chunkIndex))
-            ? Number(params.chunkIndex)
-            : undefined,
-          key,
-          ...ownerInfo,
-          ok: params.ok,
-          payload: params.payload,
-          cached: true,
-        }),
-        { debugOnly: true },
-      );
-      return false;
-    }
-    this.fileAckWaiters.delete(key);
-    clearTimeout(waiter.timer);
-    this.logInfo(
-      'file-ack-resolve',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId,
-        stage,
-        ackStage: stage,
-        ackOutcome: params.ok ? 'acked' : 'failed',
-        waiterReused: false,
-        chunkIndex: Number.isFinite(Number(params.chunkIndex))
-          ? Number(params.chunkIndex)
-          : undefined,
-        key,
-        ...ownerInfo,
-        ok: params.ok,
-        payload: params.payload,
-      }),
-      { debugOnly: true },
-    );
-    if (params.ok) waiter.resolve(params.payload);
-    else
-      waiter.reject(
-        new Error(
-          asString(params.payload?.errorMessage || params.payload?.error || 'file ack failed'),
-        ),
-      );
-    return true;
+    return this.bridgeAckFacade.resolveFileAck(params);
   }
 
+  // Structure note (adaptive ACK observability):
+  // This log gate stays in the bridge because it reads and throttles account-level adaptive
+  // timeout state that is shared with status/telemetry surfaces. If this area changes later,
+  // prefer extracting a pure read-model helper rather than another stateful runtime wrapper.
   private maybeLogAdaptiveAckTimeout(args: {
     accountId: string;
     timeoutMs: number;
@@ -4213,272 +2374,118 @@ class BncrBridgeRuntime {
     lastLateAckPushLatencyMs: number | null;
     nowMs?: number;
   }) {
-    if (args.timeoutMs <= PUSH_ACK_TIMEOUT_MS) return;
-    const t = typeof args.nowMs === 'number' ? args.nowMs : now();
-    const previous = this.adaptiveAckTimeoutLogStateByAccount.get(args.accountId);
-    if (
-      previous &&
-      previous.timeoutMs === args.timeoutMs &&
-      previous.reason === args.reason &&
-      t - previous.at < ADAPTIVE_ACK_TIMEOUT_LOG_THROTTLE_MS
-    ) {
-      return;
-    }
-    this.adaptiveAckTimeoutLogStateByAccount.set(args.accountId, {
-      at: t,
-      timeoutMs: args.timeoutMs,
-      reason: args.reason,
-    });
-    const parts = [
-      args.accountId,
-      `current=${args.timeoutMs}`,
-      `default=${PUSH_ACK_TIMEOUT_MS}`,
-      `reason=${args.reason}`,
-    ];
-    if (typeof args.lastLateAckPushLatencyMs === 'number') {
-      parts.push(`latePushMs=${args.lastLateAckPushLatencyMs}`);
-    }
-    this.logInfo('outbox ack timeout-adaptive', parts.join('|'));
+    this.bridgeAckFacade.maybeLogAdaptiveAckTimeout(args);
   }
 
+  // Structure note (adaptive ACK decision boundary):
+  // Keep the final timeout decision in the bridge. It is the aggregation point for multiple
+  // account-scoped telemetry maps plus runtime policy constants, and splitting it further would
+  // mostly widen runtime injection without making ownership clearer.
   private resolveMessageAckTimeoutMs(accountId?: string) {
-    if (!ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED) return PUSH_ACK_TIMEOUT_MS;
-    const acc = normalizeAccountId(accountId || BNCR_DEFAULT_ACCOUNT_ID);
-    const lateAckOkCount = this.getCounter(this.lateAckOkCountByAccount, acc);
-    const recentAckTimeoutCount = this.getCounter(this.ackTimeoutCountByAccount, acc);
-    const lastLateAckPushLatencyMs = this.lastLateAckPushLatencyMsByAccount.get(acc) || null;
-    const lastLateAckOkAt = this.lastLateAckOkByAccount.get(acc) || null;
-    const adaptiveAckRecoveryOkCount = this.getCounter(
-      this.adaptiveAckRecoveryOkCountByAccount,
-      acc,
-    );
-    const nowMs = now();
-    const { timeoutMs, reason } = resolveBncrRuntimeAckTimeoutDecision({
-      lateAckOkCount,
-      recentAckTimeoutCount,
-      lastLateAckPushLatencyMs,
-      lastLateAckOkAt,
-      adaptiveAckRecoveryOkCount,
-      nowMs,
-      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
-      minAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MIN_MS,
-      maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
-      lateAckObservationTtlMs: ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS,
-      recoveryOkThreshold: ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
-    });
-    this.maybeLogAdaptiveAckTimeout({
-      accountId: acc,
-      timeoutMs,
-      reason,
-      lastLateAckPushLatencyMs,
-      nowMs,
-    });
-    return timeoutMs;
+    return this.bridgeAckFacade.resolveMessageAckTimeoutMs(accountId || BNCR_DEFAULT_ACCOUNT_ID);
   }
 
+  // Structure note (runtime ACK snapshot):
+  // This method intentionally remains a bridge-owned read-model builder because it projects
+  // several runtime maps into one diagnostics/status snapshot. Future cleanup should extract
+  // pure snapshot shaping only, not move the underlying state ownership out of the bridge.
   private buildRuntimeAckObservability(accountId: string) {
-    const acc = normalizeAccountId(accountId);
-    const recentAckTimeoutCount = this.getCounter(this.ackTimeoutCountByAccount, acc);
-    const lateAckOkCount = this.getCounter(this.lateAckOkCountByAccount, acc);
-    const lastLateAckPushLatencyMs = this.lastLateAckPushLatencyMsByAccount.get(acc) || null;
-    const lastLateAckOkAt = this.lastLateAckOkByAccount.get(acc) || null;
-    const nowMs = now();
-    const adaptiveAckRecoveryOkCount = this.getCounter(
-      this.adaptiveAckRecoveryOkCountByAccount,
-      acc,
-    );
-    return buildBncrRuntimeAckObservability({
-      lastAckOkAt: this.lastAckOkByAccount.get(acc) || null,
-      lastAckTimeoutAt: this.lastAckTimeoutByAccount.get(acc) || null,
-      recentAckTimeoutCount,
-      lateAckOkCount,
-      lastLateAckOkAt,
-      adaptiveAckRecoveryOkCount,
-      lastAckQueueLatencyMs: this.lastAckQueueLatencyMsByAccount.get(acc) || null,
-      lastAckPushLatencyMs: this.lastAckPushLatencyMsByAccount.get(acc) || null,
-      lastLateAckQueueLatencyMs: this.lastLateAckQueueLatencyMsByAccount.get(acc) || null,
-      lastLateAckPushLatencyMs,
-      adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
-      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
-      currentAckTimeoutMs: this.resolveMessageAckTimeoutMs(acc),
-      minAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MIN_MS,
-      maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
-      lateAckObservationTtlMs: ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS,
-      recoveryOkThreshold: ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
-      nowMs,
-    });
+    return this.bridgeAckFacade.buildRuntimeAckObservability(accountId);
   }
 
-  private buildRuntimeAckStrategy(ackObservability: Record<string, any>) {
-    return buildBncrRuntimeAckStrategy({
-      ackObservability,
-      defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
-      maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
-    });
+  private readonly runtimeAckObservabilityBuilder = createBncrRuntimeAckObservabilityBuilder({
+    normalizeAccountId,
+    getCounter: (map, accountId) => this.getCounter(map, accountId),
+    ackTimeoutCountByAccount: this.ackTimeoutCountByAccount,
+    lateAckOkCountByAccount: this.lateAckOkCountByAccount,
+    lastLateAckPushLatencyMsByAccount: this.lastLateAckPushLatencyMsByAccount,
+    lastLateAckOkByAccount: this.lastLateAckOkByAccount,
+    adaptiveAckRecoveryOkCountByAccount: this.adaptiveAckRecoveryOkCountByAccount,
+    lastAckOkByAccount: this.lastAckOkByAccount,
+    lastAckTimeoutByAccount: this.lastAckTimeoutByAccount,
+    lastAckQueueLatencyMsByAccount: this.lastAckQueueLatencyMsByAccount,
+    lastAckPushLatencyMsByAccount: this.lastAckPushLatencyMsByAccount,
+    lastLateAckQueueLatencyMsByAccount: this.lastLateAckQueueLatencyMsByAccount,
+    adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
+    defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
+    resolveMessageAckTimeoutMs: (accountId) => this.resolveMessageAckTimeoutMs(accountId),
+    minAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MIN_MS,
+    maxAckTimeoutMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
+    lateAckObservationTtlMs: ADAPTIVE_ACK_TIMEOUT_OBSERVATION_TTL_MS,
+    recoveryOkThreshold: ADAPTIVE_ACK_TIMEOUT_RECOVERY_OK_THRESHOLD,
+    now,
+  });
+
+  // Structure note (runtime ACK strategy facade):
+  // Keep this facade adjacent to the bridge-owned observability snapshot so status/runtime
+  // surfaces continue to read one coherent source of truth.
+  private buildRuntimeAckStrategy(ackObservability: BncrAckObservability) {
+    return this.bridgeAckFacade.buildRuntimeAckStrategy(ackObservability);
   }
 
-  private buildRuntimeStatusInput(accountId: string, overrides: { running?: boolean } = {}) {
-    const acc = normalizeAccountId(accountId);
-    const snapshots = buildRuntimeStatusSnapshots({
-      accountId: acc,
-      outboxEntries: this.outbox.values(),
-      deadLetterEntries: this.deadLetter,
-      sessionRouteEntries: this.sessionRoutes.values(),
-      countInvalidOutboxSessionKeys: (snapshotAccountId) =>
-        this.countInvalidOutboxSessionKeys(snapshotAccountId),
-      countLegacyAccountResidue: (snapshotAccountId) =>
-        this.countLegacyAccountResidue(snapshotAccountId),
-      connectEventsByAccount: this.connectEventsByAccount,
-      inboundEventsByAccount: this.inboundEventsByAccount,
-      activityEventsByAccount: this.activityEventsByAccount,
-      ackEventsByAccount: this.ackEventsByAccount,
-      activeConnectionCount: (snapshotAccountId) => this.activeConnectionCount(snapshotAccountId),
-      lastSessionByAccount: this.lastSessionByAccount,
-      lastActivityByAccount: this.lastActivityByAccount,
-      lastInboundByAccount: this.lastInboundByAccount,
-      lastOutboundByAccount: this.lastOutboundByAccount,
-    });
-    return buildBncrRuntimeStatusInput({
-      accountId: acc,
-      connected: this.isOnline(acc),
-      ...snapshots,
-      startedAt: this.startedAt,
-      running: overrides.running,
-      channelRoot: path.join(process.cwd(), 'plugins', 'bncr'),
-    });
+  // Status and diagnostics public read-models ------------------------------
+  // These methods are the bridge-owned projection layer consumed by status,
+  // diagnostics handlers, and plugin surfaces.
+
+  private buildRuntimeStatusInput(
+    accountId: string,
+    overrides: Parameters<typeof this.bridgeStatusFacade.buildRuntimeStatusInput>[1] = {},
+  ) {
+    return this.bridgeStatusFacade.buildRuntimeStatusInput(accountId, overrides);
   }
 
+  // Structure note (status facade):
+  // This stays as a thin bridge facade on purpose. The bridge owns which account-scoped state
+  // participates in status projection, while statusRuntime owns the formatting/projection logic.
   private buildStatusMeta(accountId: string) {
-    return buildStatusMetaFromRuntime(this.buildRuntimeStatusInput(accountId));
+    return this.bridgeStatusFacade.buildStatusMeta(accountId);
   }
 
-  getAccountRuntimeSnapshot(accountId: string) {
-    const snapshot = buildAccountRuntimeSnapshot(
-      this.buildRuntimeStatusInput(accountId, { running: true }),
-    );
-    const ackObservability = this.buildRuntimeAckObservability(accountId);
-    const ackStrategy = this.buildRuntimeAckStrategy(ackObservability);
-    return {
-      ...snapshot,
-      ackObservability,
-      ackStrategy,
-      diagnostics: {
-        ...(snapshot.diagnostics || {}),
-        ackObservability,
-        ackStrategy,
-      },
-      meta: {
-        ...(snapshot.meta || {}),
-        ackObservability,
-        ackStrategy,
-        diagnostics: {
-          ...(snapshot.meta?.diagnostics || {}),
-          ackObservability,
-          ackStrategy,
-        },
-      },
-    };
+  getAccountRuntimeSnapshot(
+    accountId: string,
+    runtimeStatusInput = this.buildRuntimeStatusInput(accountId, { running: true }),
+  ) {
+    return this.bridgeStatusFacade.getAccountRuntimeSnapshot(accountId, runtimeStatusInput);
   }
 
+  // Structure note (status headline facade):
+  // Keep headline projection adjacent to buildStatusMeta so status entrypoints remain obvious
+  // from the bridge surface instead of being scattered across additional wrapper layers.
   private buildStatusHeadline(accountId: string): string {
-    return buildStatusHeadlineFromRuntime(this.buildRuntimeStatusInput(accountId));
+    return this.bridgeStatusFacade.buildStatusHeadline(accountId);
   }
 
   getStatusHeadline(accountId: string): string {
-    return this.buildStatusHeadline(accountId);
+    return this.bridgeStatusFacade.getStatusHeadline(accountId);
   }
 
   getChannelSummary(defaultAccountId: string) {
-    const accountId = normalizeAccountId(defaultAccountId);
-    const runtime = this.getAccountRuntimeSnapshot(accountId);
-    const headline = this.buildStatusHeadline(accountId);
-
-    if (runtime.connected) {
-      return { linked: true, self: { e164: headline } };
-    }
-
-    // 顶层汇总不绑定某个 accountId：任一账号在线都应显示 linked
-    const t = now();
-    for (const c of this.connections.values()) {
-      if (t - c.lastSeenAt <= CONNECT_TTL_MS) {
-        return { linked: true, self: { e164: headline } };
-      }
-    }
-
-    return { linked: false, self: { e164: headline } };
+    return this.bridgeStatusFacade.getChannelSummary(defaultAccountId);
   }
+
+  // Outbound queue terminal flow -------------------------------------------
+  // These methods close the loop between enqueue, due-entry collection,
+  // retry exhaustion, and dead-letter settlement.
 
   private enqueueOutbound(entry: OutboxEntry) {
-    // Structure note (outbox enqueue entrypoint):
-    // This is the sync handoff from message construction into the outbound state machine.
-    // Responsibilities are intentionally narrow here: log/summary, persist into outbox,
-    // schedule state save, then nudge flushPushQueue. Future refactors should keep enqueue
-    // lightweight and avoid reintroducing retry / route / ACK policy decisions at this layer.
-    this.logInfo(
-      'outbound',
-      JSON.stringify(
-        buildOutboxEnqueueDebugInfo({
-          bridgeId: this.bridgeId,
-          entry,
-          asString,
-          formatDisplayScope,
-        }),
-      ),
-      { debugOnly: true },
-    );
-    this.logOutboundSummary(entry);
-    const accountId = normalizeAccountId(entry.accountId);
-    this.incrementCounter(this.outboundEnqueueCountByAccount, accountId);
-    this.lastOutboundEnqueueAtByAccount.set(accountId, now());
-    this.outbox.set(entry.messageId, entry);
-    this.scheduleSave();
-    this.flushPushQueueBestEffort({ accountId: entry.accountId });
+    this.bridgeOutboxFacade.enqueueOutbound(entry);
   }
 
+  // Structure note (dead-letter terminal sink):
+  // This remains bridge-owned because dead-lettering is the terminal transition sink for the
+  // outbound state machine: it settles waiters, mutates bounded deadLetter memory, updates
+  // counters, schedules persistence, and emits summary logs in one ownership boundary.
   private moveToDeadLetter(entry: OutboxEntry, reason: string) {
-    // Structure note (terminal transition):
-    // Dead-lettering is the terminal state transition for an outbox entry. It also resolves any
-    // waiter still blocked on the message id with timeout semantics, so future extraction should
-    // treat dead-letter storage and waiter cleanup as one boundary rather than separate utilities.
-    //
-    // Queue-lifecycle note:
-    // This path is shared by both explicit fatal outcomes and retry exhaustion. Keep that distinction
-    // visible in callers, but keep the final sink centralized here so terminal accounting, persistence,
-    // and waiter cleanup cannot drift apart.
-    const dead = buildDeadLetterEntry(entry, reason);
-    this.deadLetter = appendDeadLetter({
-      deadLetter: this.deadLetter,
-      entry: dead,
-      maxEntries: MAX_DEAD_LETTER_ENTRIES,
-    });
-    this.incrementCounter(this.deadLetterSinceStartByAccount, dead.accountId);
-    this.logDeadLetterSummary(dead.accountId, { source: 'move' });
-    this.outbox.delete(entry.messageId);
-    this.resolveMessageAck(entry.messageId, 'timeout');
-    this.scheduleSave();
+    this.bridgeOutboxFacade.moveToDeadLetter(entry, reason);
   }
 
   collectDue(accountId: string, maxBatch: number): Array<Record<string, unknown>> {
-    const key = normalizeAccountId(accountId);
-    const result = collectDueOutboxEntries({
-      outbox: this.outbox.values(),
-      accountId: key,
-      now: now(),
-      maxBatch,
-      maxRetry: MAX_RETRY,
-      backoffMs,
-    });
-
-    for (const entry of result.updatedEntries) {
-      this.outbox.set(entry.messageId, entry);
-    }
-    for (const entry of result.deadLetterEntries) {
-      this.moveToDeadLetter(entry, entry.lastError || 'retry-limit');
-    }
-
-    if (result.duePayloads.length) this.scheduleSave();
-    return result.duePayloads;
+    return this.bridgeOutboxFacade.collectDue({ accountId, maxBatch });
   }
+
+  // File-transfer outbound flow --------------------------------------------
+  // This cluster keeps transfer media loading, route diagnostics, bridge-side
+  // transfer logs, and orchestrator/runtime facades in one scan path.
 
   private async loadOutboundTransferMedia(params: {
     mediaUrl: string;
@@ -4489,37 +2496,14 @@ class BncrBridgeRuntime {
     mimeType?: string;
     fileName: string;
   }> {
-    const loaded = await loadOpenClawWebMedia(this.api, params.mediaUrl, {
-      localRoots: params.mediaLocalRoots,
-      maxBytes: 50 * 1024 * 1024,
-    });
-    const size = loaded.buffer.byteLength;
-    const mimeType = loaded.contentType;
-    const fileName = resolveOutboundFileName({
-      mediaUrl: params.mediaUrl,
-      fileName: loaded.fileName,
-      mimeType,
-    });
-    return { loaded, size, mimeType, fileName };
+    return await this.bridgeMediaFacade.loadOutboundTransferMedia(params);
   }
 
   private buildTransferRouteDiagnostics(args: {
     accountId: string;
     recentInboundReachable: boolean;
   }) {
-    const directConnIds = this.resolvePushConnIds(args.accountId);
-    const recentConnIds = args.recentInboundReachable
-      ? this.resolveRecentInboundConnIds(args.accountId)
-      : new Set<string>();
-    const activeConnectionKey = this.activeConnectionByAccount.get(args.accountId) || null;
-    const accountConnections = this.buildActiveConnectionDebugList(args.accountId);
-
-    return {
-      directConnIds,
-      recentConnIds,
-      activeConnectionKey,
-      accountConnections,
-    };
+    return this.bridgeMediaFacade.buildTransferRouteDiagnostics(args);
   }
 
   private selectTransferConnIds(args: {
@@ -4527,11 +2511,7 @@ class BncrBridgeRuntime {
     recentConnIds: Set<string>;
     recentInboundReachable: boolean;
   }) {
-    let connIds = args.directConnIds;
-    if (!connIds.size && args.recentInboundReachable) {
-      connIds = args.recentConnIds;
-    }
-    return connIds;
+    return this.bridgeMediaFacade.selectTransferConnIds(args);
   }
 
   private logFileChunkDiag(args: {
@@ -4552,24 +2532,7 @@ class BncrBridgeRuntime {
       lastSeenAt: number;
     }>;
   }) {
-    this.logInfo(
-      'file-chunk-diag',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        accountId: args.accountId,
-        sessionKey: args.sessionKey,
-        mediaUrl: args.mediaUrl,
-        hasGatewayContext: args.hasGatewayContext,
-        activeConnectionKey: args.activeConnectionKey,
-        ownerConnId: args.ownerConnId || null,
-        ownerClientId: args.ownerClientId || null,
-        directConnIds: Array.from(args.directConnIds),
-        recentInboundReachable: args.recentInboundReachable,
-        recentConnIds: Array.from(args.recentConnIds),
-        accountConnections: args.accountConnections,
-      }),
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logFileChunkDiag(args);
   }
 
   private logFileTransferStart(args: {
@@ -4582,29 +2545,11 @@ class BncrBridgeRuntime {
     fileSize: number;
     chunkSize: number;
     totalChunks: number;
-    connIds: Iterable<string>;
+    connIds: ReadonlySet<string>;
     ownerConnId?: string;
     ownerClientId?: string;
   }) {
-    this.logInfo(
-      'file-transfer-start',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId: args.transferId,
-        accountId: args.accountId,
-        sessionKey: args.sessionKey,
-        mediaUrl: args.mediaUrl,
-        fileName: args.fileName,
-        mimeType: args.mimeType,
-        fileSize: args.fileSize,
-        chunkSize: args.chunkSize,
-        totalChunks: args.totalChunks,
-        connIds: Array.from(args.connIds),
-        ownerConnId: args.ownerConnId || null,
-        ownerClientId: args.ownerClientId || null,
-      }),
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logFileTransferStart(args);
   }
 
   private logFileTransferChunkSend(args: {
@@ -4614,22 +2559,9 @@ class BncrBridgeRuntime {
     attempt: number;
     offset: number;
     size: number;
-    connIds: Iterable<string>;
+    connIds: ReadonlySet<string>;
   }) {
-    this.logInfo(
-      'file-transfer-chunk-send',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId: args.transferId,
-        accountId: args.accountId,
-        chunkIndex: args.chunkIndex,
-        attempt: args.attempt,
-        offset: args.offset,
-        size: args.size,
-        connIds: Array.from(args.connIds),
-      }),
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logFileTransferChunkSend(args);
   }
 
   private logFileTransferChunkAck(args: {
@@ -4638,17 +2570,7 @@ class BncrBridgeRuntime {
     chunkIndex: number;
     attempt: number;
   }) {
-    this.logInfo(
-      'file-transfer-chunk-ack',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId: args.transferId,
-        accountId: args.accountId,
-        chunkIndex: args.chunkIndex,
-        attempt: args.attempt,
-      }),
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logFileTransferChunkAck(args);
   }
 
   private logFileTransferChunkAckFail(args: {
@@ -4658,35 +2580,15 @@ class BncrBridgeRuntime {
     attempt: number;
     error: unknown;
   }) {
-    this.logWarn(
-      'file-transfer-chunk-ack-fail',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId: args.transferId,
-        accountId: args.accountId,
-        chunkIndex: args.chunkIndex,
-        attempt: args.attempt,
-        error: asString((args.error as Error)?.message || args.error),
-      }),
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logFileTransferChunkAckFail(args);
   }
 
   private logFileTransferCompleteSend(args: {
     transferId: string;
     accountId: string;
-    connIds: Iterable<string>;
+    connIds: ReadonlySet<string>;
   }) {
-    this.logInfo(
-      'file-transfer-complete-send',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId: args.transferId,
-        accountId: args.accountId,
-        connIds: Array.from(args.connIds),
-      }),
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logFileTransferCompleteSend(args);
   }
 
   private logFileTransferCompleteAck(args: {
@@ -4694,16 +2596,7 @@ class BncrBridgeRuntime {
     accountId: string;
     payload: { path: string };
   }) {
-    this.logInfo(
-      'file-transfer-complete-ack',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        transferId: args.transferId,
-        accountId: args.accountId,
-        payload: args.payload,
-      }),
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logFileTransferCompleteAck(args);
   }
 
   private buildInitialFileSendTransferState(args: {
@@ -4720,30 +2613,47 @@ class BncrBridgeRuntime {
     ownerConnId?: string;
     ownerClientId?: string;
   }): FileSendTransferState {
-    return {
-      transferId: args.transferId,
-      accountId: normalizeAccountId(args.accountId),
-      sessionKey: args.sessionKey,
-      route: args.route,
-      fileName: args.fileName,
-      mimeType: args.mimeType || 'application/octet-stream',
-      fileSize: args.fileSize,
-      chunkSize: args.chunkSize,
-      totalChunks: args.totalChunks,
-      fileSha256: args.fileSha256,
-      startedAt: now(),
-      status: 'init',
-      ackedChunks: new Set(),
-      failedChunks: new Map(),
-      ownerConnId: args.ownerConnId,
-      ownerClientId: args.ownerClientId,
-    };
+    return this.bridgeMediaFacade.buildInitialFileSendTransferState(args) as FileSendTransferState;
   }
 
+  // Phase 8: media orchestration and host handoff ---------------------------
+  private readonly mediaOrchestratorsRuntimeGroup = createBncrMediaOrchestratorsRuntimeGroup({
+    now,
+    asString,
+    fileSendTransfers: this.fileSendTransfers,
+    getGatewayContext: () =>
+      this.gatewayContext
+        ? {
+            broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) =>
+              this.gatewayContext!.broadcastToConnIds(event, payload, connIds),
+          }
+        : null,
+    fileInitEvent: BNCR_FILE_INIT_EVENT,
+    fileAbortEvent: BNCR_FILE_ABORT_EVENT,
+    prepareOutboundTransfer: (args) => this.fileTransferSetup.prepareOutboundTransfer(args),
+    sendChunk: (args) => this.fileTransferSend.sendChunk(args),
+    sendComplete: (args) => this.fileTransferSend.sendComplete(args),
+    waitForFileAck: (args) => this.waitForFileAck(args),
+    logFileTransferChunkAck: (args) => this.logFileTransferChunkAck(args),
+    logFileTransferChunkAckFail: (args) => this.logFileTransferChunkAckFail(args),
+    logFileTransferCompleteAck: (args) => this.logFileTransferCompleteAck(args),
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logEnqueueFromReply: (args) => this.logEnqueueFromReply(args),
+    enqueueOutbound: (entry) => this.enqueueOutbound(entry),
+    buildTextOutboxEntry: (args) => this.buildTextOutboxEntry(args),
+    buildFileTransferOutboxEntry: (args) => this.buildFileTransferOutboxEntry(args),
+    rememberRecentMediaSend: (args) => this.rememberRecentMediaSend(args),
+    tryBuildMediaDedupeFallback: (args) => this.tryBuildMediaDedupeFallback(args),
+  });
+
+  private readonly fileTransferOrchestrator =
+    this.mediaOrchestratorsRuntimeGroup.fileTransferOrchestrator;
+
+  // Structure note (bridge-local wait primitive):
+  // Keep this tiny sleep helper near the file-transfer orchestrator facade so
+  // transfer retry/wait flows remain easy to trace without searching upward.
   private async sleepMs(ms: number): Promise<void> {
-    await new Promise<void>((resolve) =>
-      setTimeout(resolve, clampFiniteNumber(ms, 0, 0, INTERNAL_SLEEP_MAX_MS)),
-    );
+    await new Promise<void>((resolve) => setTimeout(resolve, clampFiniteNumber(ms, 0, 0, 120_000)));
   }
 
   private async waitChunkAck(params: {
@@ -4751,49 +2661,14 @@ class BncrBridgeRuntime {
     chunkIndex: number;
     timeoutMs?: number;
   }): Promise<void> {
-    // Refactor boundary note (file-transfer / ACK coupling):
-    // Chunk-level ACK waiting is part of the file-transfer sub-protocol, but it depends directly on
-    // mutable transfer runtime state in fileSendTransfers. Keep state prechecks here, while ACK wakeup
-    // uses the shared event-style fileAckWaiters path instead of polling transfer state.
-    const { transferId, chunkIndex } = params;
-    const st = this.fileSendTransfers.get(transferId);
-    if (!st) throw new Error('transfer state missing');
-    if (st.failedChunks.has(chunkIndex)) {
-      throw new Error(st.failedChunks.get(chunkIndex) || `chunk ${chunkIndex} failed`);
-    }
-    if (st.ackedChunks.has(chunkIndex)) return;
-
-    await this.waitForFileAck({
-      transferId,
-      stage: 'chunk',
-      chunkIndex,
-      timeoutMs: clampFiniteNumber(params.timeoutMs, FILE_TRANSFER_ACK_TTL_MS, 1_000, 60_000),
-    });
+    return this.bridgeMediaFacade.waitChunkAck(params);
   }
 
   private async waitCompleteAck(params: {
     transferId: string;
     timeoutMs?: number;
   }): Promise<{ path: string }> {
-    // Refactor boundary note (file-transfer completion):
-    // Completion ACK waiting shares the same transfer lifecycle boundary as chunk ACKs and relies on
-    // transfer status transitions performed elsewhere in channel.ts. Keep completion wait behavior and
-    // transfer-state mutation boundaries aligned if/when file-transfer pieces are moved out.
-    const { transferId } = params;
-    const st = this.fileSendTransfers.get(transferId);
-    if (!st) throw new Error('transfer state missing');
-    if (st.status === 'aborted') throw new Error(st.error || 'transfer aborted');
-    if (st.status === 'completed' && st.completedPath) return { path: st.completedPath };
-
-    const payload = await this.waitForFileAck({
-      transferId,
-      stage: 'complete',
-      timeoutMs: clampFiniteNumber(params.timeoutMs, 60_000, 2_000, 120_000),
-    });
-    const updated = this.fileSendTransfers.get(transferId);
-    const path = asString(payload?.path || updated?.completedPath || '').trim();
-    if (!path) throw new Error('complete ack missing path');
-    return { path };
+    return this.bridgeMediaFacade.waitCompleteAck(params);
   }
 
   private async transferMediaToBncrClient(params: {
@@ -4803,222 +2678,13 @@ class BncrBridgeRuntime {
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
   }): Promise<{
-    // Refactor boundary note (file-transfer root):
-    // This method is the root of the outbound file-transfer protocol. It owns media loading,
-    // inline-vs-chunk mode selection, route/owner selection for transfer delivery, chunk send,
-    // chunk ACK waits, complete ACK waits, and abort propagation. Future extraction should treat
-    // these as one protocol boundary first, rather than splitting transport and state handling separately.
     mode: 'base64' | 'chunk';
     mimeType?: string;
     fileName?: string;
     mediaBase64?: string;
     path?: string;
   }> {
-    const { loaded, size, mimeType, fileName } = await this.loadOutboundTransferMedia({
-      mediaUrl: params.mediaUrl,
-      mediaLocalRoots: params.mediaLocalRoots,
-    });
-
-    if (!FILE_FORCE_CHUNK && size <= FILE_INLINE_THRESHOLD) {
-      return {
-        mode: 'base64',
-        mimeType,
-        fileName,
-        mediaBase64: loaded.buffer.toString('base64'),
-      };
-    }
-
-    const ctx = this.gatewayContext;
-    const owner = this.resolveOutboxPushOwner(params.accountId);
-    const recentInboundReachable = this.hasRecentInboundReachability(params.accountId);
-    const accountId = normalizeAccountId(params.accountId);
-    const routeDiagnostics = this.buildTransferRouteDiagnostics({
-      accountId,
-      recentInboundReachable,
-    });
-    this.logFileChunkDiag({
-      accountId,
-      sessionKey: params.sessionKey,
-      mediaUrl: params.mediaUrl,
-      hasGatewayContext: Boolean(ctx),
-      activeConnectionKey: routeDiagnostics.activeConnectionKey,
-      ownerConnId: owner?.connId,
-      ownerClientId: owner?.clientId,
-      directConnIds: routeDiagnostics.directConnIds,
-      recentInboundReachable,
-      recentConnIds: routeDiagnostics.recentConnIds,
-      accountConnections: routeDiagnostics.accountConnections,
-    });
-    if (!ctx) throw new Error('gateway context unavailable');
-
-    const connIds = this.selectTransferConnIds({
-      directConnIds: routeDiagnostics.directConnIds,
-      recentConnIds: routeDiagnostics.recentConnIds,
-      recentInboundReachable,
-    });
-    if (!connIds.size) throw new Error('no active bncr client for file chunk transfer');
-
-    const transferId = randomUUID();
-    const chunkSize = 256 * 1024;
-    const totalChunks = Math.ceil(size / chunkSize);
-    const fileSha256 = createHash('sha256').update(loaded.buffer).digest('hex');
-
-    this.logFileTransferStart({
-      transferId,
-      accountId,
-      sessionKey: params.sessionKey,
-      mediaUrl: params.mediaUrl,
-      fileName,
-      mimeType,
-      fileSize: size,
-      chunkSize,
-      totalChunks,
-      connIds,
-      ownerConnId: owner?.connId,
-      ownerClientId: owner?.clientId,
-    });
-
-    const st = this.buildInitialFileSendTransferState({
-      transferId,
-      accountId: params.accountId,
-      sessionKey: params.sessionKey,
-      route: params.route,
-      fileName,
-      mimeType,
-      fileSize: size,
-      chunkSize,
-      totalChunks,
-      fileSha256,
-      ownerConnId: owner?.connId,
-      ownerClientId: owner?.clientId,
-    });
-    this.fileSendTransfers.set(transferId, st);
-
-    ctx.broadcastToConnIds(
-      BNCR_FILE_INIT_EVENT,
-      buildFileTransferInitPayload({
-        transferId,
-        sessionKey: params.sessionKey,
-        route: params.route,
-        fileName,
-        mimeType,
-        fileSize: size,
-        chunkSize,
-        totalChunks,
-        fileSha256,
-        ts: now(),
-      }),
-      connIds,
-    );
-
-    // 逐块发送并等待 ACK
-    for (let idx = 0; idx < totalChunks; idx++) {
-      const start = idx * chunkSize;
-      const end = Math.min(start + chunkSize, size);
-      const slice = loaded.buffer.subarray(start, end);
-      const chunkSha256 = createHash('sha256').update(slice).digest('hex');
-
-      let ok = false;
-      let lastErr: unknown = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        ctx.broadcastToConnIds(
-          BNCR_FILE_CHUNK_EVENT,
-          buildFileTransferChunkPayload({
-            transferId,
-            chunkIndex: idx,
-            offset: start,
-            size: slice.byteLength,
-            chunkSha256,
-            base64: slice.toString('base64'),
-            ts: now(),
-          }),
-          connIds,
-        );
-
-        this.logFileTransferChunkSend({
-          transferId,
-          accountId,
-          chunkIndex: idx,
-          attempt,
-          offset: start,
-          size: slice.byteLength,
-          connIds,
-        });
-
-        try {
-          await this.waitChunkAck({
-            transferId,
-            chunkIndex: idx,
-            timeoutMs: FILE_TRANSFER_ACK_TTL_MS,
-          });
-          this.logFileTransferChunkAck({
-            transferId,
-            accountId,
-            chunkIndex: idx,
-            attempt,
-          });
-          ok = true;
-          break;
-        } catch (err) {
-          lastErr = err;
-          this.logFileTransferChunkAckFail({
-            transferId,
-            accountId,
-            chunkIndex: idx,
-            attempt,
-            error: err,
-          });
-          await this.sleepMs(150 * attempt);
-        }
-      }
-
-      if (!ok) {
-        st.status = 'aborted';
-        st.terminalAt = now();
-        st.error = String((lastErr as any)?.message || lastErr || `chunk-${idx}-failed`);
-        this.fileSendTransfers.set(transferId, st);
-        ctx.broadcastToConnIds(
-          BNCR_FILE_ABORT_EVENT,
-          buildFileTransferAbortPayload({
-            transferId,
-            reason: st.error,
-            ts: now(),
-          }),
-          connIds,
-        );
-        throw new Error(st.error);
-      }
-    }
-
-    ctx.broadcastToConnIds(
-      BNCR_FILE_COMPLETE_EVENT,
-      buildFileTransferCompletePayload({
-        transferId,
-        ts: now(),
-      }),
-      connIds,
-    );
-
-    this.logFileTransferCompleteSend({
-      transferId,
-      accountId,
-      connIds,
-    });
-
-    const done = await this.waitCompleteAck({ transferId, timeoutMs: 60_000 });
-
-    this.logFileTransferCompleteAck({
-      transferId,
-      accountId,
-      payload: done,
-    });
-
-    return {
-      mode: 'chunk',
-      mimeType,
-      fileName,
-      path: done.path,
-    };
+    return this.bridgeMediaFacade.transferMediaToBncrClient(params);
   }
 
   public async enqueueFromReply(params: {
@@ -5029,28 +2695,7 @@ class BncrBridgeRuntime {
     mediaLocalRoots?: readonly string[];
     replyTargetPolicy?: OutboundReplyTargetPolicy;
   }) {
-    const { accountId, sessionKey, route, payload, mediaLocalRoots, replyTargetPolicy } = params;
-    const normalized = normalizeReplyPayload(payload, { asString }, { replyTargetPolicy });
-
-    enqueueNormalizedReplyPayload(
-      {
-        accountId,
-        sessionKey,
-        route,
-        payload: normalized,
-        mediaLocalRoots,
-      },
-      {
-        logEnqueueFromReply: (args) => this.logEnqueueFromReply(args),
-        hasReplyMediaEntries,
-        enqueueReplyMediaEntries: (args) => this.enqueueReplyMediaEntries(args),
-        enqueueReplyTextEntry: (args) =>
-          enqueueReplyTextEntry(args, {
-            enqueueOutbound: (entry) => this.enqueueOutbound(entry),
-            buildTextOutboxEntry: (entryArgs) => this.buildTextOutboxEntry(entryArgs),
-          }),
-      },
-    );
+    this.bridgeMediaFacade.enqueueFromReply(params);
   }
 
   private logEnqueueFromReply(args: {
@@ -5059,1318 +2704,296 @@ class BncrBridgeRuntime {
     route: BncrRoute;
     payload: NormalizedReplyPayload;
   }) {
-    this.logInfo(
-      'outbound',
-      `enqueue-from-reply ${JSON.stringify(buildEnqueueFromReplyDebugInfo(args))}`,
-      { debugOnly: true },
-    );
+    this.bridgeMediaFacade.logEnqueueFromReply(args);
   }
 
-  private enqueueSingleReplyMediaEntry(args: {
-    params: ReplyMediaEntriesParams;
-    mediaUrl: string;
-    first: boolean;
-    currentTime: number;
-  }) {
-    const normalizedText = normalizeMessageText(args.first ? args.params.payload.text : '');
-    const fallback = this.tryBuildMediaDedupeFallback({
-      sessionKey: args.params.sessionKey,
-      mediaUrl: args.mediaUrl,
-      text: normalizedText,
-      replyToId: args.params.payload.replyToId,
-      currentTime: args.currentTime,
-    });
+  private readonly replyMediaOrchestrator =
+    this.mediaOrchestratorsRuntimeGroup.replyMediaOrchestrator;
 
-    enqueueSingleReplyMediaEntry(
-      {
-        params: args.params,
-        mediaUrl: args.mediaUrl,
-        normalizedText,
-        text: args.first ? args.params.payload.text : '',
-        fallback,
-        currentTime: args.currentTime,
-      },
-      {
-        enqueueReplyMediaFallbackTextEntry: (params) =>
-          enqueueReplyMediaFallbackTextEntry(params, {
-            logInfo: (scope, message, options) => this.logInfo(scope, message, options),
-            enqueueOutbound: (entry) => this.enqueueOutbound(entry),
-            buildTextOutboxEntry: (entryParams) => this.buildTextOutboxEntry(entryParams),
-          }),
-        enqueueReplyMediaFileTransferEntry: (params) =>
-          enqueueReplyMediaFileTransferEntry(params, {
-            enqueueOutbound: (entry) => this.enqueueOutbound(entry),
-            buildFileTransferOutboxEntry: (entryParams) =>
-              this.buildFileTransferOutboxEntry(entryParams),
-            rememberRecentMediaSend: (entryParams) => this.rememberRecentMediaSend(entryParams),
-          }),
-      },
-    );
-  }
+  private readonly bridgeMediaFacade = createBncrBridgeMediaFacade({
+    getApi: () => this.api,
+    resolveOutboundFileName,
+    outboxRoute: this.outboxRoute,
+    fileTransferOrchestrator: this.fileTransferOrchestrator,
+    replyMediaOrchestrator: this.replyMediaOrchestrator,
+    logInfoJson: (scope, event, payload, options) =>
+      this.logInfoJson(scope, event, payload, options),
+    buildEnqueueFromReplyDebugInfo,
+    fileTransferLogs: {
+      logFileChunkDiag: (args) => this.fileTransferLogs.logFileChunkDiag(args),
+      logFileTransferStart: (args) => this.fileTransferLogs.logFileTransferStart(args),
+      logFileTransferChunkSend: (args) => this.fileTransferLogs.logFileTransferChunkSend(args),
+      logFileTransferChunkAck: (args) => this.fileTransferLogs.logFileTransferChunkAck(args),
+      logFileTransferChunkAckFail: (args) =>
+        this.fileTransferLogs.logFileTransferChunkAckFail(args),
+      logFileTransferCompleteSend: (args) =>
+        this.fileTransferLogs.logFileTransferCompleteSend(args),
+      logFileTransferCompleteAck: (args) => this.fileTransferLogs.logFileTransferCompleteAck(args),
+      buildInitialFileSendTransferState: (args) =>
+        this.fileTransferLogs.buildInitialFileSendTransferState(args) as FileSendTransferState,
+    },
+    normalizeAccountId,
+  });
+
+  private readonly fileTransferPushFacade = createBncrBridgeFileTransferPushFacade({
+    pushEvent: BNCR_PUSH_EVENT,
+    getGatewayContext: () => this.gatewayContext,
+    transferMediaToBncrClient: (params) => this.transferMediaToBncrClient(params),
+    buildFileTransferOutboundFrame: (params) => this.buildFileTransferOutboundFrame(params),
+    logOutboxRouteSelect: (args) => this.logOutboxRouteSelect(args),
+    recordOutboxPushSuccess: (args) => this.recordOutboxPushSuccess(args),
+    logOutboxPushOkSummary: (messageId) => this.logOutboxPushOkSummary(messageId),
+    logOutboxPushOk: (args) => this.logOutboxPushOk(args),
+    handleFileTransferPushFailure: (args) => this.outboxPush.handleFileTransferPushFailure(args),
+    handleFileTransferPushGuardFailure: (args) =>
+      this.outboxPush.handleFileTransferPushGuardFailure(args),
+  });
 
   private enqueueReplyMediaEntries(params: ReplyMediaEntriesParams) {
-    let first = true;
-    const currentTime = now();
-
-    for (const mediaUrl of params.payload.mediaList) {
-      this.enqueueSingleReplyMediaEntry({
-        params,
-        mediaUrl,
-        first,
-        currentTime,
-      });
-      first = false;
-    }
+    this.bridgeMediaFacade.enqueueReplyMediaEntries(params);
   }
 
-  handleConnect = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    await this.syncDebugFlag();
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    const outboundReady = (params as any)?.outboundReady === true;
-    const preferredForOutbound = (params as any)?.preferredForOutbound === true;
-    const inboundOnly = (params as any)?.inboundOnly === true;
+  // Surface runtime assembly -----------------------------------------------
+  // The bridge remains the ownership root, but these builders keep the final
+  // gateway/inbound/channel send wiring readable by concern instead of as one
+  // long inline callback bag.
 
-    this.logInfo(
-      'connection',
-      `connect ${JSON.stringify({
-        bridge: this.bridgeId,
-        accountId,
-        connId,
-        clientId,
-        outboundReady,
-        preferredForOutbound,
-        inboundOnly,
-        hasContext: Boolean(context),
-      })}`,
-      { debugOnly: true },
-    );
+  // Final host surfaces -----------------------------------------------------
+  // These builders sit last on purpose: they consume the already-assembled
+  // bridge facades/runtime groups and project the final gateway/inbound/send
+  // surfaces that the host calls.
 
-    this.refreshLiveConnectionState({
-      accountId,
-      connId,
-      clientId,
-      outboundReady,
-      preferredForOutbound,
-      inboundOnly,
-      context,
-    });
-    this.incrementCounter(this.connectEventsByAccount, accountId);
-    const lease = this.acceptConnection();
-
-    respond(true, {
-      channel: CHANNEL_ID,
-      accountId,
-      bridgeVersion: BRIDGE_VERSION,
-      pushEvent: BNCR_PUSH_EVENT,
-      online: true,
-      isPrimary: this.isPrimaryConnection(accountId, clientId),
-      ...this.buildAccountQueueCounters(accountId),
-      diagnostics: this.buildExtendedDiagnostics(accountId),
-      runtimeFlags: this.buildRuntimeFlags(accountId),
-      waiters: {
-        messageAck: this.messageAckWaiters.size,
-        fileAck: this.fileAckWaiters.size,
-      },
-      leaseId: lease.leaseId,
-      connectionEpoch: lease.connectionEpoch,
-      protocolVersion: 2,
-      acceptedAt: lease.acceptedAt,
-      serverPid: this.gatewayPid,
+  private buildBridgeSurfaceHandlersRuntime() {
+    const statusProjection = this.buildBridgeStatusProjectionRuntime();
+    const drainTriggers = this.buildBridgeDrainTriggers();
+    const lifecycleMarkers = this.buildBridgeLifecycleMarkers();
+    return buildBncrBridgeSurfaceHandlersRuntime({
       bridgeId: this.bridgeId,
-      now: now(),
-    });
-
-    // WS 一旦在线，立即尝试把离线期间积压队列直推出去
-    this.flushPushQueueBestEffort({
-      accountId,
-      trigger: OUTBOUND_FLUSH_TRIGGER.CONNECT,
-      reason: OUTBOUND_FLUSH_REASON.WS_ONLINE,
-    });
-  };
-
-  handleAck = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    // Structure note (explicit ACK event boundary):
-    // Successful ACK events are the authoritative source for removing outbox entries and resolving
-    // message-ack waiters. flushPushQueue may wait for ACKs, but it is not the source of truth for
-    // final entry deletion. Keep this boundary explicit in future refactors.
-    await this.syncDebugFlag();
-    const prepared = this.prepareAckHandling({ params, respond, client, context });
-    if (!prepared) return;
-
-    const { accountId } = prepared;
-    this.lastAckAtGlobal = now();
-    this.incrementCounter(this.ackEventsByAccount, accountId);
-    this.handleAckOutcome({ params, respond, ...prepared });
-  };
-
-  handleActivity = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    // Structure note (activity-driven flush nudge):
-    // Activity events refresh liveness/capability state first, then nudge outbound draining.
-    // They are not a retry policy engine by themselves; they only give the scheduler a better
-    // chance to drain with fresher reachability information.
-    await this.syncDebugFlag();
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    const outboundReady = (params as any)?.outboundReady === true;
-    const preferredForOutbound = (params as any)?.preferredForOutbound === true;
-    const inboundOnly = (params as any)?.inboundOnly === true;
-    if (
-      this.shouldIgnoreStaleEvent({
-        kind: 'activity',
-        payload: params ?? {},
-        accountId,
-        connId,
-        clientId,
-      })
-    ) {
-      respond(true, { accountId, ok: true, event: 'activity', stale: true, ignored: true });
-      return;
-    }
-    this.lastActivityAtGlobal = now();
-    this.logInfo(
-      'activity',
-      `event ${JSON.stringify({
-        bridge: this.bridgeId,
-        accountId,
-        connId,
-        clientId,
-        outboundReady,
-        preferredForOutbound,
-        inboundOnly,
-        hasContext: Boolean(context),
-      })}`,
-      { debugOnly: true },
-    );
-    this.refreshLiveConnectionState({
-      accountId,
-      connId,
-      clientId,
-      outboundReady,
-      preferredForOutbound,
-      inboundOnly,
-      context,
-    });
-    this.incrementCounter(this.activityEventsByAccount, accountId);
-
-    // 轻量活动心跳：仅刷新在线活跃状态，不承担拉取职责。
-    respond(true, {
-      accountId,
-      ok: true,
-      event: 'activity',
-      ...this.buildAccountQueueCounters(accountId),
-      now: now(),
-    });
-    this.flushPushQueueBestEffort({
-      accountId,
-      trigger: OUTBOUND_FLUSH_TRIGGER.ACTIVITY,
-      reason: OUTBOUND_FLUSH_REASON.ACTIVITY_HEARTBEAT,
-    });
-  };
-
-  handleDiagnostics = async ({ params, respond }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const cfg = getOpenClawRuntimeConfig(this.api);
-    const runtime = this.getAccountRuntimeSnapshot(accountId);
-    const diagnostics = this.buildExtendedDiagnostics(accountId);
-
-    respond(
-      true,
-      buildDiagnosticsPayload({
-        cfg,
-        channelId: CHANNEL_ID,
-        accountId,
-        runtime,
-        diagnostics,
-        downlinkHealth: this.buildDownlinkHealth(accountId),
-        runtimeFlags: this.buildRuntimeFlags(accountId),
-        waiters: {
-          messageAck: this.messageAckWaiters.size,
-          fileAck: this.fileAckWaiters.size,
-        },
-        activeConnections: this.activeConnectionCount(accountId),
-        invalidOutboxSessionKeys: this.countInvalidOutboxSessionKeys(accountId),
-        legacyAccountResidue: this.countLegacyAccountResidue(accountId),
-        now: now(),
-      }),
-    );
-  };
-
-  handleDeadLetterInspect = async ({ params, respond }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || BNCR_DEFAULT_ACCOUNT_ID));
-    const reason = asString(params?.reason || '').trim() || null;
-    const olderThan = parseDeadLetterOlderThan(params?.olderThan);
-    const limit = parseDeadLetterLimit(params?.limit, 20);
-    const offset = parseDeadLetterOffset(params?.offset, 0);
-    const matches = this.filterDeadLetterEntries({ accountId, reason, olderThan })
-      .slice()
-      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
-
-    respond(true, {
-      ok: true,
-      accountId,
-      filters: { reason, olderThan },
-      total: matches.length,
-      offset,
-      limit,
-      entries: matches
-        .slice(offset, offset + limit)
-        .map((entry) => summarizeDeadLetterEntry(entry)),
-      summary: this.buildDeadLetterDiagnostics(accountId),
-      now: now(),
-    });
-  };
-
-  handleDeadLetterPrune = async ({ params, respond }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || BNCR_DEFAULT_ACCOUNT_ID));
-    const reason = asString(params?.reason || '').trim() || null;
-    const olderThan = parseDeadLetterOlderThan(params?.olderThan);
-    const limit = parseDeadLetterLimit(params?.limit, 100);
-    const dryRun = params?.dryRun !== false;
-    const hasDestructiveFilter = Boolean(reason || olderThan !== null);
-    if (!dryRun && !hasDestructiveFilter) {
-      respond(false, {
-        ok: false,
-        error: 'deadLetter-prune-requires-filter',
-        message: 'dryRun=false requires at least one destructive filter: reason or olderThan',
-        dryRun,
-        accountId,
-        filters: { reason, olderThan },
-        summary: this.buildDeadLetterDiagnostics(accountId),
-        now: now(),
-      });
-      return;
-    }
-    const matches = this.filterDeadLetterEntries({ accountId, reason, olderThan })
-      .slice()
-      .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
-    const selected = matches.slice(0, limit);
-    const selectedEntries = new Set(selected);
-
-    if (!dryRun && selectedEntries.size > 0) {
-      this.deadLetter = this.deadLetter.filter((entry) => !selectedEntries.has(entry));
-      this.scheduleSave();
-      this.logDeadLetterSummary(accountId, { force: true, source: 'prune' });
-    }
-
-    respond(true, {
-      ok: true,
-      dryRun,
-      accountId,
-      filters: { reason, olderThan },
-      matched: matches.length,
-      pruned: dryRun ? 0 : selected.length,
-      wouldPrune: selected.length,
-      limit,
-      entries: selected.map((entry) => summarizeDeadLetterEntry(entry)),
-      summary: this.buildDeadLetterDiagnostics(accountId),
-      now: now(),
-    });
-  };
-
-  handleFileInit = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    if (
-      this.shouldIgnoreStaleEvent({
-        kind: 'file.init',
-        payload: params ?? {},
-        accountId,
-        connId,
-        clientId,
-      })
-    ) {
-      respond(true, { ok: true, stale: true, ignored: true });
-      return;
-    }
-    this.refreshAcceptedFileTransferLiveState({
-      accountId,
-      connId,
-      clientId,
-      context,
-    });
-
-    const transferId = asString(params?.transferId || '').trim();
-    const sessionKey = asString(params?.sessionKey || '').trim();
-    const fileName = asString(params?.fileName || '').trim() || 'file.bin';
-    const mimeType = asString(params?.mimeType || '').trim() || 'application/octet-stream';
-    const fileSize = finiteNonNegativeNumberOrNull(params?.fileSize);
-    const chunkSize = finiteNonNegativeNumberOrNull(params?.chunkSize ?? 256 * 1024);
-    const totalChunks = finiteNonNegativeNumberOrNull(params?.totalChunks);
-    const fileSha256 = asString(params?.fileSha256 || '').trim();
-
-    if (!transferId || !sessionKey || !fileSize || !chunkSize || !totalChunks) {
-      respond(false, { error: 'transferId/sessionKey/fileSize/chunkSize/totalChunks required' });
-      return;
-    }
-    if (fileSize > INBOUND_FILE_TRANSFER_MAX_BYTES) {
-      respond(false, {
-        error: `fileSize too large size=${fileSize} max=${INBOUND_FILE_TRANSFER_MAX_BYTES}`,
-      });
-      return;
-    }
-    if (totalChunks > INBOUND_FILE_TRANSFER_MAX_CHUNKS) {
-      respond(false, {
-        error: `totalChunks too large total=${totalChunks} max=${INBOUND_FILE_TRANSFER_MAX_CHUNKS}`,
-      });
-      return;
-    }
-    const expectedTotalChunks = Math.ceil(fileSize / chunkSize);
-    if (totalChunks !== expectedTotalChunks) {
-      respond(false, {
-        error: `totalChunks mismatch total=${totalChunks} expected=${expectedTotalChunks}`,
-      });
-      return;
-    }
-
-    const normalized = normalizeStoredSessionKey(sessionKey);
-    if (!normalized) {
-      respond(false, { error: 'invalid sessionKey' });
-      return;
-    }
-
-    const existing = this.fileRecvTransfers.get(transferId);
-    if (existing) {
-      respond(true, {
-        ok: true,
-        transferId,
-        status: existing.status,
-        duplicated: true,
-      });
-      return;
-    }
-
-    const route =
-      parseRouteLike({
-        platform: asString(params?.platform || normalized.route.platform),
-        groupId: asString(params?.groupId || normalized.route.groupId),
-        userId: asString(params?.userId || normalized.route.userId),
-      }) || normalized.route;
-
-    this.fileRecvTransfers.set(transferId, {
-      transferId,
-      accountId,
-      sessionKey: normalized.sessionKey,
-      route,
-      fileName,
-      mimeType,
-      fileSize,
-      chunkSize,
-      totalChunks,
-      fileSha256,
-      startedAt: now(),
-      status: 'init',
-      bufferByChunk: new Map(),
-      receivedChunks: new Set(),
-      ownerConnId: connId,
-      ownerClientId: clientId,
-    });
-
-    respond(true, {
-      ok: true,
-      transferId,
-      status: 'init',
-    });
-  };
-
-  handleFileChunk = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-
-    const transferId = asString(params?.transferId || '').trim();
-    const chunkIndex = finiteNonNegativeNumberOrNull(params?.chunkIndex);
-    const offset = finiteNonNegativeNumberOrNull(params?.offset ?? 0);
-    const size = finiteNonNegativeNumberOrNull(params?.size ?? 0);
-    const chunkSha256 = asString(params?.chunkSha256 || '').trim();
-    const base64 = asString(params?.base64 || '');
-
-    if (!transferId || chunkIndex == null || !base64) {
-      respond(false, { error: 'transferId/chunkIndex/base64 required' });
-      return;
-    }
-
-    const st = this.fileRecvTransfers.get(transferId);
-    if (!st) {
-      respond(false, { error: 'transfer not found' });
-      return;
-    }
-    if (st.status === 'completed') {
-      respond(true, {
-        ok: true,
-        transferId,
-        status: 'completed',
-        path: st.completedPath,
-        ignored: true,
-        terminal: true,
-      });
-      return;
-    }
-    if (chunkIndex >= st.totalChunks) {
-      respond(false, {
-        error: `chunkIndex out of range index=${chunkIndex} total=${st.totalChunks}`,
-      });
-      return;
-    }
-
-    const staleObserved = this.observeLease('file.chunk', params ?? {});
-    if (staleObserved.stale) {
-      if (
-        !this.matchesTransferOwner({
-          ownerConnId: st.ownerConnId,
-          ownerClientId: st.ownerClientId,
-          connId,
-          clientId,
-        })
-      ) {
-        this.logWarn(
-          'stale',
-          `ignore kind=file.chunk accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} reason=owner-mismatch ownerConnId=${st.ownerConnId || '-'} ownerClientId=${st.ownerClientId || '-'}`,
-          { debugOnly: true },
-        );
-        respond(true, { ok: true, stale: true, ignored: true });
-        return;
-      }
-    } else {
-      this.refreshAcceptedFileTransferLiveState({
-        accountId,
-        connId,
-        clientId,
-        context,
-      });
-    }
-
-    try {
-      const buf = Buffer.from(base64, 'base64');
-      if (size != null && size > 0 && buf.length !== size) {
-        throw new Error(`chunk size mismatch expected=${size} got=${buf.length}`);
-      }
-      if (chunkSha256) {
-        const digest = createHash('sha256').update(buf).digest('hex');
-        if (digest !== chunkSha256) throw new Error('chunk sha256 mismatch');
-      }
-      st.bufferByChunk.set(chunkIndex, buf);
-      st.receivedChunks.add(chunkIndex);
-      st.status = 'transferring';
-      this.fileRecvTransfers.set(transferId, st);
-
-      respond(
-        true,
-        staleObserved.stale
-          ? {
-              ok: true,
-              transferId,
-              chunkIndex,
-              offset,
-              received: st.receivedChunks.size,
-              totalChunks: st.totalChunks,
-              stale: true,
-              staleAccepted: true,
-            }
-          : {
-              ok: true,
-              transferId,
-              chunkIndex,
-              offset,
-              received: st.receivedChunks.size,
-              totalChunks: st.totalChunks,
-            },
-      );
-    } catch (error) {
-      respond(false, { error: String((error as any)?.message || error || 'chunk invalid') });
-    }
-  };
-
-  handleFileComplete = async ({
-    params,
-    respond,
-    client,
-    context,
-  }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-
-    const transferId = asString(params?.transferId || '').trim();
-    if (!transferId) {
-      respond(false, { error: 'transferId required' });
-      return;
-    }
-
-    const st = this.fileRecvTransfers.get(transferId);
-    if (!st) {
-      respond(false, { error: 'transfer not found' });
-      return;
-    }
-
-    const staleObserved = this.observeLease('file.complete', params ?? {});
-    if (staleObserved.stale) {
-      if (
-        !this.matchesTransferOwner({
-          ownerConnId: st.ownerConnId,
-          ownerClientId: st.ownerClientId,
-          connId,
-          clientId,
-        })
-      ) {
-        this.logWarn(
-          'stale',
-          `ignore kind=file.complete accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} reason=owner-mismatch ownerConnId=${st.ownerConnId || '-'} ownerClientId=${st.ownerClientId || '-'}`,
-          { debugOnly: true },
-        );
-        respond(true, { ok: true, stale: true, ignored: true });
-        return;
-      }
-    } else {
-      this.refreshAcceptedFileTransferLiveState({
-        accountId,
-        connId,
-        clientId,
-        context,
-      });
-    }
-
-    try {
-      if (st.receivedChunks.size < st.totalChunks) {
-        throw new Error(
-          `chunk not complete received=${st.receivedChunks.size} total=${st.totalChunks}`,
-        );
-      }
-
-      const ordered = Array.from(st.bufferByChunk.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map((x) => x[1]);
-      const merged = Buffer.concat(ordered);
-      if (st.fileSize > 0 && merged.length !== st.fileSize) {
-        throw new Error(`file size mismatch expected=${st.fileSize} got=${merged.length}`);
-      }
-      const digest = createHash('sha256').update(merged).digest('hex');
-      if (st.fileSha256 && digest !== st.fileSha256) {
-        throw new Error('file sha256 mismatch');
-      }
-
-      const saved = await saveOpenClawChannelMediaBuffer(
-        this.api,
-        merged,
-        st.mimeType,
-        'inbound',
-        50 * 1024 * 1024,
-        st.fileName,
-      );
-      st.completedPath = saved.path;
-      st.status = 'completed';
-      st.terminalAt = now();
-      this.fileRecvTransfers.set(transferId, st);
-
-      respond(
-        true,
-        staleObserved.stale
-          ? {
-              ok: true,
-              transferId,
-              path: saved.path,
-              size: merged.length,
-              fileName: st.fileName,
-              mimeType: st.mimeType,
-              fileSha256: digest,
-              stale: true,
-              staleAccepted: true,
-            }
-          : {
-              ok: true,
-              transferId,
-              path: saved.path,
-              size: merged.length,
-              fileName: st.fileName,
-              mimeType: st.mimeType,
-              fileSha256: digest,
-            },
-      );
-    } catch (error) {
-      st.status = 'aborted';
-      st.terminalAt = now();
-      st.error = String((error as any)?.message || error || 'complete failed');
-      this.fileRecvTransfers.set(transferId, st);
-      respond(false, { error: st.error });
-    }
-  };
-
-  handleFileAbort = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-
-    const transferId = asString(params?.transferId || '').trim();
-    if (!transferId) {
-      respond(false, { error: 'transferId required' });
-      return;
-    }
-
-    const st = this.fileRecvTransfers.get(transferId);
-    if (!st) {
-      respond(true, { ok: true, transferId, message: 'not-found' });
-      return;
-    }
-    if (st.status === 'completed') {
-      respond(true, {
-        ok: true,
-        transferId,
-        status: 'completed',
-        path: st.completedPath,
-        ignored: true,
-        terminal: true,
-      });
-      return;
-    }
-
-    const staleObserved = this.observeLease('file.abort', params ?? {});
-    if (staleObserved.stale) {
-      if (
-        !this.matchesTransferOwner({
-          ownerConnId: st.ownerConnId,
-          ownerClientId: st.ownerClientId,
-          connId,
-          clientId,
-        })
-      ) {
-        this.logWarn(
-          'stale',
-          `ignore kind=file.abort accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} reason=owner-mismatch ownerConnId=${st.ownerConnId || '-'} ownerClientId=${st.ownerClientId || '-'}`,
-          { debugOnly: true },
-        );
-        respond(true, { ok: true, stale: true, ignored: true });
-        return;
-      }
-    } else {
-      this.refreshAcceptedFileTransferLiveState({
-        accountId,
-        connId,
-        clientId,
-        context,
-      });
-    }
-
-    st.status = 'aborted';
-    st.terminalAt = now();
-    st.error = asString(params?.reason || 'aborted');
-    this.fileRecvTransfers.set(transferId, st);
-
-    respond(
-      true,
-      staleObserved.stale
-        ? {
-            ok: true,
-            transferId,
-            status: 'aborted',
-            stale: true,
-            staleAccepted: true,
-          }
-        : {
-            ok: true,
-            transferId,
-            status: 'aborted',
-          },
-    );
-  };
-
-  handleFileAck = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    const accountId = normalizeAccountId(asString(params?.accountId || ''));
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-
-    const transferId = asString(params?.transferId || '').trim();
-    const stage = asString(params?.stage || '').trim();
-    const ok = params?.ok !== false;
-    const chunkIndex = finiteNonNegativeNumberOrNull(params?.chunkIndex);
-
-    this.logInfo(
-      'file-ack-inbound',
-      JSON.stringify({
-        bridge: this.bridgeId,
-        accountId,
-        connId,
-        clientId: clientId || null,
-        transferId,
-        stage,
-        ackStage: stage,
-        ackOutcome: ok ? 'acked' : 'failed',
-        ok,
-        chunkIndex: chunkIndex != null ? chunkIndex : undefined,
-        errorCode: asString(params?.errorCode || ''),
-        errorMessage: asString(params?.errorMessage || ''),
-        path: asString(params?.path || '').trim(),
-      }),
-      { debugOnly: true },
-    );
-
-    if (!transferId || !stage) {
-      respond(false, { error: 'transferId/stage required' });
-      return;
-    }
-
-    if (!['init', 'chunk', 'complete', 'abort'].includes(stage)) {
-      respond(false, { error: 'invalid file ack stage' });
-      return;
-    }
-
-    const st = this.fileSendTransfers.get(transferId);
-    const fileAckWaiterKey = this.fileAckKey(
-      transferId,
-      stage,
-      chunkIndex != null ? chunkIndex : undefined,
-    );
-    if (!st && !this.fileAckWaiters.has(fileAckWaiterKey)) {
-      respond(false, { error: 'unknown transferId' });
-      return;
-    }
-
-    const staleKind =
-      stage === 'init'
-        ? 'file.init'
-        : stage === 'chunk'
-          ? 'file.chunk'
-          : stage === 'abort'
-            ? 'file.abort'
-            : 'file.complete';
-    const staleObserved = this.observeLease(staleKind, params ?? {});
-    if (st?.status === 'completed' || st?.status === 'aborted') {
-      respond(
-        true,
-        staleObserved.stale
-          ? {
-              ok: true,
-              transferId,
-              stage,
-              state: st.status,
-              stale: true,
-              ignored: true,
-              terminal: true,
-            }
-          : {
-              ok: true,
-              transferId,
-              stage,
-              state: st.status,
-              ignored: true,
-              terminal: true,
-            },
-      );
-      return;
-    }
-    if (staleObserved.stale) {
-      const sameConn = !!st?.ownerConnId && st.ownerConnId === connId;
-      const sameClient =
-        !st?.ownerConnId && !!st?.ownerClientId && !!clientId && st.ownerClientId === clientId;
-      const adopted =
-        !(sameConn || sameClient) &&
-        this.tryAdoptTransferOwner({
-          accountId,
-          transfer: st,
-          connId,
-          clientId,
-        });
-      if (!(sameConn || sameClient || adopted)) {
-        this.logWarn(
-          'stale',
-          `ignore kind=file.ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} stage=${stage} reason=owner-mismatch ownerConnId=${st?.ownerConnId || '-'} ownerClientId=${st?.ownerClientId || '-'}`,
-          { debugOnly: true },
-        );
-        respond(true, { ok: true, stale: true, ignored: true });
-        return;
-      }
-    } else {
-      this.refreshAcceptedFileTransferLiveState({
-        accountId,
-        connId,
-        clientId,
-        context,
-      });
-    }
-
-    if (st) {
-      if (!ok) {
-        const code = asString(params?.errorCode || 'ACK_FAILED');
-        const msg = asString(params?.errorMessage || 'ack failed');
-        st.error = `${code}:${msg}`;
-        if (stage === 'chunk' && chunkIndex != null) st.failedChunks.set(chunkIndex, st.error);
-        if (stage === 'complete') {
-          st.status = 'aborted';
-          st.terminalAt = now();
-        }
-      } else {
-        if (stage === 'chunk' && chunkIndex != null) {
-          st.ackedChunks.add(chunkIndex);
-          st.status = 'transferring';
-        }
-        if (stage === 'complete') {
-          st.status = 'completed';
-          st.terminalAt = now();
-          st.completedPath = asString(params?.path || '').trim() || st.completedPath;
-        }
-      }
-      this.fileSendTransfers.set(transferId, st);
-    }
-
-    // 唤醒等待中的 chunk/complete ACK
-    this.resolveFileAck({
-      transferId,
-      stage,
-      chunkIndex: chunkIndex != null ? chunkIndex : undefined,
-      payload: {
-        ok,
-        transferId,
-        stage,
-        path: asString(params?.path || '').trim(),
-        errorCode: asString(params?.errorCode || ''),
-        errorMessage: asString(params?.errorMessage || ''),
-      },
-      ok,
-    });
-
-    respond(
-      true,
-      staleObserved.stale
-        ? {
-            ok: true,
-            transferId,
-            stage,
-            state: st?.status || 'late',
-            stale: true,
-            staleAccepted: true,
-          }
-        : {
-            ok: true,
-            transferId,
-            stage,
-            state: st?.status || 'late',
-          },
-    );
-  };
-
-  handleInbound = async ({ params, respond, client, context }: GatewayRequestHandlerOptions) => {
-    // Structure note (inbound-driven flush nudge):
-    // Inbound acceptance is another explicit wake source for outbound draining. It should stay
-    // separate from retry policy so later refactors can reason clearly about "new inbound signal"
-    // versus "scheduled retry" versus "ACK-driven continuation".
-    await this.syncDebugFlag();
-    const parsed = parseBncrInboundParams(params);
-    const { accountId, platform, route, msgType, msgId, peer, extracted } = parsed;
-    const connId = asString(client?.connId || '').trim() || `no-conn-${Date.now()}`;
-    const clientId = asString((params as any)?.clientId || '').trim() || undefined;
-    const outboundReady = (params as any)?.outboundReady === true;
-    const preferredForOutbound = (params as any)?.preferredForOutbound === true;
-    const inboundOnly = (params as any)?.inboundOnly === true;
-    if (
-      this.shouldIgnoreStaleEvent({
-        kind: 'inbound',
-        payload: params ?? {},
-        accountId,
-        connId,
-        clientId,
-      })
-    ) {
-      respond(
-        true,
-        buildInboundResponsePayload({
-          kind: 'stale-ignored',
-          accountId,
-          msgId: msgId ?? null,
-        }),
-      );
-      return;
-    }
-    this.refreshLiveConnectionState({
-      accountId,
-      connId,
-      clientId,
-      outboundReady,
-      preferredForOutbound,
-      inboundOnly,
-      context,
-    });
-    this.logInfo(
-      'inbound',
-      `lifecycle ${JSON.stringify(
-        buildInboundAcceptedLifecycleDebugInfo({
-          stage: 'accepted',
-          bridge: this.bridgeId,
-          accountId,
-          connId,
-          clientId,
-          outboundReady,
-          preferredForOutbound,
-          inboundOnly,
-          onlineAfterSeen: this.isOnline(accountId),
-          recentInboundReachable: this.hasRecentInboundReachability(accountId),
-          activeConnectionKey: this.activeConnectionByAccount.get(accountId) || null,
-          activeConnections: this.buildActiveConnectionDebugList(accountId),
-        }),
-      )}`,
-      { debugOnly: true },
-    );
-    this.lastInboundAtGlobal = now();
-    this.incrementCounter(this.inboundEventsByAccount, accountId);
-
-    const cfg = getOpenClawRuntimeConfig(this.api);
-    const canonicalAgentId = this.ensureCanonicalAgentId({
-      cfg,
-      accountId,
-      peer,
+      gatewayPid: this.gatewayPid,
+      pushEvent: BNCR_PUSH_EVENT,
+      bridgeVersion: BRIDGE_VERSION,
+      getApi: () => this.api,
       channelId: CHANNEL_ID,
-    });
-    const acceptance = await this.prepareInboundAcceptance({ parsed, canonicalAgentId });
-    if (!acceptance.ok) {
-      respond(acceptance.status, acceptance.payload);
-      return;
-    }
-
-    const { sessionKey, inboundText, hasMedia } = acceptance;
-    this.logInfo(
-      'inbound',
-      JSON.stringify({
-        accountId,
-        msgId: msgId ?? null,
-        platform,
-        chatType: peer.kind,
-        scope: formatDisplayScope(route),
-        sessionKey,
-        msgType,
-        textLen: inboundText.length,
-        textPreview: inboundText.slice(0, 120),
-        hasMedia,
-      }),
-      { debugOnly: true },
-    );
-    this.logInboundSummary({
-      accountId,
-      route,
-      msgType,
-      text: inboundText,
-      hasMedia,
-    });
-
-    respond(
-      true,
-      buildInboundResponsePayload({
-        kind: 'accepted',
-        accountId,
-        sessionKey,
-        msgId: msgId ?? null,
-        taskKey: extracted.taskKey ?? null,
-      }),
-    );
-    this.flushPushQueueBestEffort({
-      accountId,
-      trigger: OUTBOUND_FLUSH_TRIGGER.INBOUND,
-      reason: OUTBOUND_FLUSH_REASON.INBOUND_ACCEPTED,
-    });
-
-    void dispatchBncrInbound({
-      api: this.api,
-      channelId: CHANNEL_ID,
-      cfg,
-      parsed,
-      canonicalAgentId,
-      rememberSessionRoute: (sessionKey, accountId, route) =>
-        this.rememberSessionRoute(sessionKey, accountId, route),
-      enqueueFromReply: (args) => this.enqueueFromReply(args),
-      setInboundActivity: (accountId, at) => {
-        this.lastInboundByAccount.set(accountId, at);
-        this.markActivity(accountId, at);
+      asString,
+      now,
+      finiteNonNegativeNumberOrNull,
+      syncDebugFlag: () => this.syncDebugFlag(),
+      logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+      logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+      normalizeAccountId,
+      pluginRoot: this.pluginRoot || '',
+      ...statusProjection,
+      isPrimaryConnection: (accountId, clientId) => this.isPrimaryConnection(accountId, clientId),
+      acceptConnection: () => this.acceptConnection(),
+      refreshLiveConnectionState: (args) => this.refreshLiveConnectionState(args),
+      ...drainTriggers,
+      shouldIgnoreStaleEvent: (args) => this.shouldIgnoreStaleEvent(args),
+      incrementConnectEvents: (accountId) =>
+        this.incrementCounter(this.connectEventsByAccount, accountId),
+      incrementActivityEvents: (accountId) =>
+        this.incrementCounter(this.activityEventsByAccount, accountId),
+      incrementAckEvents: (accountId) => this.incrementCounter(this.ackEventsByAccount, accountId),
+      ...lifecycleMarkers,
+      messageAckWaiterCount: () => this.messageAckWaiters.size,
+      fileAckWaiterCount: () => this.fileAckWaiters.size,
+      prepareAckHandling: (args) => this.prepareAckHandling(args),
+      handleAckOutcome: (args) => this.handleAckOutcome(args),
+      fileSendTransfers: this.fileSendTransfers,
+      hasFileAckWaiter: (key) => this.fileAckWaiters.has(key),
+      fileAckKey: (transferId, stage, chunkIndex) => this.fileAckKey(transferId, stage, chunkIndex),
+      observeLease: (kind, payload) => this.observeLease(kind, payload),
+      tryAdoptTransferOwner: (args) => this.tryAdoptTransferOwner(args),
+      refreshAcceptedFileTransferLiveState: (args) =>
+        this.refreshAcceptedFileTransferLiveState(args),
+      resolveFileAck: (args) => this.resolveFileAck(args),
+      countInvalidOutboxSessionKeys: (accountId) => this.countInvalidOutboxSessionKeys(accountId),
+      countLegacyAccountResidue: (accountId) => this.countLegacyAccountResidue(accountId),
+      activeConnectionCount: (accountId) => this.activeConnectionCount(accountId),
+      getMessageAckWaiterCount: () => this.messageAckWaiters.size,
+      getFileAckWaiterCount: () => this.fileAckWaiters.size,
+      filterDeadLetterEntries: (args) => this.filterDeadLetterEntries(args),
+      listDeadLetterEntries: () => this.deadLetter.slice(),
+      buildDeadLetterDiagnostics: (accountId) => this.buildDeadLetterDiagnostics(accountId),
+      replaceDeadLetterEntries: (nextEntries) => {
+        this.deadLetter = nextEntries;
       },
       scheduleSave: () => this.scheduleSave(),
-      logger: {
-        warn: (msg: string) => emitBncrLogLine('warn', msg),
-        error: (msg: string) => emitBncrLogLine('error', msg),
-      },
-    }).catch((err) => {
-      this.logError('inbound', `process failed: ${String(err)}`, { debugOnly: true });
+      logDeadLetterSummary: (accountId, args) => this.logDeadLetterSummary(accountId, args),
     });
-  };
+  }
 
-  channelStartAccount = async (ctx: any) => {
+  private buildInboundSurfaceRuntime() {
+    const inboundConnectionRuntime = this.buildInboundSurfaceConnectionRuntime();
+    const inboundActivityRuntime = this.buildInboundSurfaceActivityRuntime();
+    return buildBncrInboundSurfaceRuntime({
+      getApi: () => this.api,
+      channelId: CHANNEL_ID,
+      bridgeId: this.bridgeId,
+      pluginRoot: this.pluginRoot || '',
+      asString,
+      now,
+      normalizeAccountId,
+      finiteNonNegativeNumberOrNull,
+      syncDebugFlag: () => this.syncDebugFlag(),
+      ...inboundConnectionRuntime,
+      logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+      logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+      logError: (scope, message, options) => this.logError(scope, message, options),
+      buildInboundResponsePayload,
+      buildInboundAcceptedLifecycleDebugInfo,
+      ...inboundActivityRuntime,
+      ensureCanonicalAgentId: (args) => this.ensureCanonicalAgentId(args),
+      prepareInboundAcceptance: (args) => this.prepareInboundAcceptance(args),
+      logInboundSummary: (args) => this.logInboundSummary(args),
+      flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
+      rememberSessionRoute: (sessionKey, accountId, route) =>
+        this.rememberSessionRoute(sessionKey, accountId, route),
+      enqueueFromReply: (args: Parameters<BncrBridgeRuntime['enqueueFromReply']>[0]) =>
+        this.enqueueFromReply(args),
+      scheduleSave: () => this.scheduleSave(),
+      fileRecvTransfers: this.fileRecvTransfers,
+      inboundFileTransferMaxBytes: INBOUND_FILE_TRANSFER_MAX_BYTES,
+      inboundFileTransferMaxChunks: INBOUND_FILE_TRANSFER_MAX_CHUNKS,
+    });
+  }
+
+  private buildChannelSendRuntime() {
+    const targetRuntime = this.buildChannelSendTargetRuntime();
+    return buildBncrChannelSendRuntime({
+      channelId: CHANNEL_ID,
+      asString,
+      syncDebugFlag: () => this.syncDebugFlag(),
+      logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+      ...targetRuntime,
+      listOutboxEntries: () => Array.from(this.outbox.values()),
+    });
+  }
+
+  // Gateway / diagnostics surface assembly ---------------------------------
+  // These groups bind bridge-owned state and methods into gateway-facing
+  // handlers without moving ownership of the underlying runtime maps.
+
+  private readonly bridgeSurfaceHandlersGroup = createBncrBridgeSurfaceHandlersGroup(
+    this.buildBridgeSurfaceHandlersRuntime(),
+  );
+
+  private readonly connectionHandlers = this.bridgeSurfaceHandlersGroup.connectionHandlers;
+
+  handleConnect = async (ctx: GatewayRequestHandlerOptions) =>
+    this.connectionHandlers.handleConnect(ctx);
+
+  handleActivity = async (ctx: GatewayRequestHandlerOptions) =>
+    this.connectionHandlers.handleActivity(ctx);
+
+  handleAck = async (ctx: GatewayRequestHandlerOptions) => this.connectionHandlers.handleAck(ctx);
+
+  private readonly diagnosticsHandlers = this.bridgeSurfaceHandlersGroup.diagnosticsHandlers;
+
+  handleDiagnostics = async (ctx: GatewayRequestHandlerOptions) =>
+    this.diagnosticsHandlers.handleDiagnostics(ctx);
+
+  handleDeadLetterInspect = async (ctx: GatewayRequestHandlerOptions) =>
+    this.diagnosticsHandlers.handleDeadLetterInspect(ctx);
+
+  handleDeadLetterPrune = async (ctx: GatewayRequestHandlerOptions) =>
+    this.diagnosticsHandlers.handleDeadLetterPrune(ctx);
+
+  handleFileInit = async (ctx: GatewayRequestHandlerOptions) =>
+    this.fileInboundHandlers.handleFileInit(ctx);
+
+  handleFileChunk = async (ctx: GatewayRequestHandlerOptions) =>
+    this.fileInboundHandlers.handleFileChunk(ctx);
+
+  handleFileComplete = async (ctx: GatewayRequestHandlerOptions) =>
+    this.fileInboundHandlers.handleFileComplete(ctx);
+
+  handleFileAbort = async (ctx: GatewayRequestHandlerOptions) =>
+    this.fileInboundHandlers.handleFileAbort(ctx);
+
+  handleFileAck = async (ctx: GatewayRequestHandlerOptions) =>
+    this.connectionHandlers.handleFileAck(ctx);
+
+  // Inbound surface assembly ------------------------------------------------
+  // This group owns inbound event acceptance, reply bridging, and inbound file
+  // transfer surfaces that sit beside gateway ACK/connect handlers.
+
+  private readonly inboundSurfaceHandlersGroup = createBncrInboundSurfaceHandlersGroup(
+    this.buildInboundSurfaceRuntime(),
+  );
+
+  private readonly fileInboundHandlers = this.inboundSurfaceHandlersGroup.fileInboundHandlers;
+
+  private readonly inboundHandlers = this.inboundSurfaceHandlersGroup.inboundHandlers;
+
+  handleInbound = async (ctx: GatewayRequestHandlerOptions) =>
+    this.inboundHandlers.handleInbound(ctx);
+
+  // Status worker lifecycle -------------------------------------------------
+
+  channelStartAccount = async (ctx: BncrStatusWorkerContext) => {
     await startBncrStatusWorker(this.buildStatusWorkerRuntime(), ctx);
   };
 
-  channelStopAccount = async (ctx: any) => {
+  channelStopAccount = async (ctx: Partial<BncrStatusWorkerContext>) => {
     await stopBncrStatusWorker(this.buildStatusWorkerRuntime(), ctx);
   };
 
-  private logChannelSendEntry(args: {
-    kind: 'text' | 'media';
-    accountId: string;
-    to: string;
-    ctx: any;
-    payload: {
-      text: string;
-      mediaUrl: string;
-      mediaUrls?: string[];
-      asVoice?: boolean;
-      audioAsVoice?: boolean;
-    };
-  }) {
-    this.logInfo(
-      'outbound',
-      buildBncrDebugJsonMessage(`send-entry:${args.kind}`, {
-        accountId: args.accountId,
-        to: args.to,
-        text: args.payload.text,
-        mediaUrl: args.payload.mediaUrl,
-        mediaUrls: args.payload.mediaUrls,
-        asVoice: args.payload.asVoice,
-        audioAsVoice: args.payload.audioAsVoice,
-        sessionKey: asString(args.ctx?.sessionKey || ''),
-        mirrorSessionKey: asString(args.ctx?.mirror?.sessionKey || ''),
-        rawCtx: {
-          to: args.ctx?.to,
-          accountId: args.ctx?.accountId,
-          threadId: args.ctx?.threadId,
-          replyToId: args.ctx?.replyToId,
-        },
-      }),
-      { debugOnly: true },
-    );
-  }
+  // Channel send surface assembly ------------------------------------------
+  // This group backs the public channel send APIs and should stay adjacent to
+  // the final exposed channel* methods for quick top-down scanning.
 
-  private resolveChannelSendReplyToId(ctx: any) {
-    return asString(ctx?.replyToId || ctx?.replyToMessageId || '').trim() || undefined;
-  }
+  private readonly channelSendRuntimeGroup = createBncrChannelSendRuntimeGroup(
+    this.buildChannelSendRuntime(),
+  );
 
-  channelSendText = async (ctx: any) => {
-    await this.syncDebugFlag();
-    const accountId = normalizeAccountId(ctx.accountId);
-    const to = asString(ctx.to || '').trim();
-    const replyToId = this.resolveChannelSendReplyToId(ctx);
+  private readonly channelSendRuntime = this.channelSendRuntimeGroup.channelSendRuntime;
 
-    this.logChannelSendEntry({
-      kind: 'text',
-      accountId,
-      to,
-      ctx,
-      payload: {
-        text: asString(ctx?.text || ''),
-        mediaUrl: asString(ctx?.mediaUrl || ''),
-      },
-    });
+  channelSendText = async (ctx: BncrChannelSendContext) =>
+    this.channelSendRuntime.channelSendText(ctx);
 
-    return sendBncrText({
-      channelId: CHANNEL_ID,
-      accountId,
-      to,
-      text: asString(ctx.text || ''),
-      kind: ctx?.kind,
-      replyToId,
-      mediaLocalRoots: ctx.mediaLocalRoots,
-      resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
-      rememberSessionRoute: (sessionKey, accountId, route) =>
-        this.rememberSessionRoute(sessionKey, accountId, route),
-      enqueueFromReply: (args) => this.enqueueFromReply(args),
-      createMessageId: () => randomUUID(),
-    });
-  };
+  channelSendMedia = async (ctx: BncrChannelSendContext) =>
+    this.channelSendRuntime.channelSendMedia(ctx);
 
-  channelSendMedia = async (ctx: any) => {
-    await this.syncDebugFlag();
-    const accountId = normalizeAccountId(ctx.accountId);
-    const to = asString(ctx.to || '').trim();
-    const asVoice = ctx?.asVoice === true;
-    const audioAsVoice = ctx?.audioAsVoice === true;
-    const replyToId = this.resolveChannelSendReplyToId(ctx);
+  channelMessageSendText = async (ctx: BncrChannelSendContext) =>
+    this.channelSendRuntime.channelMessageSendText(ctx);
 
-    this.logChannelSendEntry({
-      kind: 'media',
-      accountId,
-      to,
-      ctx,
-      payload: {
-        text: asString(ctx?.text || ''),
-        mediaUrl: asString(ctx?.mediaUrl || ''),
-        mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
-        asVoice,
-        audioAsVoice,
-      },
-    });
+  channelMessageSendMedia = async (ctx: BncrChannelSendContext) =>
+    this.channelSendRuntime.channelMessageSendMedia(ctx);
 
-    return sendBncrMedia({
-      channelId: CHANNEL_ID,
-      accountId,
-      to,
-      text: asString(ctx.text || ''),
-      mediaUrl: asString(ctx.mediaUrl || ''),
-      mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
-      asVoice,
-      audioAsVoice,
-      kind: ctx?.kind,
-      replyToId,
-      mediaLocalRoots: ctx.mediaLocalRoots,
-      resolveVerifiedTarget: (to, accountId) => this.resolveVerifiedTarget(to, accountId),
-      rememberSessionRoute: (sessionKey, accountId, route) =>
-        this.rememberSessionRoute(sessionKey, accountId, route),
-      enqueueFromReply: (args) => this.enqueueFromReply(args),
-      createMessageId: () => randomUUID(),
-    });
-  };
-
-  private async enqueueChannelMessageHandoff(ctx: any, payload: ReplyPayloadInput) {
-    const accountId = normalizeAccountId(ctx.accountId);
-    const to = asString(ctx.to || '').trim();
-    const verified = this.resolveVerifiedTarget(to, accountId);
-    this.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
-    const before = new Set(this.outbox.keys());
-    await this.enqueueFromReply({
-      accountId,
-      sessionKey: verified.sessionKey,
-      route: verified.route,
-      payload,
-      mediaLocalRoots: ctx.mediaLocalRoots,
-    });
-    const entries = Array.from(this.outbox.values()).filter(
-      (entry) => !before.has(entry.messageId),
-    );
-    if (!entries.length) {
-      throw new Error('bncr channel.message handoff did not enqueue an outbox entry');
-    }
-    return entries[entries.length - 1];
-  }
-
-  channelMessageSendText = async (ctx: any) => {
-    const entry = await this.enqueueChannelMessageHandoff(ctx, {
-      text: asString(ctx.text || ''),
-      kind: ctx?.kind,
-      replyToId: this.resolveChannelSendReplyToId(ctx),
-    });
-    return buildBncrDurableQueuedResult({ entry });
-  };
-
-  channelMessageSendMedia = async (ctx: any) => {
-    const entry = await this.enqueueChannelMessageHandoff(ctx, {
-      text: asString(ctx.text || ''),
-      mediaUrl: asString(ctx.mediaUrl || ''),
-      mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
-      asVoice: ctx?.asVoice === true,
-      audioAsVoice: ctx?.audioAsVoice === true,
-      kind: ctx?.kind,
-      replyToId: this.resolveChannelSendReplyToId(ctx),
-    });
-    return buildBncrDurableQueuedResult({ entry });
-  };
-
-  channelMessageSendPayload = async (ctx: any) => {
-    const payload = ctx?.payload || {};
-    if (!payload || typeof payload !== 'object') {
-      throw new Error('bncr channel.message payload must be an object');
-    }
-    const entry = await this.enqueueChannelMessageHandoff(ctx, {
-      text: asString(payload.text || payload.message || payload.caption || ''),
-      mediaUrl: asString(payload.mediaUrl || ''),
-      mediaUrls: Array.isArray(payload.mediaUrls) ? payload.mediaUrls : undefined,
-      asVoice: payload.asVoice === true,
-      audioAsVoice: payload.audioAsVoice === true,
-      kind: payload.kind,
-      replyToId:
-        asString(payload.replyToId || ctx?.replyToId || ctx?.replyToMessageId || '').trim() ||
-        undefined,
-    });
-    return buildBncrDurableQueuedResult({ entry });
-  };
+  channelMessageSendPayload = async (ctx: BncrChannelSendContext) =>
+    this.channelSendRuntime.channelMessageSendPayload(ctx);
 }
 
-export function createBncrBridge(api: OpenClawPluginApi) {
-  return new BncrBridgeRuntime(api);
+// Plugin surface export -----------------------------------------------------
+
+export function createBncrBridge(
+  api: OpenClawPluginApi,
+  runtimePaths: BncrBridgeRuntimePaths = {},
+) {
+  return new BncrBridgeRuntime(api, runtimePaths);
 }
 
 export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
-  const messageActions: ChannelMessageActionAdapter = {
-    describeMessageTool: ({ cfg }) => {
-      const channelCfg = cfg?.channels?.[CHANNEL_ID];
-      const hasExplicitConfiguredAccount =
-        Boolean(channelCfg && typeof channelCfg === 'object') &&
-        resolveBncrChannelPolicy(channelCfg).enabled !== false &&
-        Boolean(channelCfg.accounts && typeof channelCfg.accounts === 'object') &&
-        Object.keys(channelCfg.accounts).some(
-          (accountId) => resolveAccount(cfg, accountId).enabled !== false,
-        );
+  const bridgeGroup = createBncrChannelPluginBridgeGroup({
+    channelId: CHANNEL_ID,
+    defaultAccountId: BNCR_DEFAULT_ACCOUNT_ID,
+    getBridge: () => getBridge() as unknown as BncrChannelPluginBridge,
+  });
 
-      const runtimeBridge = getBridge();
-      const hasConnectedRuntime = listAccountIds(cfg).some((accountId) => {
-        const resolved = resolveAccount(cfg, accountId);
-        const runtime = runtimeBridge.getAccountRuntimeSnapshot(resolved.accountId);
-        return Boolean(runtime?.connected);
-      });
-
-      if (!hasExplicitConfiguredAccount && !hasConnectedRuntime) {
-        return null;
-      }
-
-      return {
-        actions: ['send'],
-        capabilities: [],
-      };
-    },
-    supportsAction: ({ action }) => action === 'send',
-    extractToolSend: ({ args }) => extractOpenClawToolSend(args, 'sendMessage'),
-    handleAction: async ({ action, params, accountId, mediaLocalRoots }) => {
-      if (action !== 'send')
-        throw new Error(`Action ${action} is not supported for provider ${CHANNEL_ID}.`);
-      const normalized = normalizeBncrSendParams({ params, accountId });
-
-      const runtimeBridge = getBridge();
-      const result = normalized.mediaUrl
-        ? await sendBncrMedia({
-            channelId: CHANNEL_ID,
-            accountId: normalized.accountId,
-            to: normalized.to,
-            text: normalized.caption,
-            mediaUrl: normalized.mediaUrl,
-            asVoice: normalized.asVoice,
-            audioAsVoice: normalized.audioAsVoice,
-            mediaLocalRoots,
-            resolveVerifiedTarget: (to, accountId) =>
-              runtimeBridge.resolveVerifiedTarget(to, accountId),
-            rememberSessionRoute: (sessionKey, accountId, route) =>
-              runtimeBridge.rememberSessionRoute(sessionKey, accountId, route),
-            enqueueFromReply: (args) => runtimeBridge.enqueueFromReply(args as any),
-            createMessageId: () => randomUUID(),
-          })
-        : await sendBncrText({
-            channelId: CHANNEL_ID,
-            accountId: normalized.accountId,
-            to: normalized.to,
-            text: normalized.message,
-            mediaLocalRoots,
-            resolveVerifiedTarget: (to, accountId) =>
-              runtimeBridge.resolveVerifiedTarget(to, accountId),
-            rememberSessionRoute: (sessionKey, accountId, route) =>
-              runtimeBridge.rememberSessionRoute(sessionKey, accountId, route),
-            enqueueFromReply: (args) => runtimeBridge.enqueueFromReply(args as any),
-            createMessageId: () => randomUUID(),
-          });
-
-      return openClawJsonResult({ ok: true, ...result });
-    },
-  };
-
-  const plugin = {
-    id: CHANNEL_ID,
-    meta: BNCR_CHANNEL_META,
-    actions: messageActions,
-    message: {
-      receive: BNCR_MESSAGE_RECEIVE_POLICY,
-      send: createBncrMessageSend(getBridge),
-    },
-    capabilities: BNCR_CHANNEL_CAPABILITIES,
-    messaging: createBncrMessagingSurface(getBridge),
-    configSchema: BncrConfigSchema,
-    config: BNCR_CONFIG_SURFACE,
-    setup: BNCR_SETUP_SURFACE,
-    outbound: createBncrOutboundRuntime(getBridge),
-    status: createBncrStatusSurface(getBridge),
+  return createBncrChannelPluginSurfaceGroup({
+    channelId: CHANNEL_ID,
+    getMessageSendBridge: bridgeGroup.getMessageSendBridge,
+    getOutboundBridge: bridgeGroup.getOutboundBridge,
+    getMessagingBridge: bridgeGroup.getMessagingBridge,
+    getStatusBridge: bridgeGroup.getStatusBridge,
+    getToolActionBridge: bridgeGroup.getToolActionBridge,
+    getGatewayBridge: bridgeGroup.getGatewayBridge,
+    channelMeta: BNCR_CHANNEL_META,
+    channelCapabilities: BNCR_CHANNEL_CAPABILITIES,
     gatewayMethods: BNCR_GATEWAY_METHODS,
-    gateway: createBncrGatewayRuntime(getBridge),
-  };
-
-  return plugin;
+    configSurface: BNCR_CONFIG_SURFACE,
+    setupSurface: BNCR_SETUP_SURFACE,
+    extractToolSend: extractOpenClawToolSend,
+    openClawJsonResult,
+  }).plugin;
 }

@@ -1,9 +1,39 @@
 import { normalizeAccountId } from '../core/accounts.ts';
+import type { BncrDiagnosticsSummary } from '../core/types.ts';
+
+type StatusRuntimeMeta = {
+  pending?: number;
+  pendingAdmissionsCount?: number;
+  pendingAdmissions?: unknown[];
+  deadLetter?: number;
+  lastSessionScope?: string | null;
+  lastSessionAt?: number | null;
+  lastSessionAgo?: string | null;
+  lastActivityAt?: number | null;
+  lastActivityAgo?: string | null;
+  lastInboundAt?: number | null;
+  lastInboundAgo?: string | null;
+  lastOutboundAt?: number | null;
+  lastOutboundAgo?: string | null;
+  diagnostics?: BncrDiagnosticsSummary | Record<string, unknown>;
+};
+
+type StatusRuntimeState = {
+  accountId?: string;
+  running?: boolean;
+  connected?: boolean;
+  restartPending?: boolean;
+  lastEventAt?: number | null;
+  lastStopAt?: number | null;
+  mode?: 'linked' | 'configured' | string;
+  lastError?: string | null;
+  meta?: StatusRuntimeMeta;
+};
 
 type StatusWorkerContext = {
   accountId: string;
-  getStatus?: () => Record<string, any>;
-  setStatus?: (status: Record<string, any>) => void;
+  getStatus?: () => StatusRuntimeState;
+  setStatus?: (status: StatusRuntimeState) => void;
   abortSignal?: {
     aborted?: boolean;
     addEventListener?: (event: 'abort', listener: () => void, options?: { once?: boolean }) => void;
@@ -70,10 +100,10 @@ export function updateHealthStatusLogState(args: {
 type StatusWorkerHooks = {
   isOnline: (accountId: string) => boolean;
   hasRecentInboundReachability: (accountId: string) => boolean;
-  getLastActivityAt: (accountId: string, previous: Record<string, any>) => number | null;
+  getLastActivityAt: (accountId: string, previous: StatusRuntimeState) => number | null;
   getActiveConnectionKey: (accountId: string) => string | null;
   getActiveConnections: (accountId: string) => Array<Record<string, unknown>>;
-  buildStatusMeta: (accountId: string) => Record<string, any>;
+  buildStatusMeta: (accountId: string) => StatusRuntimeMeta;
   logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) => void;
   logInfoDedup: (
     scope: string | undefined,

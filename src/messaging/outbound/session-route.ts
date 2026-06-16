@@ -1,3 +1,4 @@
+import type { ChannelOutboundSessionRoute } from 'openclaw/plugin-sdk/core';
 import {
   buildCanonicalBncrSessionKey,
   formatDisplayScope,
@@ -7,9 +8,23 @@ import {
 } from '../../core/targets.ts';
 import type { BncrRoute } from '../../core/types.ts';
 import { buildOpenClawChannelOutboundSessionRoute } from '../../openclaw/session-route-runtime.ts';
+import type { BncrChannelConfigRoot } from '../../plugin/channel-runtime-types.ts';
+
+type BncrChannelRouteRefFields = {
+  channel: string;
+  accountId?: string;
+  target: {
+    to: string;
+    rawTo: string;
+    chatType: 'direct' | 'group';
+  };
+  thread?: { id: string };
+};
+
+type BncrOutboundSessionRoute = ChannelOutboundSessionRoute & BncrChannelRouteRefFields;
 
 type ResolveBncrOutboundSessionRouteParams = {
-  cfg: any;
+  cfg: BncrChannelConfigRoot;
   channel: string;
   agentId: string;
   accountId?: string;
@@ -27,13 +42,13 @@ function asString(v: unknown, fallback = ''): string {
 }
 
 function attachBncrChannelRouteRefFields(args: {
-  built: Record<string, unknown>;
+  built: ChannelOutboundSessionRoute;
   channel: string;
   accountId?: string;
   to: string;
   chatType: 'direct' | 'group';
   threadId?: string;
-}) {
+}): BncrOutboundSessionRoute {
   const { built, channel, accountId, to, chatType, threadId } = args;
   return {
     ...built,

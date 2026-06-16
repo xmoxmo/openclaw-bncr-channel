@@ -1,7 +1,23 @@
 import { BNCR_DEFAULT_ACCOUNT_ID, CHANNEL_ID, normalizeAccountId } from '../core/accounts.ts';
 import { getOpenClawRuntimeConfig } from '../openclaw/config-runtime.ts';
+import type {
+  BncrChannelConfigRoot,
+  BncrChannelConfigSection,
+  BncrStatusRuntimeSnapshot,
+} from '../plugin/channel-runtime-types.ts';
 
 type RuntimeApiHolder = { api: unknown };
+type BncrAckConfigAccount = { outboundRequireAck?: boolean };
+type BncrAckConfigChannel = BncrChannelConfigSection & {
+  accounts?: Record<string, BncrAckConfigAccount | undefined>;
+};
+
+type OpenClawConfigApi = Parameters<typeof getOpenClawRuntimeConfig>[0];
+
+function resolveBncrAckConfigChannel(api: unknown): BncrAckConfigChannel | undefined {
+  const cfg = getOpenClawRuntimeConfig(api as OpenClawConfigApi) as BncrChannelConfigRoot;
+  return cfg?.channels?.[CHANNEL_ID] as BncrAckConfigChannel | undefined;
+}
 
 type ResolveOutboundAckRequiredArgs = RuntimeApiHolder & {
   accountId?: string;
@@ -9,11 +25,10 @@ type ResolveOutboundAckRequiredArgs = RuntimeApiHolder & {
 
 export function resolveBncrOutboundAckRequired(args: ResolveOutboundAckRequiredArgs) {
   try {
-    const cfg = getOpenClawRuntimeConfig(args.api as any);
-    const channelCfg = (cfg as any)?.channels?.[CHANNEL_ID];
+    const channelCfg = resolveBncrAckConfigChannel(args.api);
     const accountCfg =
       args.accountId && channelCfg?.accounts && typeof channelCfg.accounts === 'object'
-        ? (channelCfg.accounts as Record<string, any>)[normalizeAccountId(args.accountId)]
+        ? channelCfg.accounts[normalizeAccountId(args.accountId)]
         : null;
     const scoped = accountCfg?.outboundRequireAck;
     const global = channelCfg?.outboundRequireAck;
@@ -37,9 +52,9 @@ type BuildBncrRuntimeFlagsArgs = RuntimeApiHolder & {
 export function buildBncrRuntimeStatusInput(args: {
   accountId: string;
   connected: boolean;
-  queueSnapshot: Record<string, any>;
-  eventCounters: Record<string, any>;
-  activitySnapshot: Record<string, any>;
+  queueSnapshot: BncrStatusRuntimeSnapshot;
+  eventCounters: BncrStatusRuntimeSnapshot;
+  activitySnapshot: BncrStatusRuntimeSnapshot;
   startedAt: number | null;
   running?: boolean;
   channelRoot: string;
@@ -59,8 +74,7 @@ export function buildBncrRuntimeStatusInput(args: {
 export function buildBncrRuntimeFlags(args: BuildBncrRuntimeFlagsArgs) {
   let ackPolicySource: 'channel' | 'default' = 'default';
   try {
-    const cfg = getOpenClawRuntimeConfig(args.api as any);
-    const global = (cfg as any)?.channels?.[CHANNEL_ID]?.outboundRequireAck;
+    const global = resolveBncrAckConfigChannel(args.api)?.outboundRequireAck;
     if (typeof global === 'boolean') ackPolicySource = 'channel';
   } catch {
     // keep default source
@@ -79,3 +93,5 @@ export function buildBncrRuntimeFlags(args: BuildBncrRuntimeFlagsArgs) {
     debugVerbose: args.debugVerbose,
   };
 }
+
+export type BncrRuntimeFlags = ReturnType<typeof buildBncrRuntimeFlags>;

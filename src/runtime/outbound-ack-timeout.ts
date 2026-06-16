@@ -1,3 +1,5 @@
+import type { BncrAckObservability, BncrAckStrategy } from '../core/types.ts';
+
 type ComputeBncrRecommendedAckTimeoutArgs = {
   lateAckOkCount: number;
   recentAckTimeoutCount: number;
@@ -83,7 +85,7 @@ function asString(value: unknown, fallback = '') {
 }
 
 export function buildBncrRuntimeAckStrategy(args: {
-  ackObservability: Record<string, any>;
+  ackObservability: BncrAckObservability;
   defaultAckTimeoutMs: number;
   maxAckTimeoutMs: number;
 }) {
@@ -101,7 +103,7 @@ export function buildBncrRuntimeAckStrategy(args: {
     lastLateAckAgeMs: ackObservability.lastLateAckAgeMs ?? null,
     lateAckObservationTtlMs: ackObservability.lateAckObservationTtlMs ?? null,
     recovered: ackObservability.adaptiveAckRecovered === true,
-  };
+  } satisfies BncrAckStrategy;
 }
 
 export function buildBncrRuntimeAckObservability(args: {
@@ -165,5 +167,5 @@ export function buildBncrRuntimeAckObservability(args: {
     currentAckTimeoutMs: args.currentAckTimeoutMs,
     recommendedAckTimeoutMs: ackTimeoutDecision.timeoutMs,
     recommendedAckTimeoutReason: ackTimeoutDecision.reason,
-  };
+  } satisfies BncrAckObservability;
 }

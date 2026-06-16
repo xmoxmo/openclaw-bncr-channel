@@ -1,4 +1,4 @@
-import type { BncrRoute } from './accounts.ts';
+import type { BncrRoute } from './types.ts';
 
 export function buildFileTransferInitPayload(args: {
   transferId: string;

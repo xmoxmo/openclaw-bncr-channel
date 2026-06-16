@@ -262,7 +262,9 @@ npm root -g
 
 ```bash
 cd plugins/bncr
+npm run fullcheck
 npm test
+npm run typecheck
 npm run selfcheck
 npm run check-pack
 npm pack
@@ -270,9 +272,12 @@ npm pack
 
 用途：
 
+- `npm run fullcheck`：运行当前全量门禁（`typecheck + check + test + selfcheck + check-pack + format:check`）
 - `npm test`：跑回归测试
+- `npm run typecheck`：执行 `tsconfig.typecheck.json`，确保类型边界与 OpenClaw surface 对齐
 - `npm run selfcheck`：检查插件骨架是否完整，并验证关键 OpenClaw SDK subpath 可解析
 - `npm run check-pack`：执行 `npm pack --dry-run --json`，确认发布包包含关键入口与 OpenClaw adapter 文件
+- `npm run format:check`：执行 Biome `format` 只读检查（不带 `--write`），防止格式漂移混进发布门禁
 - `npm pack`：确认当前版本可正常打包
 - `npm run check-register-drift -- --duration-sec 300 --interval-sec 15`：静置采样 `bncr.diagnostics`，观察 `registerCount / apiGeneration / postWarmupRegisterCount` 是否在 warmup 后继续增长
 

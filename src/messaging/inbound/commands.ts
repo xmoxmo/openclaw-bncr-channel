@@ -1,21 +1,37 @@
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
-import {
-  formatDisplayScope,
-  normalizeInboundSessionKey,
-  withTaskSessionKey,
-} from '../../core/targets.ts';
+import { formatDisplayScope } from '../../core/targets.ts';
 import {
   recordBncrInboundSession,
   resolveBncrInboundSessionStorePath,
   resolveBncrPinnedMainDmOwnerFromAllowlist,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
-import { resolveOpenClawAgentRoute } from '../../openclaw/routing-runtime.ts';
-import type { OutboundReplyTargetPolicy } from '../outbound/reply-target-policy.ts';
+import {
+  type OpenClawResolvedAgentRoute,
+  resolveOpenClawAgentRoute,
+} from '../../openclaw/routing-runtime.ts';
+import type {
+  BncrEnqueueFromReply,
+  BncrInboundApi,
+  BncrInboundConfig,
+  BncrInboundLogger,
+  BncrRememberSessionRoute,
+} from './contracts.ts';
+import type { ParsedInbound } from './dispatch-prep.ts';
 import { buildBncrInboundRecordUpdateLastRoute } from './last-route.ts';
 import { parseBncrNativeCommand, resolveBncrNativeVerboseCommand } from './native-command.ts';
-import { buildBncrNativeReplyDeliveryPayload } from './native-reply-delivery.ts';
+import {
+  buildBncrNativeCommandSessionState,
+  buildBncrNativeCommandSummary,
+  buildNativeCommandHandledResult,
+  buildNativeCommandRecordErrorLogger,
+  createNativeCommandReplyDeliverer,
+  createNativeCommandTurnContext,
+  logBncrNativeCommandEvent,
+  logBncrNativeCommandSummary,
+  resolveNativeCommandDebugEnabled,
+} from './native-command-runtime.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import {
@@ -24,54 +40,63 @@ import {
   wrapBncrInboundRecordSessionLabelCorrection,
 } from './session-label.ts';
 
-type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
+function assertResolvedAgentRoute(resolvedRoute: OpenClawResolvedAgentRoute): {
+  sessionKey: string;
+  agentId: string;
+  mainSessionKey?: string;
+} {
+  const sessionKey =
+    typeof resolvedRoute.sessionKey === 'string' ? resolvedRoute.sessionKey.trim() : '';
+  const agentId = typeof resolvedRoute.agentId === 'string' ? resolvedRoute.agentId.trim() : '';
+  if (!sessionKey) throw new Error('OpenClaw resolveAgentRoute returned empty sessionKey');
+  if (!agentId) throw new Error('OpenClaw resolveAgentRoute returned empty agentId');
+  return {
+    sessionKey,
+    agentId,
+    ...(typeof resolvedRoute.mainSessionKey === 'string' && resolvedRoute.mainSessionKey.trim()
+      ? { mainSessionKey: resolvedRoute.mainSessionKey }
+      : {}),
+  };
+}
 
-function logBncrNativeCommandEvent(
-  event: string,
-  fields: Record<string, unknown>,
-  options?: { debugOnly?: boolean; debugEnabled?: boolean },
-) {
-  if (options?.debugOnly && !options?.debugEnabled) return;
-  emitBncrLogLine('info', `[bncr] native-command ${JSON.stringify({ event, ...fields })}`);
+function buildBncrNativeCommandResolvedRoute(args: {
+  api: BncrInboundApi;
+  cfg: BncrInboundConfig;
+  channelId: string;
+  accountId: string;
+  peer: ParsedInbound['peer'];
+}) {
+  return assertResolvedAgentRoute(
+    resolveOpenClawAgentRoute(args.api, {
+      cfg: args.cfg,
+      channel: args.channelId,
+      accountId: args.accountId,
+      peer: args.peer,
+    }),
+  );
 }
 
 export { parseBncrNativeCommand } from './native-command.ts';
 
 export async function handleBncrNativeCommand(params: {
-  api: any;
+  api: BncrInboundApi;
   channelId: string;
-  cfg: any;
+  cfg: BncrInboundConfig;
   parsed: ParsedInbound;
   canonicalAgentId: string;
-  rememberSessionRoute: (sessionKey: string, accountId: string, route: any) => void;
-  enqueueFromReply: (args: {
-    accountId: string;
-    sessionKey: string;
-    route: any;
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
-    mediaLocalRoots?: readonly string[];
-    replyTargetPolicy?: OutboundReplyTargetPolicy;
-  }) => Promise<void>;
-  logger?: { warn?: (msg: string) => void; error?: (msg: string) => void };
+  rememberSessionRoute: BncrRememberSessionRoute;
+  enqueueFromReply: BncrEnqueueFromReply;
+  logger?: BncrInboundLogger;
 }): Promise<
   | { handled: false }
   | { handled: true; command: string; sessionKey: string; fallbackToAgent?: boolean }
 > {
   const { api, channelId, cfg, parsed, canonicalAgentId, rememberSessionRoute, enqueueFromReply } =
     params;
-  const {
-    accountId,
-    route,
-    peer,
-    sessionKeyfromroute,
-    providedOriginatingTo,
-    clientId,
-    extracted,
-    msgId,
-  } = parsed;
+  const { accountId, route, peer, clientId, extracted, msgId } = parsed;
   const command = parseBncrNativeCommand(extracted.text);
   if (!command) return { handled: false };
-  const nativeCommandDebugEnabled = cfg?.channels?.[channelId]?.debug?.verbose === true;
+  const nativeCommandDebugEnabled = resolveNativeCommandDebugEnabled({ cfg, channelId });
 
   logBncrNativeCommandEvent(
     'detected',
@@ -84,24 +109,23 @@ export async function handleBncrNativeCommand(params: {
     { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
   );
 
-  const resolvedRoute = resolveOpenClawAgentRoute(api, {
+  const resolvedRoute = buildBncrNativeCommandResolvedRoute({
+    api,
     cfg,
-    channel: channelId,
+    channelId,
     accountId,
     peer,
   });
 
-  const baseSessionKey =
-    normalizeInboundSessionKey(sessionKeyfromroute, route, canonicalAgentId) ||
-    resolvedRoute.sessionKey;
-  const taskSessionKey = withTaskSessionKey(baseSessionKey, extracted.taskKey);
-  const sessionKey = taskSessionKey || baseSessionKey;
+  const { baseSessionKey, taskSessionKey, sessionKey, displayTo, originatingTo } =
+    buildBncrNativeCommandSessionState({
+      parsed,
+      canonicalAgentId,
+      resolvedRoute,
+    });
   rememberSessionRoute(baseSessionKey, accountId, route);
   if (taskSessionKey && taskSessionKey !== baseSessionKey)
     rememberSessionRoute(taskSessionKey, accountId, route);
-
-  const displayTo = formatDisplayScope(route);
-  const originatingTo = providedOriginatingTo || displayTo;
   const body = command.body;
   if (!clientId) {
     emitBncrLogLine(
@@ -116,72 +140,22 @@ export async function handleBncrNativeCommand(params: {
     agentId: resolvedRoute.agentId,
   });
 
-  const ctxPayload = resolveBncrChannelInboundRuntime(api).buildContext({
-    channel: channelId,
-    provider: channelId,
-    surface: channelId,
-    accountId,
-    messageId: msgId,
-    timestamp: Date.now(),
-    from: senderIdForContext,
-    sender: {
-      id: senderIdForContext,
-      name: senderDisplayName,
-      username: senderDisplayName,
-    },
-    conversation: {
-      kind: peer.kind,
-      id: peer.id,
-      label: displayTo,
-      routePeer: {
-        kind: peer.kind,
-        id: peer.id,
-      },
-    },
-    route: {
-      agentId: resolvedRoute.agentId,
+  const ctxPayload = await Promise.resolve(
+    createNativeCommandTurnContext({
+      api,
+      channelId,
       accountId,
-      routeSessionKey: resolvedRoute.sessionKey,
-      dispatchSessionKey: sessionKey,
-      mainSessionKey: resolvedRoute.mainSessionKey,
-    },
-    reply: {
-      to: displayTo,
+      msgId: msgId || undefined,
+      peer,
+      resolvedRoute,
+      sessionKey,
+      displayTo,
       originatingTo,
-      replyToId: msgId,
-    },
-    message: {
-      inboundEventKind: 'user_request',
+      senderIdForContext,
+      senderDisplayName,
       body,
-      rawBody: body,
-      bodyForAgent: body,
-      commandBody: body,
-      envelopeFrom: originatingTo,
-      senderLabel: senderDisplayName,
-    },
-    commandTurn: {
-      kind: 'native',
-      source: 'native',
-      authorized: true,
-      body,
-    },
-    access: {
-      mentions: {
-        canDetectMention: true,
-        wasMentioned: true,
-        effectiveWasMentioned: true,
-      },
-      commands: {
-        authorized: true,
-        allowTextCommands: true,
-        useAccessGroups: false,
-        authorizers: [],
-      },
-    },
-    extra: {
-      OriginatingChannel: channelId,
-    },
-  });
+    }),
+  );
 
   const sessionIdentityPatch = buildBncrInboundSessionIdentityPatch({
     channelId,
@@ -193,14 +167,28 @@ export async function handleBncrNativeCommand(params: {
 
   const nativeVerbose = resolveBncrNativeVerboseCommand(command);
   if (nativeVerbose) {
-    logBncrNativeCommandEvent('handled-verbose', {
-      command: command.command,
-      accountId,
-      sessionKey,
-      to: displayTo,
-      msgId: msgId || null,
-      fallbackToAgent: false,
-    });
+    logBncrNativeCommandSummary(
+      buildBncrNativeCommandSummary({
+        kind: 'verbose',
+        command: command.command,
+        accountId,
+        to: displayTo,
+        msgId: msgId || null,
+        result: 'handled',
+      }),
+    );
+    logBncrNativeCommandEvent(
+      'handled-verbose',
+      {
+        command: command.command,
+        accountId,
+        sessionKey,
+        to: displayTo,
+        msgId: msgId || null,
+        fallbackToAgent: false,
+      },
+      { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
+    );
     await recordAndPatchBncrInboundSessionEntry({
       storePath,
       sessionKey,
@@ -235,7 +223,7 @@ export async function handleBncrNativeCommand(params: {
   const pinnedMainDmOwner =
     peer.kind === 'direct'
       ? resolveBncrPinnedMainDmOwnerFromAllowlist({
-          dmScope: cfg?.session?.dmScope,
+          dmScope: cfg?.session?.dmScope as string | undefined,
           allowFrom: channelPolicy.allowFrom,
           normalizeEntry: (entry: string) => String(entry || '').trim(),
         })
@@ -283,16 +271,15 @@ export async function handleBncrNativeCommand(params: {
         storePath,
         ctxPayload,
         recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
-          recordInboundSession: recordBncrInboundSession,
+          recordInboundSession: recordBncrInboundSession as (
+            ...args: unknown[]
+          ) => Promise<unknown> | unknown,
           expectedLabel: displayTo,
         }),
         record: {
           updateLastRoute,
           onRecordError: (err: unknown) => {
-            emitBncrLogLine(
-              'warn',
-              `[bncr] inbound record native command session failed: ${String(err)}`,
-            );
+            buildNativeCommandRecordErrorLogger(err);
           },
         },
         runDispatch: () =>
@@ -300,47 +287,21 @@ export async function handleBncrNativeCommand(params: {
             ctx: ctxPayload,
             cfg: effectiveReply.replyCfg,
             dispatcherOptions: {
-              deliver: async (
-                payload: {
-                  text?: string;
-                  mediaUrl?: string;
-                  mediaUrls?: string[];
-                  audioAsVoice?: boolean;
+              deliver: createNativeCommandReplyDeliverer({
+                command: command.command,
+                accountId,
+                sessionKey,
+                to: displayTo,
+                msgId: msgId || undefined,
+                effectiveReply,
+                route,
+                enqueueFromReply,
+                nativeCommandDebugEnabled,
+                onResponded: () => responded,
+                markResponded: () => {
+                  responded = true;
                 },
-                info?: { kind?: 'tool' | 'block' | 'final' },
-              ) => {
-                const kind = info?.kind;
-                const deliveryPayload = buildBncrNativeReplyDeliveryPayload({
-                  payload,
-                  kind,
-                  effectiveReply,
-                  msgId,
-                });
-                if (!deliveryPayload) return;
-                if (!responded) {
-                  logBncrNativeCommandEvent(
-                    'payload-produced',
-                    {
-                      command: command.command,
-                      accountId,
-                      sessionKey,
-                      to: displayTo,
-                      msgId: msgId || null,
-                      kind: kind || null,
-                      fallbackToAgent: false,
-                    },
-                    { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
-                  );
-                }
-                responded = true;
-                await enqueueFromReply({
-                  accountId,
-                  sessionKey,
-                  route,
-                  payload: deliveryPayload,
-                  replyTargetPolicy: 'preserve',
-                });
-              },
+              }),
             },
             replyOptions: {
               disableBlockStreaming: !effectiveReply.blockStreaming,
@@ -352,15 +313,26 @@ export async function handleBncrNativeCommand(params: {
   });
 
   if (!responded) {
-    logBncrNativeCommandEvent('no-payload-fallback-to-agent', {
+    logBncrNativeCommandSummary(
+      `fallback command=${command.command}|accountId=${accountId}|to=${displayTo}|msgId=${msgId || '-'}|reason=no-payload`,
+    );
+    logBncrNativeCommandEvent(
+      'no-payload-fallback-to-agent',
+      {
+        command: command.command,
+        accountId,
+        sessionKey,
+        to: displayTo,
+        msgId: msgId || null,
+        fallbackToAgent: true,
+      },
+      { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
+    );
+    return buildNativeCommandHandledResult({
       command: command.command,
-      accountId,
       sessionKey,
-      to: displayTo,
-      msgId: msgId || null,
       fallbackToAgent: true,
     });
-    return { handled: true, command: command.command, sessionKey, fallbackToAgent: true };
   }
 
   logBncrNativeCommandEvent(
@@ -375,5 +347,8 @@ export async function handleBncrNativeCommand(params: {
     },
     { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
   );
-  return { handled: true, command: command.command, sessionKey };
+  return buildNativeCommandHandledResult({
+    command: command.command,
+    sessionKey,
+  });
 }
