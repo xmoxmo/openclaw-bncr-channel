@@ -1,4 +1,7 @@
-import type { ChannelAccountSnapshot, ChannelGatewayContext } from 'openclaw/plugin-sdk';
+import type {
+  ChannelAccountSnapshot,
+  ChannelGatewayContext,
+} from 'openclaw/plugin-sdk/channel-contract';
 
 type GatewayAccountContext = Pick<
   ChannelGatewayContext,
