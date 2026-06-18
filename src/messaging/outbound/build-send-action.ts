@@ -12,6 +12,7 @@ type MinimalBncrSendInput = {
   media?: string;
   filePath?: string;
   mediaUrl?: string;
+  mediaUrls?: string[];
   asVoice?: boolean;
   audioAsVoice?: boolean;
   params?: Record<string, unknown>;
@@ -73,13 +74,19 @@ export function buildBncrMessageAction(input: MinimalBncrSendInput): BuiltBncrMe
     input.filePath,
     input.mediaUrl,
   );
+  const rawMediaUrls = Array.isArray(paramsObj.mediaUrls)
+    ? paramsObj.mediaUrls
+    : Array.isArray(input.mediaUrls)
+      ? input.mediaUrls
+      : undefined;
+  const mediaUrls = rawMediaUrls?.map((value) => asString(value || '').trim()).filter(Boolean);
 
   const message = pickFirstString(paramsObj.message, input.message) ?? '';
   const explicitCaption = pickFirstString(paramsObj.caption, input.caption) ?? '';
   const asVoice = pickFirstBoolean(paramsObj.asVoice, input.asVoice);
   const audioAsVoice = pickFirstBoolean(paramsObj.audioAsVoice, input.audioAsVoice);
 
-  if ((asVoice === true || audioAsVoice === true) && !mediaPath) {
+  if ((asVoice === true || audioAsVoice === true) && !mediaPath && !mediaUrls?.length) {
     throw new Error('bncr voice send requires media path');
   }
 
@@ -93,11 +100,20 @@ export function buildBncrMessageAction(input: MinimalBncrSendInput): BuiltBncrMe
     const finalCaption = explicitCaption || message;
     if (finalCaption) normalizedParams.caption = finalCaption;
     delete normalizedParams.message;
+    if (mediaUrls?.length) normalizedParams.mediaUrls = mediaUrls;
   } else {
-    const finalMessage = message || explicitCaption;
-    if (!finalMessage.trim()) throw new Error('bncr send requires message or media');
-    normalizedParams.message = finalMessage;
-    delete normalizedParams.caption;
+    if (mediaUrls?.length) {
+      normalizedParams.mediaUrls = mediaUrls;
+      const finalCaption = explicitCaption || message;
+      if (finalCaption) normalizedParams.caption = finalCaption;
+      delete normalizedParams.message;
+      delete normalizedParams.path;
+    } else {
+      const finalMessage = message || explicitCaption;
+      if (!finalMessage.trim()) throw new Error('bncr send requires message or media');
+      normalizedParams.message = finalMessage;
+      delete normalizedParams.caption;
+    }
   }
 
   if (asVoice === true) normalizedParams.asVoice = true;

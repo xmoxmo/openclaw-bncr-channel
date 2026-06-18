@@ -146,6 +146,36 @@ test('channel.message media sends with mediaUrls and no text enqueue attachment 
   }
 });
 
+test('channel.message media sends with mediaUrls and asVoice keep queued voice receipts for each attachment', async () => {
+  const bridge = createBridge();
+  try {
+    const result = await bridge.channelMessageSendMedia({
+      accountId: 'Primary',
+      to: target,
+      text: 'voice album',
+      mediaUrls: ['/tmp/channel-message-voice-1.ogg', '/tmp/channel-message-voice-2.ogg'],
+      asVoice: true,
+      replyToId: 'source-channel-message-media-voice-album',
+      mediaLocalRoots: ['/tmp'],
+    });
+
+    assert.equal(bridge.outbox.size, 3);
+    const entries = Array.from(bridge.outbox.values());
+
+    assert.equal(entries[0].payload.type, 'message.outbound');
+    assert.equal(entries[0].payload.message.msg, 'voice album');
+    assert.equal(entries[1].payload._meta?.mediaUrl, '/tmp/channel-message-voice-1.ogg');
+    assert.equal(entries[1].payload._meta?.asVoice, true);
+    assert.equal(entries[2].payload._meta?.mediaUrl, '/tmp/channel-message-voice-2.ogg');
+    assert.equal(entries[2].payload._meta?.asVoice, true);
+
+    assert.equal(result.receipt.parts.length, 1);
+    assert.equal(result.receipt.parts[0].kind, 'voice');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
 test('channel.message media keeps short text as single attachment caption', async () => {
   const bridge = createBridge();
   try {
@@ -342,6 +372,37 @@ test('channel.message payload sends with mediaUrls and text split text before at
     assert.equal(result.receipt.parts.length, 1);
     assert.equal(result.receipt.parts[0].platformMessageId, lastEntry.messageId);
     assert.equal(result.receipt.parts[0].replyToId, 'source-channel-message-payload-album');
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('channel.message payload sends with mediaUrls and asVoice keep queued voice receipts', async () => {
+  const bridge = createBridge();
+  try {
+    const result = await bridge.channelMessageSendPayload({
+      accountId: 'Primary',
+      to: target,
+      payload: {
+        text: 'payload voice album',
+        mediaUrls: [
+          '/tmp/channel-message-payload-voice-1.ogg',
+          '/tmp/channel-message-payload-voice-2.ogg',
+        ],
+        asVoice: true,
+        replyToId: 'source-channel-message-payload-voice-album',
+      },
+      mediaLocalRoots: ['/tmp'],
+    });
+
+    assert.equal(bridge.outbox.size, 3);
+    const entries = Array.from(bridge.outbox.values());
+    assert.equal(entries[0].payload.message.msg, 'payload voice album');
+    assert.equal(entries[1].payload._meta?.mediaUrl, '/tmp/channel-message-payload-voice-1.ogg');
+    assert.equal(entries[1].payload._meta?.asVoice, true);
+    assert.equal(entries[2].payload._meta?.mediaUrl, '/tmp/channel-message-payload-voice-2.ogg');
+    assert.equal(entries[2].payload._meta?.asVoice, true);
+    assert.equal(result.receipt.parts[0].kind, 'voice');
   } finally {
     cleanupBridge(bridge);
   }

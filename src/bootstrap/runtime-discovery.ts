@@ -153,6 +153,10 @@ function ensurePluginNodeModulesLink(pluginDir: string, targetRoot: string) {
 }
 
 export function resolveBncrRuntimeSourceDir(pluginDir: string) {
+  const pluginRoot = resolveBncrPluginRoot(pluginDir);
+  const rootSource = path.join(pluginRoot, 'src');
+  if (fs.existsSync(path.join(rootSource, 'channel.ts'))) return rootSource;
+
   const direct = path.join(pluginDir, 'src');
   if (fs.existsSync(path.join(direct, 'channel.ts'))) return direct;
 

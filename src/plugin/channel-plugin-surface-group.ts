@@ -140,37 +140,39 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
       const normalized = normalizeBncrSendParams({ params, accountId: accountId || '' });
 
       const toolActionBridge = runtime.getToolActionBridge();
-      const result = normalized.mediaUrl
-        ? await sendBncrMedia({
-            channelId: runtime.channelId,
-            accountId: normalized.accountId,
-            to: normalized.to,
-            text: normalized.caption,
-            mediaUrl: normalized.mediaUrl,
-            asVoice: normalized.asVoice,
-            audioAsVoice: normalized.audioAsVoice,
-            type: normalized.type,
-            mediaLocalRoots,
-            resolveVerifiedTarget: (to, accountId) =>
-              toolActionBridge.resolveVerifiedTarget(to, accountId),
-            rememberSessionRoute: (sessionKey, accountId, route) =>
-              toolActionBridge.rememberSessionRoute(sessionKey, accountId, route),
-            enqueueFromReply: (args) => toolActionBridge.enqueueFromReply(args),
-            createMessageId: () => randomUUID(),
-          })
-        : await sendBncrText({
-            channelId: runtime.channelId,
-            accountId: normalized.accountId,
-            to: normalized.to,
-            text: normalized.message,
-            mediaLocalRoots,
-            resolveVerifiedTarget: (to, accountId) =>
-              toolActionBridge.resolveVerifiedTarget(to, accountId),
-            rememberSessionRoute: (sessionKey, accountId, route) =>
-              toolActionBridge.rememberSessionRoute(sessionKey, accountId, route),
-            enqueueFromReply: (args) => toolActionBridge.enqueueFromReply(args),
-            createMessageId: () => randomUUID(),
-          });
+      const result =
+        normalized.mediaUrl || normalized.mediaUrls?.length
+          ? await sendBncrMedia({
+              channelId: runtime.channelId,
+              accountId: normalized.accountId,
+              to: normalized.to,
+              text: normalized.caption,
+              mediaUrl: normalized.mediaUrl,
+              mediaUrls: normalized.mediaUrls,
+              asVoice: normalized.asVoice,
+              audioAsVoice: normalized.audioAsVoice,
+              type: normalized.type,
+              mediaLocalRoots,
+              resolveVerifiedTarget: (to, accountId) =>
+                toolActionBridge.resolveVerifiedTarget(to, accountId),
+              rememberSessionRoute: (sessionKey, accountId, route) =>
+                toolActionBridge.rememberSessionRoute(sessionKey, accountId, route),
+              enqueueFromReply: (args) => toolActionBridge.enqueueFromReply(args),
+              createMessageId: () => randomUUID(),
+            })
+          : await sendBncrText({
+              channelId: runtime.channelId,
+              accountId: normalized.accountId,
+              to: normalized.to,
+              text: normalized.message,
+              mediaLocalRoots,
+              resolveVerifiedTarget: (to, accountId) =>
+                toolActionBridge.resolveVerifiedTarget(to, accountId),
+              rememberSessionRoute: (sessionKey, accountId, route) =>
+                toolActionBridge.rememberSessionRoute(sessionKey, accountId, route),
+              enqueueFromReply: (args) => toolActionBridge.enqueueFromReply(args),
+              createMessageId: () => randomUUID(),
+            });
 
       return runtime.openClawJsonResult({ ok: true, ...result });
     },

@@ -89,6 +89,38 @@ test('createBncrChannelSendRuntime normalizes payload kind before enqueue', asyn
   assert.equal(calls[1].payload.kind, undefined);
 });
 
+test('createBncrChannelSendRuntime preserves mediaUrls and asVoice for media and payload sends', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelSendMedia({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:10001',
+    text: 'voice album',
+    mediaUrls: ['/tmp/runtime-voice-1.ogg', '/tmp/runtime-voice-2.ogg'],
+    asVoice: true,
+  });
+  await runtime.channelMessageSendPayload({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:10001',
+    payload: {
+      text: 'payload voice album',
+      mediaUrls: ['/tmp/runtime-payload-voice-1.ogg', '/tmp/runtime-payload-voice-2.ogg'],
+      asVoice: true,
+    },
+  });
+
+  assert.deepEqual(calls[0].payload.mediaUrls, [
+    '/tmp/runtime-voice-1.ogg',
+    '/tmp/runtime-voice-2.ogg',
+  ]);
+  assert.equal(calls[0].payload.asVoice, true);
+  assert.deepEqual(calls[1].payload.mediaUrls, [
+    '/tmp/runtime-payload-voice-1.ogg',
+    '/tmp/runtime-payload-voice-2.ogg',
+  ]);
+  assert.equal(calls[1].payload.asVoice, true);
+});
+
 test('channel send runtime group exposes channel.message and direct send runtime together', async () => {
   const { calls } = createRuntimeHarness();
   const group = createBncrChannelSendRuntimeGroup({

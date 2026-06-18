@@ -22,6 +22,7 @@ test('normalizes text send params', () => {
       message: 'hello',
       caption: '',
       mediaUrl: undefined,
+      mediaUrls: undefined,
       asVoice: false,
       audioAsVoice: false,
     },
@@ -43,6 +44,7 @@ test('falls back from caption to message when media is absent', () => {
       message: 'caption only',
       caption: '',
       mediaUrl: undefined,
+      mediaUrls: undefined,
       asVoice: false,
       audioAsVoice: false,
     },
@@ -114,6 +116,38 @@ test('mediaUrl is used when media, path, and filePath are absent', () => {
   assert.equal(normalized.audioAsVoice, true);
 });
 
+test('mediaUrls are normalized as media send input when single mediaUrl is absent', () => {
+  const normalized = normalizeBncrSendParams({
+    ...baseInput,
+    params: {
+      to: 'target',
+      message: 'album caption',
+      mediaUrls: [' /tmp/one.png ', '', '/tmp/two.png', 123],
+    },
+  });
+
+  assert.equal(normalized.message, '');
+  assert.equal(normalized.caption, 'album caption');
+  assert.equal(normalized.mediaUrl, undefined);
+  assert.deepEqual(normalized.mediaUrls, ['/tmp/one.png', '/tmp/two.png']);
+});
+
+test('mediaUrl is merged into mediaUrls without duplication', () => {
+  const normalized = normalizeBncrSendParams({
+    ...baseInput,
+    params: {
+      to: 'target',
+      caption: 'merged media',
+      mediaUrl: '/tmp/one.png',
+      mediaUrls: [' /tmp/two.png ', '/tmp/one.png', ''],
+    },
+  });
+
+  assert.equal(normalized.caption, 'merged media');
+  assert.equal(normalized.mediaUrl, undefined);
+  assert.deepEqual(normalized.mediaUrls, ['/tmp/two.png', '/tmp/one.png']);
+});
+
 test('asVoice without media throws', () => {
   assert.throws(
     () =>
@@ -127,6 +161,23 @@ test('asVoice without media throws', () => {
       }),
     /send voice requires media path/,
   );
+});
+
+test('asVoice allows mediaUrls without single mediaUrl', () => {
+  const normalized = normalizeBncrSendParams({
+    ...baseInput,
+    params: {
+      to: 'target',
+      caption: 'voice album',
+      mediaUrls: ['/tmp/voice-1.ogg', '/tmp/voice-2.ogg'],
+      asVoice: true,
+    },
+  });
+
+  assert.equal(normalized.caption, 'voice album');
+  assert.equal(normalized.mediaUrl, undefined);
+  assert.deepEqual(normalized.mediaUrls, ['/tmp/voice-1.ogg', '/tmp/voice-2.ogg']);
+  assert.equal(normalized.asVoice, true);
 });
 
 test('empty content without media throws', () => {

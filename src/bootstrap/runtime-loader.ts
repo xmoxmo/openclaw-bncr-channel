@@ -15,9 +15,30 @@ export type LoadedRuntime = {
   createBncrChannelPlugin: ChannelModule['createBncrChannelPlugin'];
 };
 
-export const pluginFile = fileURLToPath(new URL('../../index.ts', import.meta.url));
+export function resolvePluginEntryFileFromModule(moduleUrl: string) {
+  const currentFile = fileURLToPath(moduleUrl);
+  const pluginRoot = resolveBncrPluginRoot(currentFile);
+  const currentDir = path.dirname(currentFile);
+  const distEntry = path.join(pluginRoot, 'dist', 'index.js');
+  if (currentFile === distEntry && fs.existsSync(distEntry)) return distEntry;
+
+  const sourceEntry = path.join(pluginRoot, 'index.ts');
+  if (fs.existsSync(sourceEntry)) return sourceEntry;
+
+  if (fs.existsSync(distEntry)) return distEntry;
+
+  if (path.basename(currentDir) === 'dist') return distEntry;
+
+  return sourceEntry;
+}
+
+function resolvePluginEntryFile() {
+  return resolvePluginEntryFileFromModule(import.meta.url);
+}
+
+export const pluginFile = resolvePluginEntryFile();
 export const pluginDir = path.dirname(pluginFile);
-export const pluginRequire = createRequire(new URL('../../index.ts', import.meta.url));
+export const pluginRequire = createRequire(pluginFile);
 export const pluginRoot = resolveBncrPluginRoot(pluginFile);
 
 const runtimeSourceDir = resolveBncrRuntimeSourceDir(pluginDir);
