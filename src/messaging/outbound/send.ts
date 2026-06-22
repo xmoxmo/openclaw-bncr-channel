@@ -64,6 +64,7 @@ export async function sendBncrMedia(params: {
   asVoice?: boolean;
   audioAsVoice?: boolean;
   type?: string;
+  extra?: Record<string, unknown>;
   kind?: string;
   replyToId?: string;
   mediaLocalRoots?: readonly string[];
@@ -83,6 +84,7 @@ export async function sendBncrMedia(params: {
       asVoice?: boolean;
       audioAsVoice?: boolean;
       type?: string;
+      extra?: Record<string, unknown>;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
     };
@@ -104,6 +106,7 @@ export async function sendBncrMedia(params: {
       asVoice: params.asVoice === true ? true : undefined,
       audioAsVoice: params.audioAsVoice === true ? true : undefined,
       type: params.type,
+      extra: params.extra,
       kind: normalizeReplyKind(params.kind),
       replyToId: params.replyToId,
     },

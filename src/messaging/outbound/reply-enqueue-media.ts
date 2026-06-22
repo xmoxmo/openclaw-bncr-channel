@@ -62,6 +62,7 @@ export function enqueueReplyMediaFileTransferEntry(
       asVoice: boolean;
       audioAsVoice: boolean;
       type?: string;
+      extra?: Record<string, unknown>;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
       replyTargetPolicy?: OutboundReplyTargetPolicy;
@@ -86,6 +87,7 @@ export function enqueueReplyMediaFileTransferEntry(
       asVoice: params.asVoice,
       audioAsVoice: params.audioAsVoice,
       type: params.type,
+      extra: params.extra,
       kind: params.kind,
       replyToId: params.replyToId || undefined,
       replyTargetPolicy: params.replyTargetPolicy,
@@ -132,6 +134,7 @@ export function enqueueSingleReplyMediaEntry(
     asVoice: params.params.payload.asVoice,
     audioAsVoice: params.params.payload.audioAsVoice,
     type: params.params.payload.type,
+    extra: params.params.payload.extra,
     kind: params.params.payload.kind,
     replyToId: params.params.payload.replyToId,
     replyTargetPolicy: params.params.payload.replyTargetPolicy,

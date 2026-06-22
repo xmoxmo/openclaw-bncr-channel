@@ -116,6 +116,37 @@ test('mediaUrl is used when media, path, and filePath are absent', () => {
   assert.equal(normalized.audioAsVoice, true);
 });
 
+test('extra object is preserved as a shallow copy for send params', () => {
+  const extra = { replyMarkup: { inline_keyboard: [] }, priority: 1 };
+  const normalized = normalizeBncrSendParams({
+    ...baseInput,
+    params: {
+      to: 'target',
+      message: 'hello',
+      extra,
+    },
+  });
+
+  assert.deepEqual(normalized.extra, extra);
+  assert.notEqual(normalized.extra, extra);
+
+  extra.priority = 2;
+  assert.equal(normalized.extra.priority, 1);
+});
+
+test('non-object extra is ignored for send params', () => {
+  const normalized = normalizeBncrSendParams({
+    ...baseInput,
+    params: {
+      to: 'target',
+      message: 'hello',
+      extra: ['bad'],
+    },
+  });
+
+  assert.equal(normalized.extra, undefined);
+});
+
 test('mediaUrls are normalized as media send input when single mediaUrl is absent', () => {
   const normalized = normalizeBncrSendParams({
     ...baseInput,

@@ -337,6 +337,7 @@ export function buildBncrMediaOrchestratorsRuntime(deps: {
     asVoice: boolean;
     audioAsVoice: boolean;
     type?: string;
+    extra?: Record<string, unknown>;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;

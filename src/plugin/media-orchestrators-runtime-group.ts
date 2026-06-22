@@ -49,6 +49,7 @@ function buildReplyMediaEntryHelpers(runtime: {
     asVoice: boolean;
     audioAsVoice: boolean;
     type?: string;
+    extra?: Record<string, unknown>;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
@@ -203,6 +204,7 @@ export function createBncrMediaOrchestratorsRuntimeGroup(runtime: {
     asVoice: boolean;
     audioAsVoice: boolean;
     type?: string;
+    extra?: Record<string, unknown>;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;

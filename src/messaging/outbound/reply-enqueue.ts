@@ -19,6 +19,7 @@ export type ReplyPayloadInput = {
   asVoice?: boolean;
   audioAsVoice?: boolean;
   type?: string;
+  extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
 };
@@ -31,6 +32,7 @@ export type NormalizedReplyPayload = {
   asVoice: boolean;
   audioAsVoice: boolean;
   type?: string;
+  extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId: string;
   replyTargetPolicy: OutboundReplyTargetPolicy;
@@ -64,6 +66,7 @@ export type ReplyMediaFileTransferParams = {
   asVoice: boolean;
   audioAsVoice: boolean;
   type?: string;
+  extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId: string;
   replyTargetPolicy: OutboundReplyTargetPolicy;
@@ -268,6 +271,7 @@ export function normalizeReplyPayload(
     asVoice: payload?.asVoice === true,
     audioAsVoice: payload?.audioAsVoice === true,
     ...(type ? { type } : {}),
+    ...(payload?.extra ? { extra: { ...payload.extra } } : {}),
     kind: payload?.kind,
     replyTargetPolicy: options?.replyTargetPolicy ?? 'agent-default',
     replyToId: normalizeOutboundReplyToId({

@@ -51,3 +51,21 @@ test('buildReplyEnqueuePlan splits long single-media text and multi-media payloa
     clearText: true,
   });
 });
+
+test('normalizeReplyPayload preserves extra as a shallow copy', () => {
+  const extra = { parse_mode: 'Markdown', silent: true };
+  const payload = normalizeReplyPayload(
+    {
+      text: 'hello',
+      mediaUrl: '/tmp/demo.png',
+      extra,
+    },
+    helpers,
+  );
+
+  assert.deepEqual(payload.extra, extra);
+  assert.notEqual(payload.extra, extra);
+
+  extra.parse_mode = 'HTML';
+  assert.equal(payload.extra.parse_mode, 'Markdown');
+});

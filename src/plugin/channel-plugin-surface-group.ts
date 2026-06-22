@@ -152,6 +152,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
               asVoice: normalized.asVoice,
               audioAsVoice: normalized.audioAsVoice,
               type: normalized.type,
+              extra: normalized.extra,
               mediaLocalRoots,
               resolveVerifiedTarget: (to, accountId) =>
                 toolActionBridge.resolveVerifiedTarget(to, accountId),

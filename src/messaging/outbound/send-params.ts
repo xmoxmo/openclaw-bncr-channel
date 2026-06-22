@@ -11,6 +11,7 @@ export type NormalizedBncrSendParams = {
   asVoice: boolean;
   audioAsVoice: boolean;
   type?: string;
+  extra?: Record<string, unknown>;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -51,6 +52,8 @@ export function normalizeBncrSendParams(input: {
   const asVoice = readOpenClawBooleanParam(paramsObj, 'asVoice') ?? false;
   const audioAsVoice = readOpenClawBooleanParam(paramsObj, 'audioAsVoice') ?? false;
   const type = readOpenClawStringParam(paramsObj, 'type') || undefined;
+  const rawExtra = paramsObj.extra;
+  const extra = isPlainObject(rawExtra) ? { ...rawExtra } : undefined;
 
   const hasMedia = Boolean(mediaUrl || dedupedMediaUrls?.length);
 
@@ -73,5 +76,6 @@ export function normalizeBncrSendParams(input: {
     asVoice,
     audioAsVoice,
     ...(type ? { type } : {}),
+    ...(extra ? { extra } : {}),
   };
 }

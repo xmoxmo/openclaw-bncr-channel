@@ -68,6 +68,7 @@ export function buildBncrMediaOutboundFrame(params: {
   mediaMsg: string;
   fileName: string;
   hintedType?: string;
+  extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   now: number;
@@ -96,6 +97,7 @@ export function buildBncrMediaOutboundFrame(params: {
       base64: params.media.mediaBase64 || '',
       fileName: params.fileName,
       transferMode: params.media.mode,
+      ...(params.extra ? { extra: { ...params.extra } } : {}),
     },
     ts: params.now,
   };

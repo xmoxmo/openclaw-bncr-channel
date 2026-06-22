@@ -16,6 +16,7 @@ export function buildFileTransferOutboxEntry(args: {
   asVoice?: boolean;
   audioAsVoice?: boolean;
   type?: string;
+  extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   replyTargetPolicy?: OutboundReplyTargetPolicy;
@@ -38,6 +39,7 @@ export function buildFileTransferOutboxEntry(args: {
         asVoice: args.asVoice === true,
         audioAsVoice: args.audioAsVoice === true,
         type: args.type,
+        ...(args.extra ? { extra: { ...args.extra } } : {}),
         finalEvent: args.pushEvent,
         replyToId:
           normalizeOutboundReplyToId({

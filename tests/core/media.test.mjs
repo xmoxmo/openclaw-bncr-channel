@@ -160,6 +160,27 @@ test('buildBncrMediaOutboundFrame writes resolved type and path', () => {
   assert.equal(frame.message.fileName, 'a.mp3');
 });
 
+test('buildBncrMediaOutboundFrame preserves extra metadata as a shallow copy', () => {
+  const extra = { parse_mode: 'MarkdownV2', disable_preview: true };
+  const frame = buildBncrMediaOutboundFrame({
+    messageId: 'm2',
+    sessionKey: 'agent:main:bncr:direct:def',
+    route: { platform: 'tgBot', groupId: '0', userId: '10002' },
+    media: { mode: 'base64', mimeType: 'image/png', mediaBase64: 'Zm9v' },
+    mediaUrl: '/tmp/a.png',
+    mediaMsg: 'caption',
+    fileName: 'a.png',
+    extra,
+    now: 2,
+  });
+
+  assert.deepEqual(frame.message.extra, extra);
+  assert.notEqual(frame.message.extra, extra);
+
+  extra.parse_mode = 'HTML';
+  assert.equal(frame.message.extra.parse_mode, 'MarkdownV2');
+});
+
 test('channelSendMedia enqueues file-transfer outbox entry with voice metadata', async () => {
   const bridge = createBridge();
   bridge.canonicalAgentId = 'orion';

@@ -85,3 +85,23 @@ test('media orchestrators runtime group exposes base64 transfer and reply enqueu
   assert.equal(calls.enqueueOutbound.length, 1);
   assert.equal(calls.rememberRecentMediaSend.length, 1);
 });
+
+test('reply media orchestrator forwards extra metadata into file-transfer entry without retaining caller object', () => {
+  const { runtime, calls } = createRuntime();
+  const group = createBncrMediaOrchestratorsRuntimeGroup(runtime);
+  const extra = { parse_mode: 'MarkdownV2', protect_content: true };
+
+  group.replyMediaOrchestrator.enqueueFromReply({
+    accountId: 'Primary',
+    sessionKey: 'session-1',
+    route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+    payload: { text: 'hello', mediaUrl: 'https://example.com/a.png', extra },
+  });
+
+  const [entry] = calls.enqueueOutbound;
+  assert.deepEqual(entry.extra, extra);
+  assert.notEqual(entry.extra, extra);
+
+  extra.parse_mode = 'HTML';
+  assert.equal(entry.extra.parse_mode, 'MarkdownV2');
+});

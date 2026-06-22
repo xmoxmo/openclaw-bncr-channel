@@ -1164,6 +1164,7 @@ class BncrBridgeRuntime {
     asVoice?: boolean;
     audioAsVoice?: boolean;
     type?: string;
+    extra?: Record<string, unknown>;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
@@ -1182,6 +1183,7 @@ class BncrBridgeRuntime {
       asVoice: params.asVoice,
       audioAsVoice: params.audioAsVoice,
       type: params.type,
+      extra: params.extra,
       kind: params.kind,
       replyToId: asString(params.replyToId || '').trim() || undefined,
       replyTargetPolicy: params.replyTargetPolicy,
@@ -1245,6 +1247,7 @@ class BncrBridgeRuntime {
         mimeType: params.media.mimeType,
       }),
       hintedType: wantsVoice ? 'voice' : asString(params.meta.type || '') || undefined,
+      extra: params.meta.extra as Record<string, unknown> | undefined,
       kind: messageKind,
       replyToId: normalizeReplyToId(params.meta.replyToId) || undefined,
       now: now(),
