@@ -19,6 +19,7 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
   isPlainObject: (value: unknown) => value is Record<string, unknown>;
   clampFiniteNumber: (value: unknown, fallback: number, min?: number, max?: number) => number;
   normalizeAccountId: (accountId: string) => string;
+  resolveAccountIdForSession: (sessionKey: string) => string | null;
   formatDisplayScope: (route: OutboxEntry['route']) => string;
   isFileTransferEntry: (entry: OutboxEntry) => boolean;
   recommendedAckTimeoutMaxMs: number;
@@ -235,6 +236,7 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
     handleFileTransferPushFailure: runtime.handleFileTransferPushFailure,
     handleTextPushFailure: runtime.handleTextPushFailure,
     isPrePushGuardDeferral: runtime.isPrePushGuardDeferral,
+    resolveAccountIdForSession: runtime.resolveAccountIdForSession,
     moveToDeadLetter: runtime.moveToDeadLetter,
     scheduleSave: runtime.scheduleSave,
     logInfo: runtime.logInfo,

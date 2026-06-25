@@ -20,6 +20,9 @@ type BncrOutboxDrainScheduleRuntime = {
 type BncrOutboxDrainFailureRuntime = {
   backoffMs: (retryCount: number) => number;
   outbox: Map<string, OutboxEntry>;
+  resolveAccountIdForSession: (sessionKey: string) => string | null;
+  logInfo: (scope: string, message: string, options?: { debugOnly?: boolean }) => void;
+  logWarn: (scope: string, message: string, options?: { debugOnly?: boolean }) => void;
   isPrePushGuardDeferral: (entry: OutboxEntry) => boolean;
   moveToDeadLetter: (entry: OutboxEntry, reason: string) => void;
   scheduleSave: () => void;
@@ -38,6 +41,39 @@ export function createBncrOutboxDrainFailure(runtime: BncrOutboxDrainFailureRunt
   }): { action: 'continue' | 'break'; localNextDelay: number | null } {
     const { accountId, entry, attemptedAt, updateMinOutboxDelay } = args;
     let { localNextDelay } = args;
+
+    // If the entry keeps hitting pre-push guard (no active connection), the
+    // accountId on the entry might be wrong (e.g. constructed from route data).
+    // Try to correct it from recent inbound session context before giving up.
+    if (runtime.isPrePushGuardDeferral(entry) && entry.retryCount > 0) {
+      const corrected = runtime.resolveAccountIdForSession(entry.sessionKey);
+      if (corrected && corrected !== entry.accountId) {
+        const oldAccountId = entry.accountId;
+        runtime.logWarn(
+          'outbound',
+          `account corrected sessionKey=${entry.sessionKey} ${oldAccountId}→${corrected}`,
+        );
+        runtime.logInfo(
+          'outbound',
+          JSON.stringify({
+            event: 'account-corrected',
+            messageId: entry.messageId,
+            sessionKey: entry.sessionKey,
+            oldAccountId,
+            corrected,
+            retryCount: entry.retryCount,
+            lastError: entry.lastError,
+          }),
+          { debugOnly: true },
+        );
+        entry.accountId = corrected;
+        entry.retryCount = 0;
+        entry.lastError = undefined;
+        runtime.outbox.set(entry.messageId, entry);
+        runtime.scheduleSave();
+        return { action: 'continue', localNextDelay };
+      }
+    }
 
     if (runtime.isPrePushGuardDeferral(entry)) {
       const wait = runtime.prePushGuardRetryDelayMs;

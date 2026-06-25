@@ -133,9 +133,17 @@ export function createBncrTargetRuntime(runtime: {
     return verified;
   }
 
+  function resolveSessionAccountId(sessionKey: string): string | null {
+    const key = asString(sessionKey).trim();
+    if (!key) return null;
+    const hit = runtime.sessionRoutes.get(key);
+    return hit ? hit.accountId : null;
+  }
+
   return {
     rememberSessionRoute,
     resolveRouteBySession,
     resolveVerifiedTarget,
+    resolveSessionAccountId,
   };
 }

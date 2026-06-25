@@ -58,6 +58,7 @@ type BncrOutboxDrainRuntime = {
   backoffMs: (retryCount: number) => number;
   isPlainObject: (value: unknown) => value is Record<string, unknown>;
   normalizeAccountId: (accountId: string) => string;
+  resolveAccountIdForSession: (sessionKey: string) => string | null;
   stopped: () => boolean;
   outbox: Map<string, OutboxEntry>;
   deadLetter: () => OutboxEntry[];
@@ -132,7 +133,19 @@ type BncrOutboxDrainRuntime = {
 
 export function createBncrOutboxDrainRuntime(runtime: BncrOutboxDrainRuntime) {
   const handlePushedDrainEntry = createBncrOutboxDrainPostPush(runtime);
-  const handleFailedDrainEntry = createBncrOutboxDrainFailure(runtime);
+  const handleFailedDrainEntry = createBncrOutboxDrainFailure({
+    backoffMs: runtime.backoffMs,
+    outbox: runtime.outbox,
+    resolveAccountIdForSession: runtime.resolveAccountIdForSession,
+    logInfo: runtime.logInfo,
+    logWarn: runtime.logWarn,
+    isPrePushGuardDeferral: runtime.isPrePushGuardDeferral,
+    moveToDeadLetter: runtime.moveToDeadLetter,
+    scheduleSave: runtime.scheduleSave,
+    outboxDrainSchedule: runtime.outboxDrainSchedule,
+    maxRetry: runtime.maxRetry,
+    prePushGuardRetryDelayMs: runtime.prePushGuardRetryDelayMs,
+  });
 
   return createBncrOutboxDrainLoop(runtime, {
     handlePushedDrainEntry,
