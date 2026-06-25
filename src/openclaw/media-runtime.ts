@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+
 type RuntimeMediaLoaded = {
   buffer: Buffer;
   contentType?: string;
@@ -40,6 +43,23 @@ export function isOpenClawRemoteHttpMediaUrl(mediaUrl: string): boolean {
   return /^https?:\/\//i.test(String(mediaUrl || '').trim());
 }
 
+/**
+ * Try to resolve a relative media path against each local root.
+ * Returns the first absolute path that exists on disk, or the original
+ * relative path if nothing is found (the host will then emit its own error).
+ */
+export function resolveRelativeMediaPath(mediaUrl: string, localRoots?: readonly string[]): string {
+  if (!mediaUrl || !localRoots?.length) return mediaUrl;
+  if (path.isAbsolute(mediaUrl)) return mediaUrl;
+  // HTTP / file:// / data: / ~ paths are handled elsewhere
+  if (/^(https?|file|data):/i.test(mediaUrl) || mediaUrl.startsWith('~')) return mediaUrl;
+  for (const root of localRoots) {
+    const candidate = path.resolve(root, mediaUrl);
+    if (existsSync(candidate)) return candidate;
+  }
+  return mediaUrl;
+}
+
 export async function loadOpenClawWebMedia(
   api: RuntimeApiHolder,
   mediaUrl: string,
@@ -54,7 +74,11 @@ export async function loadOpenClawWebMedia(
   if (typeof loadWebMedia !== 'function') {
     throw new Error('OpenClaw runtime media loadWebMedia API is unavailable');
   }
-  return loadWebMedia(mediaUrl, options);
+
+  // Resolve relative paths against local roots before handing off to the host
+  const resolvedUrl = resolveRelativeMediaPath(mediaUrl, options?.localRoots);
+
+  return loadWebMedia(resolvedUrl, options);
 }
 
 export async function saveOpenClawChannelMediaBuffer(
