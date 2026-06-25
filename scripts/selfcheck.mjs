@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -182,6 +183,19 @@ const readPackageVersion = () => {
   return typeof pkg?.version === 'string' ? pkg.version.trim() : '';
 };
 
+const readNpmLatestVersion = (packageName) => {
+  try {
+    const raw = execFileSync('npm', ['view', packageName, 'version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 10000,
+    }).trim();
+    return raw || null;
+  } catch {
+    return null;
+  }
+};
+
 const requiredOpenClawSdkSubpaths = [
   'openclaw/plugin-sdk',
   'openclaw/plugin-sdk/boolean-param',
@@ -213,7 +227,7 @@ const resolveOpenClawSdkSubpaths = () => {
   });
 };
 
-const validateVersionPolicy = (version) => {
+const validateVersionPolicy = (version, latestVersion) => {
   const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
   if (!match) {
     return {
@@ -232,12 +246,101 @@ const validateVersionPolicy = (version) => {
     };
   }
 
+  // Prevent jumping minor when current minor still has unused patch slots
+  if (latestVersion) {
+    const lm = latestVersion.match(/^(\d+)\.(\d+)\.(\d+)$/);
+    if (lm) {
+      const vMajor = Number.parseInt(match[1], 10);
+      const vMinor = Number.parseInt(match[2], 10);
+      const lMajor = Number.parseInt(lm[1], 10);
+      const lMinor = Number.parseInt(lm[2], 10);
+      const lPatch = Number.parseInt(lm[3], 10);
+
+      // Version unchanged
+      if (vMajor === lMajor && vMinor === lMinor && patch === lPatch) {
+        return { ok: false, reason: `version unchanged: ${version}`, version };
+      }
+
+      // Downgrade: any component decreased
+      if (
+        vMajor < lMajor ||
+        (vMajor === lMajor && vMinor < lMinor) ||
+        (vMajor === lMajor && vMinor === lMinor && patch < lPatch)
+      ) {
+        return { ok: false, reason: `downgrade from ${latestVersion} to ${version}`, version };
+      }
+
+      // Patch bump: same major and minor, patch must increment by exactly +1
+      if (vMajor === lMajor && vMinor === lMinor) {
+        if (patch === lPatch + 1) return { ok: true, version };
+        return {
+          ok: false,
+          reason: `patch jump from ${latestVersion} to ${version} (delta=${patch - lPatch}); expected ${lMajor}.${lMinor}.${lPatch + 1}`,
+          version,
+        };
+      }
+
+      // Minor bump: same major, minor + 1
+      if (vMajor === lMajor && vMinor === lMinor + 1) {
+        if (lPatch === 9 && patch === 0) return { ok: true, version };
+        if (lPatch !== 9)
+          return {
+            ok: false,
+            reason: `minor bumped from ${latestVersion} to ${version} but ${9 - lPatch} patch slots remain in ${lMajor}.${lMinor}; prefer ${lMajor}.${lMinor}.${lPatch + 1}`,
+            version,
+          };
+        return {
+          ok: false,
+          reason: `minor bump must reset patch to 0; got ${vMajor}.${vMinor}.${patch}`,
+          version,
+        };
+      }
+
+      // Minor jumped by more than 1
+      if (vMajor === lMajor && vMinor > lMinor + 1) {
+        return {
+          ok: false,
+          reason: `minor jumped from ${latestVersion} to ${version}; expected ${lMajor}.${lMinor + 1}.0`,
+          version,
+        };
+      }
+
+      // Major bump: major + 1, requires previous minor fully exhausted
+      if (vMajor === lMajor + 1) {
+        if (lMinor === 9 && lPatch === 9 && vMinor === 0 && patch === 0)
+          return { ok: true, version };
+        if (lMinor !== 9 || lPatch !== 9)
+          return {
+            ok: false,
+            reason: `major bumped from ${latestVersion} to ${version} but previous major series not exhausted; expected ${lMajor + 1}.0.0 after ${lMajor}.9.9`,
+            version,
+          };
+        return {
+          ok: false,
+          reason: `major bump must reset to .0.0; got ${vMajor}.${vMinor}.${patch}`,
+          version,
+        };
+      }
+
+      // Major jumped by more than 1
+      if (vMajor > lMajor + 1) {
+        return {
+          ok: false,
+          reason: `major jumped from ${latestVersion} to ${version}; expected ${lMajor + 1}.0.0`,
+          version,
+        };
+      }
+    }
+  }
+
   return { ok: true, version };
 };
 
 const missing = requiredFiles.filter((rel) => !fs.existsSync(path.join(root, rel)));
 const version = readPackageVersion();
-const versionPolicy = validateVersionPolicy(version);
+const packageName = '@xmoxmo/bncr';
+const latestVersion = readNpmLatestVersion(packageName);
+const versionPolicy = validateVersionPolicy(version, latestVersion);
 const sdkSubpaths = resolveOpenClawSdkSubpaths();
 const missingSdkSubpaths = sdkSubpaths.filter((entry) => !entry.ok);
 const result = {
