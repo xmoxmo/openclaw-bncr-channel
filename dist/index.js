@@ -840,6 +840,12 @@ var plugin = {
       owner = adopted.owner;
       previousOwner = adopted.previousOwner;
       gatewayRuntime.currentBridge = bridge;
+      if (rebuilt) {
+        gatewayRuntime.serviceRegistered = false;
+        gatewayRuntime.channelRegistered = false;
+        gatewayRuntime.serviceOwnerApiInstanceId = void 0;
+        gatewayRuntime.channelOwnerApiInstanceId = void 0;
+      }
     } else {
       runtime2 = loadBncrRuntimeSync();
       bridge = gatewayRuntime.currentBridge || getExistingBridgeSingleton();

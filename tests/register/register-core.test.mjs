@@ -61,6 +61,53 @@ test('bncr register reuses bridge but only registers methods on a new api instan
   assert.equal(api2.services.length, 0);
 });
 
+test('bncr register re-registers service and channel after in-process rebuild', async () => {
+  resetBncrRegisterGlobals();
+  const mod = await import('../../index.ts');
+  const api = createRegisterApiStub();
+
+  mod.default.register(api);
+
+  assert.equal(api.services.length, 1);
+  assert.equal(api.channels.length, 1);
+
+  const gatewayRuntime = process[Symbol.for('bncr.gateway.runtime')];
+  assert.ok(gatewayRuntime);
+  assert.equal(gatewayRuntime.serviceRegistered, true);
+  assert.equal(gatewayRuntime.channelRegistered, true);
+
+  const firstBridge = globalThis.__bncrBridge;
+  assert.ok(firstBridge);
+
+  const ownerSymbol = Object.getOwnPropertySymbols(firstBridge).find((symbol) => {
+    const value = firstBridge[symbol];
+    return Boolean(
+      value &&
+        typeof value === 'object' &&
+        'moduleEpoch' in value &&
+        'bridgeFactoryId' in value &&
+        'apiInstanceId' in value &&
+        'registryFingerprint' in value,
+    );
+  });
+  assert.ok(ownerSymbol);
+  firstBridge[ownerSymbol] = {
+    ...firstBridge[ownerSymbol],
+    moduleEpoch: `${firstBridge[ownerSymbol].moduleEpoch}-stale`,
+  };
+
+  mod.default.register(api);
+
+  const secondBridge = globalThis.__bncrBridge;
+  assert.ok(secondBridge);
+  assert.notEqual(secondBridge, firstBridge);
+  assert.equal(api.services.length, 2);
+  assert.equal(api.channels.length, 2);
+  assert.ok(api.methods.length > 0);
+  assert.equal(gatewayRuntime.serviceRegistered, true);
+  assert.equal(gatewayRuntime.channelRegistered, true);
+});
+
 test('bncr miniconfig uses transactional mutateConfigFile', async () => {
   resetBncrRegisterGlobals();
   const mod = await import('../../index.ts');

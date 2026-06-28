@@ -101,6 +101,12 @@ const plugin = {
       owner = adopted.owner;
       previousOwner = adopted.previousOwner;
       gatewayRuntime.currentBridge = bridge;
+      if (rebuilt) {
+        gatewayRuntime.serviceRegistered = false;
+        gatewayRuntime.channelRegistered = false;
+        gatewayRuntime.serviceOwnerApiInstanceId = undefined;
+        gatewayRuntime.channelOwnerApiInstanceId = undefined;
+      }
     } else {
       runtime = loadBncrRuntimeSync();
       bridge = gatewayRuntime.currentBridge || getExistingBridgeSingleton();
