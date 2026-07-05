@@ -1,12 +1,65 @@
+import { hasControlCommand } from 'openclaw/plugin-sdk/command-auth';
 import { resolveAccount } from '../core/accounts.ts';
 import { checkBncrMessageGate } from '../messaging/inbound/gate.ts';
+import { parseBncrNativeCommand } from '../messaging/inbound/native-command.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import type { OpenClawResolvedAgentRoute } from '../openclaw/routing-runtime.ts';
 import type { buildInboundResponsePayload } from './channel-inbound-helpers.ts';
 import { resolveInboundSessionContext } from './channel-inbound-helpers.ts';
-import type { BncrChannelConfigRoot } from './channel-runtime-types.ts';
+import type { BncrChannelConfigRoot, BncrSceneRecord } from './channel-runtime-types.ts';
+import { decideSceneAdmission } from './scene-registry.ts';
 
 type InboundAcceptanceResponsePayload = ReturnType<typeof buildInboundResponsePayload>;
+
+function shouldDispatchForScene(args: {
+  parsed: ReturnType<typeof parseBncrInboundParams>;
+  admission: ReturnType<typeof decideSceneAdmission>;
+  cfg: BncrChannelConfigRoot;
+}) {
+  const { parsed, admission, cfg } = args;
+  if (parsed.peer.kind === 'direct') return true;
+  if (!admission.allowed) return false;
+
+  const isBncrNativeCommand =
+    parseBncrNativeCommand(parsed.extracted.text, {
+      allowBareWhoami: parsed.isAdmin !== true,
+    }) !== null;
+  const isAdminOpenClawNativeCommand =
+    parsed.isAdmin === true &&
+    !isBncrNativeCommand &&
+    hasControlCommand(parsed.extracted.text, cfg as Parameters<typeof hasControlCommand>[1]);
+  if (isAdminOpenClawNativeCommand) return true;
+
+  const mode = admission.scene.groupReplyMode || 'admin';
+  if (mode === 'all') return true;
+  if (mode === 'admin') return parsed.isAdmin === true;
+  if (mode === 'mention') return parsed.shouldRespond === true;
+  return parsed.isAdmin === true || parsed.shouldRespond === true;
+}
+
+function shouldAccumulateForScene(args: {
+  parsed: ReturnType<typeof parseBncrInboundParams>;
+  admission: ReturnType<typeof decideSceneAdmission>;
+  cfg: BncrChannelConfigRoot;
+}) {
+  const { parsed, admission, cfg } = args;
+  if (parsed.peer.kind === 'direct') return true;
+  if (!admission.allowed) return false;
+
+  const isBncrNativeCommand =
+    parseBncrNativeCommand(parsed.extracted.text, {
+      allowBareWhoami: parsed.isAdmin !== true,
+    }) !== null;
+  const isAdminOpenClawNativeCommand =
+    parsed.isAdmin === true &&
+    !isBncrNativeCommand &&
+    hasControlCommand(parsed.extracted.text, cfg as Parameters<typeof hasControlCommand>[1]);
+  if (isAdminOpenClawNativeCommand) return true;
+
+  const mode = admission.scene.groupReplyMode || 'admin';
+  if (mode === 'admin') return parsed.isAdmin === true;
+  return true;
+}
 
 export async function prepareBncrInboundAcceptance(args: {
   api: unknown;
@@ -27,6 +80,10 @@ export async function prepareBncrInboundAcceptance(args: {
       | { kind: 'gate-denied'; accountId: string; msgId?: string | null; reason: string },
   ) => InboundAcceptanceResponsePayload;
   markInboundDedupSeen: (key: string) => boolean;
+  sceneRegistry: Map<string, BncrSceneRecord>;
+  now: () => number;
+  defaultAdminAgentId: string;
+  defaultPublicAgentId: string;
 }) {
   const { parsed, canonicalAgentId } = args;
   const {
@@ -83,6 +140,26 @@ export async function prepareBncrInboundAcceptance(args: {
     };
   }
 
+  const admission = decideSceneAdmission({
+    parsed,
+    now: args.now(),
+    sceneRegistry: args.sceneRegistry,
+    defaultAdminAgentId: args.defaultAdminAgentId,
+    defaultPublicAgentId: args.defaultPublicAgentId,
+  });
+  if (!admission.allowed) {
+    return {
+      ok: false as const,
+      status: admission.replyPolicy === 'pending',
+      payload: args.buildInboundResponsePayload({
+        kind: 'gate-denied',
+        accountId,
+        msgId: msgId ?? null,
+        reason: admission.reason,
+      }),
+    };
+  }
+
   const { sessionKey, inboundText } = resolveInboundSessionContext({
     cfg,
     accountId,
@@ -90,6 +167,7 @@ export async function prepareBncrInboundAcceptance(args: {
     route,
     sessionKeyFromRoute: sessionKeyfromroute,
     canonicalAgentId,
+    resolvedAgentId: admission.agentId,
     taskKey: extracted.taskKey ?? undefined,
     text,
     extractedText: extracted.text,
@@ -103,5 +181,8 @@ export async function prepareBncrInboundAcceptance(args: {
     sessionKey,
     inboundText,
     hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
+    resolvedAgentId: admission.agentId,
+    shouldDispatch: shouldDispatchForScene({ parsed, admission, cfg }),
+    shouldAccumulate: shouldAccumulateForScene({ parsed, admission, cfg }),
   };
 }

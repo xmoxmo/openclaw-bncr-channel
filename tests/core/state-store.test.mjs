@@ -30,6 +30,7 @@ function createStore() {
     maxDeadLetterEntries: 100,
     maxSessionRouteEntries: 100,
     maxAccountActivityEntries: 100,
+    sceneRegistry: new Map(),
     outbox: new Map(),
     getDeadLetter: () => [],
     setDeadLetter: () => {},
@@ -121,4 +122,70 @@ test('createBncrStateStore restores aliases and backfills lastSession from norma
   });
   assert.equal(runtime.lastActivityByAccount.get('Primary'), 20);
   assert.equal(runtime.lastInboundByAccount.get('Primary'), 20);
+});
+
+test('createBncrStateStore restores valid persisted scene registry entries and skips malformed rows', () => {
+  const { runtime, store } = createStore();
+
+  store.loadPersistedSceneRegistry([
+    null,
+    'bad',
+    {
+      sceneKey: '',
+      kind: 'direct',
+      status: 'pending',
+      platform: 'tgBot',
+      userId: '10001',
+      lastSeenAt: 10,
+    },
+    {
+      sceneKey: 'tgBot:10001',
+      kind: 'direct',
+      status: 'allowed',
+      platform: 'tgBot',
+      userId: '10001',
+      userName: 'xmo',
+      agentId: 'main',
+      lastSeenAt: '12',
+    },
+    {
+      sceneKey: 'tgBot:-1001',
+      kind: 'group',
+      status: 'denied',
+      platform: 'tgBot',
+      groupId: '-1001',
+      groupName: 'wind_system',
+      groupReplyMode: 'mention',
+      lastSeenAt: 13,
+    },
+  ]);
+
+  assert.deepEqual(Array.from(runtime.sceneRegistry.entries()), [
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'xmo',
+        agentId: 'main',
+        lastSeenAt: 12,
+      },
+    ],
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'denied',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'wind_system',
+        groupReplyMode: 'mention',
+        lastSeenAt: 13,
+      },
+    ],
+  ]);
 });

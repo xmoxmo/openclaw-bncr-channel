@@ -69,11 +69,11 @@ test('target runtime resolves verified target and falls back to ensured canonica
   const { runtime, calls } = createRuntime({ canonicalAgentId: null });
   const targetRuntime = createBncrTargetRuntime(runtime);
 
-  const verified = targetRuntime.resolveVerifiedTarget('Bncr:tgBot:10001', 'Primary');
+  const verified = targetRuntime.resolveVerifiedTarget('Bncr:tgBot:0:10001', 'Primary');
 
-  assert.equal(verified.displayScope, 'Bncr:tgBot:10001');
+  assert.equal(verified.displayScope, 'Bncr:tgBot:0:10001');
   assert.match(verified.sessionKey, /^agent:fallback-agent:bncr:direct:/);
-  assert.equal(runtime.lastSessionByAccount.get('Primary')?.scope, 'Bncr:tgBot:10001');
+  assert.equal(runtime.lastSessionByAccount.get('Primary')?.scope, 'Bncr:tgBot:0:10001');
   assert.equal(calls.scheduleSave, 1);
   assert.deepEqual(calls.ensureArgs[0], {
     cfg: { channels: { bncr: {} } },
@@ -92,4 +92,16 @@ test('target runtime rejects invalid target and logs warning', () => {
     /bncr invalid target/,
   );
   assert.equal(calls.logWarn.length, 1);
+});
+
+test('target runtime collapses legacy group target with non-zero userId into canonical group route', () => {
+  const { runtime, calls } = createRuntime();
+  const targetRuntime = createBncrTargetRuntime(runtime);
+
+  const verified = targetRuntime.resolveVerifiedTarget('Bncr:tgBot:-1001:10001', 'Primary');
+
+  assert.equal(verified.displayScope, 'Bncr:tgBot:-1001:0');
+  assert.deepEqual(verified.route, { platform: 'tgBot', groupId: '-1001', userId: '0' });
+  assert.match(verified.sessionKey, /^agent:orion:bncr:group:/);
+  assert.equal(calls.logWarn.length, 0);
 });

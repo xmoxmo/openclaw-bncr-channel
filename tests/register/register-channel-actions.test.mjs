@@ -17,7 +17,7 @@ test('bncr channel actions handleAction sends text through the generic send path
       accountId: 'Primary',
       mediaLocalRoots: ['/tmp'],
       params: {
-        to: 'Bncr:tgBot:-1001:10001',
+        to: 'Bncr:tgBot:-1001:0',
         message: 'hello through generic send',
       },
     });
@@ -50,7 +50,7 @@ test('bncr channel actions handleAction sends media through the generic send pat
       accountId: 'Primary',
       mediaLocalRoots: ['/tmp'],
       params: {
-        to: 'Bncr:tgBot:-1001:10001',
+        to: 'Bncr:tgBot:-1001:0',
         message: 'generic media caption',
         mediaUrl: '/tmp/generic-send.png',
         type: 'image',
@@ -87,7 +87,7 @@ test('bncr channel actions handleAction sends mediaUrls through the generic medi
       accountId: 'Primary',
       mediaLocalRoots: ['/tmp'],
       params: {
-        to: 'Bncr:tgBot:-1001:10001',
+        to: 'Bncr:tgBot:-1001:0',
         message: 'generic album caption',
         mediaUrls: ['/tmp/generic-send-1.png', '/tmp/generic-send-2.png'],
         type: 'image',

@@ -111,4 +111,5 @@ export function cleanupBridge(bridge) {
 
   bridge.earlyFileAckCache?.clear?.();
   bridge.fileTransfers?.clear?.();
+  bridge.sceneRegistry?.clear?.();
 }

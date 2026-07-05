@@ -320,7 +320,7 @@ test('deadLetter inspect and prune keep account isolation under deep pagination 
     assert.equal(inspectCalls[0][1].entries.length, 1);
     assert.equal(inspectCalls[0][1].entries[0].accountId, 'Primary');
     assert.equal(inspectCalls[0][1].entries[0].messageId, 'dead-primary-a');
-    assert.equal(inspectCalls[0][1].entries[0].route, 'Bncr:tgBot:-1001:10001');
+    assert.equal(inspectCalls[0][1].entries[0].route, 'Bncr:tgBot:-1001:0');
     assert.equal(inspectCalls[0][1].entries[0].textPreview, 'a');
 
     const pruneCalls = [];

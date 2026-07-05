@@ -7,9 +7,9 @@ test('buildBncrInboundRecordUpdateLastRoute uses inbound last-route session when
   const result = buildBncrInboundRecordUpdateLastRoute({
     channelId: 'bncr',
     peerKind: 'direct',
-    senderIdForContext: 'Bncr:tgBot:10001',
+    senderIdForContext: 'Bncr:tgBot:0:10001',
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     resolvedRoute: {
       sessionKey: 'agent:orion:bncr:direct:7467426f743a303a3130303031:task:abc',
       mainSessionKey: 'agent:orion:bncr:direct:7467426f743a303a3130303031',
@@ -22,11 +22,11 @@ test('buildBncrInboundRecordUpdateLastRoute uses inbound last-route session when
   assert.deepEqual(result, {
     sessionKey: 'agent:orion:bncr:direct:7467426f743a303a3130303031',
     channel: 'bncr',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     accountId: 'Primary',
     mainDmOwnerPin: {
       ownerRecipient: 'telegram:10001',
-      senderRecipient: 'Bncr:tgBot:10001',
+      senderRecipient: 'Bncr:tgBot:0:10001',
     },
   });
 });
@@ -36,9 +36,9 @@ test('buildBncrInboundRecordUpdateLastRoute falls back to dispatch session when 
   const result = buildBncrInboundRecordUpdateLastRoute({
     channelId: 'bncr',
     peerKind: 'direct',
-    senderIdForContext: 'Bncr:tgBot:10001',
+    senderIdForContext: 'Bncr:tgBot:0:10001',
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     resolvedRoute: {
       sessionKey,
     },
@@ -49,7 +49,7 @@ test('buildBncrInboundRecordUpdateLastRoute falls back to dispatch session when 
   assert.deepEqual(result, {
     sessionKey,
     channel: 'bncr',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     accountId: 'Primary',
     mainDmOwnerPin: undefined,
   });

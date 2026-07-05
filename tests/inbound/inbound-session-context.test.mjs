@@ -37,11 +37,8 @@ test('resolveInboundSessionContext appends task session key when taskKey exists'
     }),
   });
 
-  assert.equal(result.baseSessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
-  assert.equal(
-    result.taskSessionKey,
-    'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031:task:task-42',
-  );
+  assert.equal(result.baseSessionKey, 'agent:orion:bncr:group:7467426f743a2d31303031');
+  assert.equal(result.taskSessionKey, 'agent:orion:bncr:group:7467426f743a2d31303031:task:task-42');
   assert.equal(result.sessionKey, result.taskSessionKey);
 });
 
@@ -59,6 +56,6 @@ test('resolveInboundSessionContext prefers normalized sessionKeyFromRoute over h
     resolveAgentRoute: () => ({ sessionKey: 'host-session-key' }),
   });
 
-  assert.equal(result.baseSessionKey, 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031');
+  assert.equal(result.baseSessionKey, 'agent:orion:bncr:group:7467426f743a2d31303031');
   assert.equal(result.inboundText, 'trimmed');
 });

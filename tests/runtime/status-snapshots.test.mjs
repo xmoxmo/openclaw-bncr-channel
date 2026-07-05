@@ -10,7 +10,11 @@ test('buildRuntimeActivitySnapshot preserves zero timestamp fields', () => {
     lastSessionByAccount: new Map([
       [
         'Primary',
-        { sessionKey: 'agent:main:bncr:direct:deadbeef', scope: 'Bncr:tgBot:10001', updatedAt: 0 },
+        {
+          sessionKey: 'agent:main:bncr:direct:deadbeef',
+          scope: 'Bncr:tgBot:0:10001',
+          updatedAt: 0,
+        },
       ],
     ]),
     lastActivityByAccount: new Map([['Primary', 0]]),
@@ -21,7 +25,7 @@ test('buildRuntimeActivitySnapshot preserves zero timestamp fields', () => {
   assert.equal(snapshot.activeConnections, 1);
   assert.deepEqual(snapshot.lastSession, {
     sessionKey: 'agent:main:bncr:direct:deadbeef',
-    scope: 'Bncr:tgBot:10001',
+    scope: 'Bncr:tgBot:0:10001',
     updatedAt: 0,
   });
   assert.equal(snapshot.lastActivityAt, 0);

@@ -1,11 +1,12 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
+import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import type {
   buildInboundResponsePayload,
   resolveInboundSessionContext,
 } from './channel-inbound-helpers.ts';
-import type { BncrChannelConfigRoot } from './channel-runtime-types.ts';
+import type { BncrChannelConfigRoot, BncrSceneRecord } from './channel-runtime-types.ts';
 import { buildBncrGatewayEventContext } from './gateway-event-context.ts';
 
 type InboundLifecycleStage = 'accepted';
@@ -39,6 +40,9 @@ type InboundAcceptanceResult =
       sessionKey: string;
       inboundText: string;
       hasMedia: boolean;
+      resolvedAgentId: string;
+      shouldDispatch: boolean;
+      shouldAccumulate: boolean;
     }
   | {
       ok: false;
@@ -98,6 +102,15 @@ export type BncrInboundHandlersRuntime = {
     peer: EnsureCanonicalAgentIdPeer;
     channelId: string;
   }) => string;
+  defaultAdminAgentId: (args: {
+    cfg: BncrChannelConfigRoot;
+    accountId: string;
+    peer: EnsureCanonicalAgentIdPeer;
+    channelId: string;
+  }) => string;
+  defaultPublicAgentId: () => string;
+  sceneRegistry: Map<string, BncrSceneRecord>;
+  groupHistories: BncrGroupHistoryMap;
   prepareInboundAcceptance: (args: {
     parsed: ParsedInboundParams;
     canonicalAgentId: string;
@@ -116,6 +129,14 @@ export type BncrInboundHandlersRuntime = {
     cfg: BncrChannelConfigRoot;
     parsed: ParsedInboundParams;
     canonicalAgentId: string;
+    resolvedAgentId: string;
+    shouldDispatch: boolean;
+    shouldAccumulate: boolean;
+    sceneRegistry: Map<string, BncrSceneRecord>;
+    groupHistories: BncrGroupHistoryMap;
+    defaultAdminAgentId: string;
+    defaultPublicAgentId: string;
+    now: () => number;
   }) => Promise<unknown>;
 };
 
@@ -191,13 +212,37 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
         peer,
         channelId: runtime.channelId,
       });
+      const defaultAdminAgentId = runtime.defaultAdminAgentId({
+        cfg,
+        accountId,
+        peer,
+        channelId: runtime.channelId,
+      });
       const acceptance = await runtime.prepareInboundAcceptance({ parsed, canonicalAgentId });
       if (!acceptance.ok) {
+        const reason = runtime
+          .asString((acceptance.payload as { reason?: unknown })?.reason || '')
+          .trim();
+        runtime.logInfo(
+          'inbound',
+          `accept reject|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|status=${acceptance.status}|reason=${reason || '-'}|isAdmin=${parsed.isAdmin === true}|shouldRespond=${parsed.shouldRespond === true}`,
+        );
         respond(acceptance.status, acceptance.payload);
         return;
       }
 
-      const { sessionKey, inboundText, hasMedia } = acceptance;
+      const {
+        sessionKey,
+        inboundText,
+        hasMedia,
+        resolvedAgentId,
+        shouldDispatch,
+        shouldAccumulate,
+      } = acceptance;
+      runtime.logInfo(
+        'inbound',
+        `accept ok|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|sessionKey=${sessionKey}|agent=${resolvedAgentId}|dispatch=${shouldDispatch}|accumulate=${shouldAccumulate}|isAdmin=${parsed.isAdmin === true}|shouldRespond=${parsed.shouldRespond === true}`,
+      );
       runtime.logInfo(
         'inbound',
         JSON.stringify({
@@ -239,6 +284,14 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           cfg,
           parsed,
           canonicalAgentId,
+          resolvedAgentId,
+          shouldDispatch,
+          shouldAccumulate,
+          sceneRegistry: runtime.sceneRegistry,
+          groupHistories: runtime.groupHistories,
+          defaultAdminAgentId,
+          defaultPublicAgentId: runtime.defaultPublicAgentId(),
+          now: runtime.now,
         })
         .catch((err) => {
           runtime.logError('inbound', `process failed: ${String(err)}`, { debugOnly: true });

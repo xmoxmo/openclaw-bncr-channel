@@ -2,12 +2,90 @@ import { createHash } from 'node:crypto';
 import { normalizeAccountId } from '../../core/accounts.ts';
 import { extractInlineTaskKey } from '../../core/targets.ts';
 import type { BncrRoute } from '../../core/types.ts';
-import type { BncrInboundParamsInput } from './contracts.ts';
+import type { BncrInboundMediaItem, BncrInboundParamsInput } from './contracts.ts';
 
 function asString(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
   if (v == null) return fallback;
   return String(v);
+}
+
+function asBoolean(v: unknown, fallback = false): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const raw = v.trim().toLowerCase();
+    if (!raw) return fallback;
+    if (['true', '1', 'yes', 'y', 'on'].includes(raw)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(raw)) return false;
+  }
+  return fallback;
+}
+
+function asStringArray(v: unknown): string[] {
+  if (Array.isArray(v)) {
+    return v.map((item) => asString(item).trim()).filter(Boolean);
+  }
+  if (typeof v === 'string') {
+    return v
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function asInboundMediaItems(params: BncrInboundParamsInput): BncrInboundMediaItem[] {
+  const normalized: BncrInboundMediaItem[] = [];
+  const rawList = Array.isArray(params?.mediaList) ? params.mediaList : [];
+  for (const item of rawList) {
+    if (!item || typeof item !== 'object') continue;
+    const path = asString((item as { path?: unknown }).path || '').trim();
+    const base64 = asString((item as { base64?: unknown }).base64 || '').trim();
+    const mimeType = asString((item as { mimeType?: unknown }).mimeType || '').trim();
+    const fileName = asString((item as { fileName?: unknown }).fileName || '').trim();
+    const type = asString((item as { type?: unknown }).type || '').trim();
+    const transferId = asString((item as { transferId?: unknown }).transferId || '').trim();
+    if (!path && !base64) continue;
+    normalized.push({
+      ...(path ? { path } : {}),
+      ...(base64 ? { base64 } : {}),
+      ...(mimeType ? { mimeType } : {}),
+      ...(fileName ? { fileName } : {}),
+      ...(type ? { type } : {}),
+      ...(transferId ? { transferId } : {}),
+    });
+  }
+
+  if (normalized.length > 0) return normalized;
+
+  const legacyPath = asString(params?.path || '').trim();
+  const legacyBase64 = asString(params?.base64 || '').trim();
+  const legacyMimeType = asString(params?.mimeType || '').trim();
+  const legacyFileName = asString(params?.fileName || '').trim();
+  const legacyType = asString(params?.type || '').trim();
+  const legacyTransferId = asString((params as { transferId?: unknown })?.transferId || '').trim();
+  if (legacyPath || legacyBase64) {
+    return [
+      {
+        ...(legacyPath ? { path: legacyPath } : {}),
+        ...(legacyBase64 ? { base64: legacyBase64 } : {}),
+        ...(legacyMimeType ? { mimeType: legacyMimeType } : {}),
+        ...(legacyFileName ? { fileName: legacyFileName } : {}),
+        ...(legacyType ? { type: legacyType } : {}),
+        ...(legacyTransferId ? { transferId: legacyTransferId } : {}),
+      },
+    ];
+  }
+
+  const legacyPaths = asStringArray(params?.paths);
+  return legacyPaths.map((item) => ({
+    path: item,
+    ...(legacyMimeType ? { mimeType: legacyMimeType } : {}),
+    ...(legacyFileName ? { fileName: legacyFileName } : {}),
+    ...(legacyType ? { type: legacyType } : {}),
+    ...(legacyTransferId ? { transferId: legacyTransferId } : {}),
+  }));
 }
 
 export function inboundDedupKey(params: {
@@ -36,24 +114,30 @@ export function inboundDedupKey(params: {
   return `${accountId}|${platform}|${groupId}|${userId}|hash:${digest}`;
 }
 
-export function resolveChatType(_route: BncrRoute): 'direct' | 'group' {
-  // Compatibility boundary: bncr currently records and dispatches all conversations as direct
-  // sessions even when the display scope contains a group id. Do not change this to true
-  // group semantics without updating session routing, reply target policy, and requireMention
-  // behavior together.
+export function resolveChatType(route: BncrRoute, isGroup: boolean): 'direct' | 'group' {
+  if (isGroup) return 'group';
+  if (route.groupId !== '0') return 'group';
   return 'direct';
 }
 
 export function parseBncrInboundParams(params: BncrInboundParamsInput) {
   const accountId = normalizeAccountId(asString(params?.accountId || ''));
+  const protocolVersion = asString(params?.protocolVersion || '').trim() || undefined;
+  const capabilities = asStringArray(params?.capabilities);
   const platform = asString(params?.platform || '').trim();
   const groupId = asString(params?.groupId || '0').trim() || '0';
+  const groupName = asString(params?.groupName || '').trim();
   const userId = asString(params?.userId || '').trim();
+  const userName = asString(params?.userName || '').trim();
   const sessionKeyfromroute = asString(params?.sessionKey || '').trim();
   const providedOriginatingTo =
     asString(params?.originatingTo || params?.providedOriginatingTo || params?.to || '').trim() ||
     undefined;
   const clientId = asString(params?.clientId || '').trim() || undefined;
+  const bridgeId = asString(params?.bridgeId || params?.clientId || '').trim() || undefined;
+  const bridgeName = asString(params?.bridgeName || 'Bncr').trim() || 'Bncr';
+  const isGroup = asBoolean(params?.isGroup, groupId !== '0');
+  const isAdmin = asBoolean(params?.isAdmin, false);
 
   const route: BncrRoute = {
     platform,
@@ -63,11 +147,17 @@ export function parseBncrInboundParams(params: BncrInboundParamsInput) {
 
   const text = asString(params?.msg || '');
   const msgType = asString(params?.type || 'text') || 'text';
+  const mediaItems = asInboundMediaItems(params);
   const mediaBase64 = asString(params?.base64 || '');
   const mediaPathFromTransfer = asString(params?.path || '').trim();
   const mimeType = asString(params?.mimeType || '').trim() || undefined;
   const fileName = asString(params?.fileName || '').trim() || undefined;
   const msgId = asString(params?.msgId || '').trim() || undefined;
+  const shouldRespond = asBoolean(params?.shouldRespond, false);
+  const triggerKind = asString(params?.triggerKind || 'none').trim() || 'none';
+  const botName = asString(params?.botName || '').trim();
+  const isBotMentioned = asBoolean(params?.isBotMentioned, false);
+  const isReplyToBot = asBoolean(params?.isReplyToBot, false);
 
   const dedupKey = inboundDedupKey({
     accountId,
@@ -79,29 +169,44 @@ export function parseBncrInboundParams(params: BncrInboundParamsInput) {
     mediaBase64,
   });
 
+  const peerKind = resolveChatType(route, isGroup);
   const peer = {
-    kind: resolveChatType(route),
-    id: route.groupId === '0' ? route.userId : route.groupId,
+    kind: peerKind,
+    id: peerKind === 'group' ? route.groupId : route.userId,
   } as const;
 
   const extracted = extractInlineTaskKey(text);
 
   return {
     accountId,
+    protocolVersion,
+    capabilities,
     platform,
     groupId,
+    groupName,
     userId,
+    userName,
     sessionKeyfromroute,
     providedOriginatingTo,
     clientId,
+    bridgeId,
+    bridgeName,
+    isGroup,
+    isAdmin,
     route,
     text,
     msgType,
+    mediaItems,
     mediaBase64,
     mediaPathFromTransfer,
     mimeType,
     fileName,
     msgId,
+    shouldRespond,
+    triggerKind,
+    botName,
+    isBotMentioned,
+    isReplyToBot,
     dedupKey,
     peer,
     extracted,

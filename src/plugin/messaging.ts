@@ -10,6 +10,15 @@ import {
 } from '../messaging/outbound/target-resolver.ts';
 import type { BncrChannelConfigRoot } from './channel-runtime-types.ts';
 
+function formatBncrHumanDisplay(route: BncrRoute): string {
+  const platform = asSanitizedString(route?.platform).trim();
+  const groupId = asSanitizedString(route?.groupId).trim();
+  const userId = asSanitizedString(route?.userId).trim();
+  if (platform && groupId && groupId !== '0') return `Bncr:${platform}:Group:${groupId}`;
+  if (platform && userId && userId !== '0') return `Bncr:${platform}:User:${userId}`;
+  return formatDisplayScope(route);
+}
+
 type BncrMessagingRuntimeBridge = {
   canonicalAgentId?: string;
   ensureCanonicalAgentId: (params: { cfg: BncrChannelConfigRoot; accountId: string }) => string;
@@ -69,16 +78,24 @@ export function normalizeBncrMessagingTarget(raw: string) {
 }
 
 export function formatBncrMessagingTargetDisplay({ target }: BncrMessagingTargetDisplayInput) {
-  if (typeof target === 'string') return asSanitizedString(target).trim();
+  if (typeof target === 'string') {
+    const parsed = parseExplicitTarget(asSanitizedString(target).trim());
+    return parsed?.route ? formatBncrHumanDisplay(parsed.route) : asSanitizedString(target).trim();
+  }
   if (!isDisplayTarget(target)) return '';
   const displayScope = asSanitizedString(target?.displayScope || target?.to).trim();
-  if (displayScope) return displayScope;
+  if (displayScope) {
+    const parsed = parseExplicitTarget(displayScope);
+    if (parsed?.route) return formatBncrHumanDisplay(parsed.route);
+    return displayScope;
+  }
   if (target.platform || target.groupId || target.userId) {
-    return formatDisplayScope({
+    const route = {
       platform: asSanitizedString(target.platform).trim(),
       groupId: asSanitizedString(target.groupId).trim(),
       userId: asSanitizedString(target.userId).trim(),
-    });
+    };
+    return formatBncrHumanDisplay(route);
   }
   return '';
 }
@@ -188,7 +205,7 @@ export function createBncrMessagingTargetResolver(getBridge: () => BncrMessaging
       return {
         to: resolved.displayScope,
         kind: resolved.kind,
-        display: resolved.displayScope,
+        display: formatBncrHumanDisplay(resolved.route),
         source: 'normalized' as const,
       };
     },

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { resolveBncrOutboundSessionRoute } from '../../src/messaging/outbound/session-route.ts';
 
 const routeDirect = { platform: 'tgBot', groupId: '0', userId: '10001' };
-const routeGroup = { platform: 'tgBot', groupId: '-1001', userId: '10001' };
+const routeGroup = { platform: 'tgBot', groupId: '-1001', userId: '0' };
 
 const cfg = {};
 const channel = 'bncr';
@@ -17,7 +17,7 @@ test('resolveBncrOutboundSessionRoute returns canonical direct hex route for dir
     agentId,
     canonicalAgentId: agentId,
     accountId: 'Primary',
-    target: 'Bncr:tgBot:10001',
+    target: 'Bncr:tgBot:0:10001',
   });
 
   assert.ok(resolved);
@@ -25,19 +25,46 @@ test('resolveBncrOutboundSessionRoute returns canonical direct hex route for dir
   assert.equal(resolved.peer.kind, 'direct');
   assert.equal(
     resolved.sessionKey,
-    `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:0:10001', 'utf8').toString('hex')}`,
+    `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:10001', 'utf8').toString('hex')}`,
   );
-  assert.equal(resolved.to, 'Bncr:tgBot:10001');
+  assert.equal(resolved.to, 'Bncr:tgBot:0:10001');
   assert.equal(resolved.channel, channel);
   assert.equal(resolved.accountId, 'Primary');
   assert.deepEqual(resolved.target, {
-    to: 'Bncr:tgBot:10001',
-    rawTo: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
+    rawTo: 'Bncr:tgBot:0:10001',
     chatType: 'direct',
   });
 });
 
-test('resolveBncrOutboundSessionRoute returns canonical direct hex route for group display scope', () => {
+test('resolveBncrOutboundSessionRoute returns canonical group hex route for group display scope', () => {
+  const resolved = resolveBncrOutboundSessionRoute({
+    cfg,
+    channel,
+    agentId,
+    canonicalAgentId: agentId,
+    accountId: 'Primary',
+    target: 'Bncr:tgBot:-1001:0',
+  });
+
+  assert.ok(resolved);
+  assert.equal(resolved.chatType, 'direct');
+  assert.equal(resolved.peer.kind, 'direct');
+  assert.equal(
+    resolved.sessionKey,
+    `agent:${agentId}:bncr:group:${Buffer.from('tgBot:-1001', 'utf8').toString('hex')}`,
+  );
+  assert.equal(resolved.to, 'Bncr:tgBot:-1001:0');
+  assert.equal(resolved.channel, channel);
+  assert.equal(resolved.accountId, 'Primary');
+  assert.deepEqual(resolved.target, {
+    to: 'Bncr:tgBot:-1001:0',
+    rawTo: 'Bncr:tgBot:-1001:0',
+    chatType: 'direct',
+  });
+});
+
+test('resolveBncrOutboundSessionRoute normalizes legacy group route with non-zero userId', () => {
   const resolved = resolveBncrOutboundSessionRoute({
     cfg,
     channel,
@@ -47,21 +74,13 @@ test('resolveBncrOutboundSessionRoute returns canonical direct hex route for gro
     target: 'Bncr:tgBot:-1001:10001',
   });
 
-  assert.ok(resolved);
-  assert.equal(resolved.chatType, 'direct');
-  assert.equal(resolved.peer.kind, 'direct');
+  assert.equal(resolved?.to, 'Bncr:tgBot:-1001:0');
+  assert.equal(resolved?.target?.to, 'Bncr:tgBot:-1001:0');
+  assert.equal(resolved?.target?.rawTo, 'Bncr:tgBot:-1001:0');
   assert.equal(
-    resolved.sessionKey,
-    `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:-1001:10001', 'utf8').toString('hex')}`,
+    resolved?.sessionKey,
+    `agent:${agentId}:bncr:group:${Buffer.from('tgBot:-1001', 'utf8').toString('hex')}`,
   );
-  assert.equal(resolved.to, 'Bncr:tgBot:-1001:10001');
-  assert.equal(resolved.channel, channel);
-  assert.equal(resolved.accountId, 'Primary');
-  assert.deepEqual(resolved.target, {
-    to: 'Bncr:tgBot:-1001:10001',
-    rawTo: 'Bncr:tgBot:-1001:10001',
-    chatType: 'direct',
-  });
 });
 
 test('resolveBncrOutboundSessionRoute can resolve legacy/strict session input back to canonical key', () => {
@@ -78,13 +97,13 @@ test('resolveBncrOutboundSessionRoute can resolve legacy/strict session input ba
   assert.ok(resolved);
   assert.equal(
     resolved.sessionKey,
-    `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:0:10001', 'utf8').toString('hex')}`,
+    `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:10001', 'utf8').toString('hex')}`,
   );
   assert.equal(resolved.channel, channel);
   assert.equal(resolved.accountId, 'Primary');
   assert.deepEqual(resolved.target, {
-    to: 'Bncr:tgBot:10001',
-    rawTo: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
+    rawTo: 'Bncr:tgBot:0:10001',
     chatType: 'direct',
   });
 });
@@ -96,20 +115,20 @@ test('resolveBncrOutboundSessionRoute can use resolveRouteBySession fallback', (
     agentId,
     canonicalAgentId: agentId,
     accountId: 'Primary',
-    target: 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031',
+    target: 'agent:orion:bncr:group:7467426f743a2d31303031',
     resolveRouteBySession: () => routeGroup,
   });
 
   assert.ok(resolved);
   assert.equal(
     resolved.sessionKey,
-    `agent:${agentId}:bncr:direct:${Buffer.from('tgBot:-1001:10001', 'utf8').toString('hex')}`,
+    `agent:${agentId}:bncr:group:${Buffer.from('tgBot:-1001', 'utf8').toString('hex')}`,
   );
   assert.equal(resolved.channel, channel);
   assert.equal(resolved.accountId, 'Primary');
   assert.deepEqual(resolved.target, {
-    to: 'Bncr:tgBot:-1001:10001',
-    rawTo: 'Bncr:tgBot:-1001:10001',
+    to: 'Bncr:tgBot:-1001:0',
+    rawTo: 'Bncr:tgBot:-1001:0',
     chatType: 'direct',
   });
 });
@@ -121,15 +140,15 @@ test('resolveBncrOutboundSessionRoute preserves thread route ref when threadId i
     agentId,
     canonicalAgentId: agentId,
     accountId: 'Primary',
-    target: 'Bncr:tgBot:10001',
+    target: 'Bncr:tgBot:0:10001',
     threadId: 'topic-123',
   });
 
   assert.ok(resolved);
   assert.deepEqual(resolved.thread, { id: 'topic-123' });
   assert.deepEqual(resolved.target, {
-    to: 'Bncr:tgBot:10001',
-    rawTo: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
+    rawTo: 'Bncr:tgBot:0:10001',
     chatType: 'direct',
   });
 });

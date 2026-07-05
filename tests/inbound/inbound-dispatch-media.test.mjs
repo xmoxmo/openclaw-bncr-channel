@@ -73,11 +73,11 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
   assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'ok');
   assert.equal(calls.savedMediaBuffers[0].mimeType, 'image/png');
   assert.equal(calls.builtContexts[0].Body, 'ENV:image inbound');
-  assert.equal(calls.builtContexts[0].BodyForAgent, 'image inbound');
+  assert.equal(calls.builtContexts[0].BodyForAgent, 'ENV:image inbound');
   assert.equal(calls.builtContexts[0].RawBody, 'image inbound');
   assert.equal(calls.builtContexts[0].CommandBody, 'image inbound');
   assert.equal(calls.builtContexts[0].BodyForCommands, 'image inbound');
-  assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media.bin');
+  assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media-1.bin');
   assert.equal(calls.builtContexts[0].MediaType, 'image/png');
   assert.deepEqual(
     calls.builtContexts[0].BncrStructuredContextFacts,
@@ -85,7 +85,7 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
   );
   assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
     {
-      path: '/tmp/bncr-inbound-media.bin',
+      path: '/tmp/bncr-inbound-media-1.bin',
       contentType: 'image/png',
       kind: 'image',
       messageId: 'inbound-media-small',
@@ -97,6 +97,10 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
       source: 'bncr',
       type: 'bncr.inbound_context',
       payload: {
+        reply: {
+          to: 'Bncr:tgBot:-1001:0',
+          originatingTo: 'Bncr:tgBot:-1001:10001',
+        },
         media: [
           {
             contentType: 'image/png',
@@ -242,11 +246,11 @@ test('dispatchBncrInbound downloads http media path before building inbound cont
     assert.equal(calls.savedMediaBuffers[0].direction, 'inbound');
     assert.equal(calls.savedMediaBuffers[0].maxBytes, 200 * 1024 * 1024);
     assert.equal(calls.savedMediaBuffers[0].fileName, '1781167496030');
-    assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media.bin');
+    assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media-1.bin');
     assert.equal(calls.builtContexts[0].MediaType, 'image/jpeg');
     assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
       {
-        path: '/tmp/bncr-inbound-media.bin',
+        path: '/tmp/bncr-inbound-media-1.bin',
         contentType: 'image/jpeg',
         kind: 'image',
         messageId: 'inbound-media-url',
@@ -257,6 +261,82 @@ test('dispatchBncrInbound downloads http media path before building inbound cont
       server.close((err) => (err ? reject(err) : resolve()));
     });
   }
+});
+
+test('dispatchBncrInbound accepts mediaList and exposes multiple media entries in the current turn', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    type: 'image',
+    msg: '收到媒体文件',
+    mediaList: [
+      {
+        base64: Buffer.from('img-1').toString('base64'),
+        mimeType: 'image/png',
+        fileName: 'first.png',
+        type: 'image',
+      },
+      {
+        base64: Buffer.from('img-2').toString('base64'),
+        mimeType: 'image/jpeg',
+        fileName: 'second.jpg',
+        type: 'image',
+      },
+    ],
+    msgId: 'inbound-media-list-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.savedMediaBuffers.length, 2);
+  assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'img-1');
+  assert.equal(calls.savedMediaBuffers[1].buffer.toString(), 'img-2');
+  assert.equal(calls.builtContexts[0].Body, 'ENV:<media:image> (2 images)');
+  assert.equal(calls.builtContexts[0].BodyForAgent, 'ENV:<media:image> (2 images)');
+  assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media-1.bin');
+  assert.equal(calls.builtContexts[0].MediaType, 'image/png');
+  assert.deepEqual(calls.builtContextArgs[0].media, [
+    {
+      path: '/tmp/bncr-inbound-media-1.bin',
+      contentType: 'image/png',
+      kind: 'image',
+      messageId: 'inbound-media-list-1',
+    },
+    {
+      path: '/tmp/bncr-inbound-media-2.bin',
+      contentType: 'image/jpeg',
+      kind: 'image',
+      messageId: 'inbound-media-list-1',
+    },
+  ]);
+  assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
+    {
+      path: '/tmp/bncr-inbound-media-1.bin',
+      contentType: 'image/png',
+      kind: 'image',
+      messageId: 'inbound-media-list-1',
+    },
+    {
+      path: '/tmp/bncr-inbound-media-2.bin',
+      contentType: 'image/jpeg',
+      kind: 'image',
+      messageId: 'inbound-media-list-1',
+    },
+  ]);
 });
 
 test('downloadInboundMediaUrl rejects streamed bodies once they exceed maxBytes without content-length', async () => {

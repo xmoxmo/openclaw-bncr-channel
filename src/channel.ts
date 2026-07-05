@@ -26,6 +26,7 @@ import {
 import { summarizeOutboxEntry } from './core/outbox-summary.ts';
 import { normalizePersistedOutboxEntry as normalizePersistedOutboxEntryFromRuntime } from './core/persisted-outbox-entry.ts';
 import {
+  buildCanonicalBncrSessionKey,
   formatDisplayScope,
   normalizeStoredSessionKey,
   parseRouteLike,
@@ -40,6 +41,7 @@ import type {
   FileSendTransferState,
   OutboxEntry,
 } from './core/types.ts';
+import type { BncrGroupHistoryMap } from './messaging/inbound/group-history.ts';
 import type { parseBncrInboundParams } from './messaging/inbound/parse.ts';
 import { buildEnqueueFromReplyDebugInfo } from './messaging/outbound/diagnostics.ts';
 import { buildBncrMediaOutboundFrame } from './messaging/outbound/media.ts';
@@ -149,6 +151,7 @@ import type {
   BncrBridgeRuntimePaths,
   BncrChannelConfigRoot,
   BncrChannelSendContext,
+  BncrSceneRecord,
   FileAckPayloadState,
   PersistedState,
 } from './plugin/channel-runtime-types.ts';
@@ -284,6 +287,8 @@ class BncrBridgeRuntime {
     string,
     { accountId: string; route: BncrRoute; updatedAt: number }
   >();
+  private sceneRegistry = new Map<string, BncrSceneRecord>();
+  private groupHistories: BncrGroupHistoryMap = new Map();
   private routeAliases = new Map<
     string,
     { accountId: string; route: BncrRoute; updatedAt: number }
@@ -972,6 +977,19 @@ class BncrBridgeRuntime {
     return this.bridgeSupportRuntime.ensureCanonicalAgentId(args);
   }
 
+  private defaultAdminAgentId(args: {
+    cfg: BncrChannelConfigRoot;
+    accountId: string;
+    peer?: unknown;
+    channelId?: string;
+  }): string {
+    return this.ensureCanonicalAgentId(args);
+  }
+
+  private defaultPublicAgentId(): string {
+    return 'public';
+  }
+
   private countInvalidOutboxSessionKeys(accountId: string): number {
     return countInvalidOutboxSessionKeysFromRuntime({
       accountId,
@@ -1530,6 +1548,9 @@ class BncrBridgeRuntime {
         sessionKey: string;
         inboundText: string;
         hasMedia: boolean;
+        resolvedAgentId: string;
+        shouldDispatch: boolean;
+        shouldAccumulate: boolean;
       }
     | {
         ok: false;
@@ -1542,11 +1563,20 @@ class BncrBridgeRuntime {
       parsed: args.parsed,
       canonicalAgentId: args.canonicalAgentId,
       asString,
+      now,
       getRuntimeConfig: (api) => getOpenClawRuntimeConfig(api as OpenClawChannelRuntimeApiHolder),
       resolveAgentRoute: (params) =>
         resolveOpenClawAgentRoute(this.api as OpenClawChannelRuntimeApiHolder, params),
       buildInboundResponsePayload,
       markInboundDedupSeen: (key) => this.markInboundDedupSeen(key),
+      sceneRegistry: this.sceneRegistry,
+      defaultAdminAgentId: this.defaultAdminAgentId({
+        cfg: getOpenClawRuntimeConfig(this.api as OpenClawChannelRuntimeApiHolder),
+        accountId: args.parsed.accountId,
+        peer: args.parsed.peer,
+        channelId: CHANNEL_ID,
+      }),
+      defaultPublicAgentId: this.defaultPublicAgentId(),
     });
   }
 
@@ -1867,6 +1897,8 @@ class BncrBridgeRuntime {
     maxDeadLetterEntries: MAX_DEAD_LETTER_ENTRIES,
     maxSessionRouteEntries: MAX_SESSION_ROUTE_ENTRIES,
     maxAccountActivityEntries: MAX_ACCOUNT_ACTIVITY_ENTRIES,
+    sceneRegistry: this.sceneRegistry,
+    groupHistories: this.groupHistories,
     outbox: this.outbox,
     getDeadLetter: () => this.deadLetter,
     setDeadLetter: (entries) => {
@@ -2319,9 +2351,10 @@ class BncrBridgeRuntime {
   }
 
   // 严谨目标解析：
-  // 1) 标准 to 仅认 Bncr:<platform>:<groupId>:<userId> / Bncr:<platform>:<userId>
+  // 1) 标准 to 仅认 Bncr:<platform>:0:<userId> / Bncr:<platform>:<groupId>:0
   // 2) 仍接受 strict sessionKey 作为内部兼容输入
-  // 3) 其他旧格式直接失败，并输出标准格式提示日志
+  // 3) 输入侧额外兼容 Bncr:<platform>:user:<userId> / Bncr:<platform>:group:<groupId>
+  // 4) 其他旧格式直接失败，并输出标准格式提示日志
   resolveVerifiedTarget(
     rawTarget: string,
     accountId: string,
@@ -2850,6 +2883,10 @@ class BncrBridgeRuntime {
       buildInboundAcceptedLifecycleDebugInfo,
       ...inboundActivityRuntime,
       ensureCanonicalAgentId: (args) => this.ensureCanonicalAgentId(args),
+      defaultAdminAgentId: (args) => this.defaultAdminAgentId(args),
+      defaultPublicAgentId: () => this.defaultPublicAgentId(),
+      sceneRegistry: this.sceneRegistry,
+      groupHistories: this.groupHistories,
       prepareInboundAcceptance: (args) => this.prepareInboundAcceptance(args),
       logInboundSummary: (args) => this.logInboundSummary(args),
       flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
@@ -2858,6 +2895,8 @@ class BncrBridgeRuntime {
       enqueueFromReply: (args: Parameters<BncrBridgeRuntime['enqueueFromReply']>[0]) =>
         this.enqueueFromReply(args),
       scheduleSave: () => this.scheduleSave(),
+      buildCanonicalSessionKey: (route: BncrRoute) =>
+        buildCanonicalBncrSessionKey(route, this.canonicalAgentId || 'main'),
       fileRecvTransfers: this.fileRecvTransfers,
       inboundFileTransferMaxBytes: INBOUND_FILE_TRANSFER_MAX_BYTES,
       inboundFileTransferMaxChunks: INBOUND_FILE_TRANSFER_MAX_CHUNKS,

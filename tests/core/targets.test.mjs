@@ -17,23 +17,60 @@ const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
 const canonicalAgentId = 'bncr';
 
 test('parseRouteFromDisplayScope supports standard direct display scope', () => {
-  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:10001'), route);
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:0:10001'), route);
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:User:10001'), route);
+  assert.equal(parseRouteFromDisplayScope('Bncr:tgBot:user:10001'), null);
 });
 
 test('parseRouteFromDisplayScope supports standard group display scope', () => {
-  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:-1001:10001'), {
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:-1001:0'), {
     platform: 'tgBot',
     groupId: '-1001',
-    userId: '10001',
+    userId: '0',
   });
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:Group:-1001'), {
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '0',
+  });
+  assert.equal(parseRouteFromDisplayScope('Bncr:tgBot:group:-1001'), null);
 });
 
 test('parseRouteFromDisplayScope restores missing Bncr prefix before validation', () => {
   assert.deepEqual(parseRouteFromDisplayScope('tgBot:10001'), route);
+  assert.deepEqual(parseRouteFromDisplayScope('tgBot:User:10001'), route);
+  assert.deepEqual(parseRouteFromDisplayScope('tgBot:-1001:0'), {
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '0',
+  });
+  assert.deepEqual(parseRouteFromDisplayScope('tgBot:Group:-1001'), {
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '0',
+  });
+  assert.equal(parseRouteFromDisplayScope('tgBot:user:10001'), null);
+  assert.equal(parseRouteFromDisplayScope('tgBot:group:-1001'), null);
+});
+
+test('parseRouteFromDisplayScope rejects group display scope with non-zero userId', () => {
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:-1001:10001'), {
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '0',
+  });
+});
+
+test('parseRouteFromDisplayScope collapses legacy group route with userId into canonical group route', () => {
+  assert.deepEqual(parseRouteFromDisplayScope('Bncr:tgBot:-1001:10001'), {
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '0',
+  });
   assert.deepEqual(parseRouteFromDisplayScope('tgBot:-1001:10001'), {
     platform: 'tgBot',
     groupId: '-1001',
-    userId: '10001',
+    userId: '0',
   });
 });
 
@@ -47,10 +84,10 @@ test('parseRouteFromDisplayScope rejects old formats', () => {
 });
 
 test('formatDisplayScope uses standard direct form and full group form', () => {
-  assert.equal(formatDisplayScope(route), 'Bncr:tgBot:10001');
+  assert.equal(formatDisplayScope(route), 'Bncr:tgBot:0:10001');
   assert.equal(
     formatDisplayScope({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
-    'Bncr:tgBot:-1001:10001',
+    'Bncr:tgBot:-1001:0',
   );
   assert.equal(
     formatDisplayScope({ platform: 'tgBot', groupId: '-1001', userId: '0' }),
@@ -110,7 +147,7 @@ test('withTaskSessionKey appends task suffix once', () => {
 });
 
 test('parseExplicitTarget parses direct display target and keeps chatType locked direct', () => {
-  const parsed = parseExplicitTarget('Bncr:tgBot:10001', { canonicalAgentId });
+  const parsed = parseExplicitTarget('Bncr:tgBot:0:10001', { canonicalAgentId });
   assert.ok(parsed);
   assert.equal(parsed.source, 'display-scope');
   assert.equal(parsed.kind, 'direct');
@@ -118,12 +155,16 @@ test('parseExplicitTarget parses direct display target and keeps chatType locked
   assert.equal(parsed.platform, 'tgBot');
   assert.equal(parsed.userId, '10001');
   assert.equal(parsed.groupId, undefined);
-  assert.equal(parsed.displayScope, 'Bncr:tgBot:10001');
+  assert.equal(parsed.displayScope, 'Bncr:tgBot:0:10001');
   assert.equal(parsed.canonicalSessionKey, buildFallbackSessionKey(route, canonicalAgentId));
+
+  const aliasParsed = parseExplicitTarget('Bncr:tgBot:User:10001', { canonicalAgentId });
+  assert.ok(aliasParsed);
+  assert.equal(aliasParsed.displayScope, 'Bncr:tgBot:0:10001');
 });
 
 test('parseExplicitTarget parses group display target but keeps chatType locked direct', () => {
-  const parsed = parseExplicitTarget('Bncr:tgBot:-1001:10001', {
+  const parsed = parseExplicitTarget('Bncr:tgBot:-1001:0', {
     canonicalAgentId,
   });
   assert.ok(parsed);
@@ -132,20 +173,30 @@ test('parseExplicitTarget parses group display target but keeps chatType locked 
   assert.equal(parsed.chatType, 'direct');
   assert.equal(parsed.platform, 'tgBot');
   assert.equal(parsed.groupId, '-1001');
-  assert.equal(parsed.userId, '10001');
-  assert.equal(parsed.displayScope, 'Bncr:tgBot:-1001:10001');
+  assert.equal(parsed.userId, '0');
+  assert.equal(parsed.displayScope, 'Bncr:tgBot:-1001:0');
   assert.equal(
     parsed.canonicalSessionKey,
-    buildFallbackSessionKey(
-      { platform: 'tgBot', groupId: '-1001', userId: '10001' },
-      canonicalAgentId,
-    ),
+    buildFallbackSessionKey({ platform: 'tgBot', groupId: '-1001', userId: '0' }, canonicalAgentId),
   );
+
+  const aliasParsed = parseExplicitTarget('Bncr:tgBot:Group:-1001', {
+    canonicalAgentId,
+  });
+  assert.ok(aliasParsed);
+  assert.equal(aliasParsed.displayScope, 'Bncr:tgBot:-1001:0');
+});
+
+test('parseExplicitTarget collapses legacy group display target with non-zero userId', () => {
+  const parsed = parseExplicitTarget('Bncr:tgBot:-1001:10001', { canonicalAgentId });
+  assert.ok(parsed);
+  assert.equal(parsed.displayScope, 'Bncr:tgBot:-1001:0');
+  assert.deepEqual(parsed.route, { platform: 'tgBot', groupId: '-1001', userId: '0' });
 });
 
 test('formatTargetDisplay always returns canonical Bncr display scope', () => {
-  assert.equal(formatTargetDisplay(route), 'Bncr:tgBot:10001');
-  const parsed = parseExplicitTarget('Bncr:tgBot:-1001:10001');
+  assert.equal(formatTargetDisplay(route), 'Bncr:tgBot:0:10001');
+  const parsed = parseExplicitTarget('Bncr:tgBot:-1001:0');
   assert.ok(parsed);
-  assert.equal(formatTargetDisplay(parsed), 'Bncr:tgBot:-1001:10001');
+  assert.equal(formatTargetDisplay(parsed), 'Bncr:tgBot:-1001:0');
 });

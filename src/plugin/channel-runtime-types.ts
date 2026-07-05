@@ -44,6 +44,46 @@ export type BncrPersistedLastSession = {
   updatedAt: number;
 };
 
+export type BncrSceneKind = 'direct' | 'group';
+
+export type BncrSceneStatus = 'pending' | 'allowed' | 'denied';
+
+export type BncrGroupReplyMode = 'admin' | 'mention' | 'hybrid' | 'all';
+
+export type BncrSceneRecord = {
+  sceneKey: string;
+  kind: BncrSceneKind;
+  status: BncrSceneStatus;
+  platform: string;
+  userId?: string;
+  userName?: string;
+  groupId?: string;
+  groupName?: string;
+  agentId?: string;
+  groupReplyMode?: BncrGroupReplyMode;
+  lastSeenAt: number;
+};
+
+export type BncrPersistedGroupHistoryEntry = {
+  sender: string;
+  body: string;
+  timestamp?: number;
+  messageId?: string;
+  media?: BncrPersistedGroupHistoryMediaEntry[];
+};
+
+export type BncrPersistedGroupHistoryMediaEntry = {
+  path?: string;
+  contentType?: string;
+  kind?: 'image' | 'video' | 'audio' | 'document' | 'unknown';
+  messageId?: string;
+};
+
+export type BncrPersistedGroupHistoryBucket = {
+  key: string;
+  entries: BncrPersistedGroupHistoryEntry[];
+};
+
 export type BncrStatusRuntimeSnapshot = {
   connected?: boolean;
   running?: boolean;
@@ -133,6 +173,8 @@ export type PersistedState = {
   outbox: OutboxEntry[];
   deadLetter: OutboxEntry[];
   sessionRoutes: BncrPersistedSessionRoute[];
+  sceneRegistry?: BncrSceneRecord[];
+  groupHistories?: BncrPersistedGroupHistoryBucket[];
   lastSessionByAccount?: BncrPersistedLastSession[];
   lastActivityByAccount?: BncrPersistedAccountTimestamp[];
   lastInboundByAccount?: BncrPersistedAccountTimestamp[];

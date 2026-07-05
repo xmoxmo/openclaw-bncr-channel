@@ -60,11 +60,25 @@ function createRuntime(overrides = {}) {
     ensureCanonicalAgentId() {
       return 'orion';
     },
+    defaultAdminAgentId() {
+      return 'orion';
+    },
+    defaultPublicAgentId() {
+      return 'public';
+    },
+    sceneRegistry: new Map(),
     async prepareInboundAcceptance() {
-      return { ok: true, sessionKey: 'session-1', inboundText: 'hello', hasMedia: false };
+      return {
+        ok: true,
+        sessionKey: 'session-1',
+        inboundText: 'hello',
+        hasMedia: false,
+        resolvedAgentId: 'orion',
+        shouldDispatch: true,
+      };
     },
     formatDisplayScope() {
-      return 'Bncr:tgBot:10001';
+      return 'Bncr:tgBot:0:10001';
     },
     logInboundSummary() {},
     respond() {},

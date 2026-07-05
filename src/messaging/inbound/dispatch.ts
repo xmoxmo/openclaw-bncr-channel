@@ -1,4 +1,5 @@
 import { emitBncrLogLine } from '../../core/logging.ts';
+import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
 import { handleBncrNativeCommand } from './commands.ts';
 import type {
   BncrEnqueueFromReply,
@@ -15,6 +16,12 @@ import {
   prepareBncrInboundDispatch,
   resolveBncrInboundConversation,
 } from './dispatch-prep.ts';
+import {
+  type BncrGroupHistoryMap,
+  clearBncrPendingGroupHistory,
+  recordBncrPendingGroupMedia,
+  recordBncrPendingGroupText,
+} from './group-history.ts';
 import { runBncrInboundReplyDispatch } from './reply-dispatch.ts';
 import { buildBncrInboundTurnContext } from './turn-context.ts';
 
@@ -31,6 +38,14 @@ export async function dispatchBncrInbound(params: {
   cfg: BncrInboundConfig;
   parsed: ParsedInbound;
   canonicalAgentId: string;
+  shouldDispatch?: boolean;
+  shouldAccumulate?: boolean;
+  resolvedAgentId?: string;
+  sceneRegistry: Map<string, BncrSceneRecord>;
+  groupHistories: BncrGroupHistoryMap;
+  defaultAdminAgentId: string;
+  defaultPublicAgentId: string;
+  now: () => number;
   rememberSessionRoute: BncrRememberSessionRoute;
   enqueueFromReply: BncrEnqueueFromReply;
   setInboundActivity: (accountId: string, at: number) => void;
@@ -43,6 +58,14 @@ export async function dispatchBncrInbound(params: {
     cfg,
     parsed,
     canonicalAgentId,
+    shouldDispatch = true,
+    shouldAccumulate = shouldDispatch,
+    resolvedAgentId,
+    sceneRegistry,
+    groupHistories = new Map(),
+    defaultAdminAgentId,
+    defaultPublicAgentId,
+    now,
     rememberSessionRoute,
     enqueueFromReply,
     setInboundActivity,
@@ -57,6 +80,11 @@ export async function dispatchBncrInbound(params: {
     cfg,
     parsed,
     canonicalAgentId,
+    resolvedAgentId,
+    sceneRegistry,
+    defaultAdminAgentId,
+    defaultPublicAgentId,
+    now,
     rememberSessionRoute,
     enqueueFromReply,
     logger,
@@ -79,12 +107,23 @@ export async function dispatchBncrInbound(params: {
     cfg,
     parsed,
     canonicalAgentId,
+    resolvedAgentId,
     rememberSessionRoute,
   });
-  const { resolution, prepared, replyRouteFact, senderIdForContext, senderDisplayName } =
-    preparedDispatch;
+  const {
+    resolution,
+    prepared,
+    replyRouteFact,
+    senderIdForContext,
+    senderDisplayName,
+    ownerAllowFrom,
+    bridgeSenderId,
+    bridgeSenderName,
+  } = preparedDispatch;
   const { dispatchSessionKey: sessionKey } = resolution;
-  const { storePath, mediaPath, mediaContentType, rawBody } = prepared;
+  const { storePath, mediaItems, rawBody } = prepared;
+  const primaryMedia = mediaItems[0];
+  const mediaContentType = primaryMedia?.contentType;
   if (!clientId) {
     emitBncrLogLine(
       'warn',
@@ -93,17 +132,38 @@ export async function dispatchBncrInbound(params: {
   }
   const ctxPayload = await buildBncrInboundTurnContext({
     api,
+    cfg,
     channelId,
     parsed,
     msgId,
-    mimeType: mediaContentType || mimeType,
-    mediaPath,
     peer,
     senderIdForContext,
     senderDisplayName,
+    ownerAllowFrom,
+    bridgeSenderId,
+    bridgeSenderName,
     resolution,
     prepared,
+    groupHistories,
+    shouldDispatch,
   });
+
+  if (!shouldDispatch && shouldAccumulate) {
+    recordBncrPendingGroupText({
+      historyMap: groupHistories,
+      parsed,
+      senderDisplayName,
+      bodyText: rawBody,
+    });
+    await recordBncrPendingGroupMedia({
+      historyMap: groupHistories,
+      parsed,
+      senderDisplayName,
+      bodyText: rawBody,
+      mediaItems,
+      mediaContentType: mediaContentType || mimeType,
+    });
+  }
 
   await runBncrInboundReplyDispatch({
     api,
@@ -118,10 +178,16 @@ export async function dispatchBncrInbound(params: {
     resolution,
     replyRouteFact,
     senderIdForContext,
+    senderDisplayName,
+    shouldDispatch,
     setInboundActivity,
     scheduleSave,
     enqueueFromReply,
   });
+
+  if (shouldDispatch) {
+    clearBncrPendingGroupHistory({ historyMap: groupHistories, parsed });
+  }
 
   return {
     accountId,

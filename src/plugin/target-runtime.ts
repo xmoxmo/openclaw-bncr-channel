@@ -95,11 +95,11 @@ export function createBncrTargetRuntime(runtime: {
     if (!route) {
       runtime.logWarn(
         'target',
-        `invalid raw=${raw} accountId=${acc} reason=unparseable-or-unknown standardTo=Bncr:<platform>:<groupId>:<userId>|Bncr:<platform>:<userId> standardSessionKey=agent:<agentId>:bncr:direct:<hex(scope)>`,
+        `invalid raw=${raw} accountId=${acc} reason=unparseable-or-unknown canonicalTo=Bncr:<platform>:0:<userId>|Bncr:<platform>:<groupId>:0 acceptedAliases=Bncr:<platform>:user:<userId>|Bncr:<platform>:group:<groupId> standardSessionKey=agent:<agentId>:bncr:<direct|group>:<hex(scope)>`,
         { debugOnly: true },
       );
       throw new Error(
-        `bncr invalid target(standard: Bncr:<platform>:<groupId>:<userId> | Bncr:<platform>:<userId>): ${raw}`,
+        `bncr invalid target(canonical: Bncr:<platform>:0:<userId> | Bncr:<platform>:<groupId>:0; aliases: Bncr:<platform>:user:<userId> | Bncr:<platform>:group:<groupId>): ${raw}`,
       );
     }
 

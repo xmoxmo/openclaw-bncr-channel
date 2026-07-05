@@ -4,8 +4,8 @@ import test from 'node:test';
 import { normalizePersistedOutboxEntry } from '../../src/core/persisted-outbox-entry.ts';
 
 const canonicalAgentId = 'orion';
-const route = { platform: 'tgBot', groupId: '-1001', userId: '10001' };
-const sessionKey = 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031';
+const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
+const sessionKey = 'agent:orion:bncr:group:7467426f743a2d31303031';
 
 function normalize(entry, now = () => 10_000) {
   return normalizePersistedOutboxEntry({ entry, canonicalAgentId, now });
@@ -37,7 +37,7 @@ test('normalizePersistedOutboxEntry migrates a valid persisted entry', () => {
     platform: 'tgBot',
     keep: true,
     groupId: '-1001',
-    userId: '10001',
+    userId: '0',
   });
   assert.equal(result?.createdAt, 100);
   assert.equal(result?.retryCount, 2);
@@ -80,7 +80,7 @@ test('normalizePersistedOutboxEntry replaces non-object payload with route paylo
     sessionKey,
     platform: 'tgBot',
     groupId: '-1001',
-    userId: '10001',
+    userId: '0',
   });
 });
 
@@ -91,7 +91,7 @@ test('normalizePersistedOutboxEntry uses normalized route when persisted route i
     payload: {},
   });
 
-  assert.deepEqual(result?.route, route);
+  assert.deepEqual(result?.route, { platform: 'tgBot', groupId: '-1001', userId: '0' });
 });
 
 test('normalizePersistedOutboxEntry stringifies truthy lastError', () => {

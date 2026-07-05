@@ -29,6 +29,24 @@ test('buildBncrStructuredContextFacts preserves structured message, route, reply
     sender: {
       id: 'client-1',
       displayName: 'bncr-client',
+      userId: '10001',
+      userName: 'xmo',
+      bridgeId: 'bncr-client-1',
+      bridgeName: 'Bncr',
+      isAdmin: false,
+    },
+    platform: 'tgBot',
+    group: {
+      id: '-1001',
+      name: 'wind_system',
+      isGroup: true,
+    },
+    trigger: {
+      shouldRespond: true,
+      triggerKind: 'mention',
+      botName: 'AixmoClaw_bot',
+      isBotMentioned: true,
+      isReplyToBot: false,
     },
     message: {
       id: 'msg-1',
@@ -70,6 +88,24 @@ test('buildBncrStructuredContextFacts preserves structured message, route, reply
     sender: {
       id: 'client-1',
       displayName: 'bncr-client',
+      userId: '10001',
+      userName: 'xmo',
+      bridgeId: 'bncr-client-1',
+      bridgeName: 'Bncr',
+      isAdmin: false,
+    },
+    platform: 'tgBot',
+    group: {
+      id: '-1001',
+      name: 'wind_system',
+      isGroup: true,
+    },
+    trigger: {
+      shouldRespond: true,
+      triggerKind: 'mention',
+      botName: 'AixmoClaw_bot',
+      isBotMentioned: true,
+      isReplyToBot: false,
     },
     message: {
       id: 'msg-1',
@@ -112,6 +148,9 @@ test('buildBncrPromptVisibleContextFacts only preserves facts not covered by off
       id: 'client-1',
       displayName: 'bncr-client',
     },
+    trigger: {
+      botName: 'BncrBot',
+    },
     message: {
       id: 'msg-1',
       rawBody: 'hello inbound',
@@ -130,6 +169,9 @@ test('buildBncrPromptVisibleContextFacts only preserves facts not covered by off
   });
 
   assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
+    trigger: {
+      botName: 'BncrBot',
+    },
     reply: {
       to: 'Bncr:tgBot:-1001:10001',
       originatingTo: 'BncrRaw:tgBot:-1001:10001',
@@ -141,6 +183,44 @@ test('buildBncrPromptVisibleContextFacts only preserves facts not covered by off
         messageId: 'msg-1',
       },
     ],
+  });
+});
+
+test('buildBncrPromptVisibleContextFacts exposes botName when the adapter provides an alias', () => {
+  const facts = buildBncrStructuredContextFacts({
+    channelId: 'bncr',
+    accountId: 'Primary',
+    route: {},
+    conversation: {
+      kind: 'group',
+      id: '-1001',
+      label: 'Bncr:tgBot:-1001:0',
+    },
+    reply: {
+      to: 'Bncr:tgBot:-1001:0',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+    },
+    sender: {
+      id: '10001',
+      displayName: 'xmo',
+    },
+    trigger: {
+      botName: 'AiChatXMO_bot',
+    },
+    message: {
+      id: 'msg-1',
+      rawBody: 'hello inbound',
+    },
+  });
+
+  assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
+    trigger: {
+      botName: 'AiChatXMO_bot',
+    },
+    reply: {
+      to: 'Bncr:tgBot:-1001:0',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+    },
   });
 });
 
@@ -286,6 +366,10 @@ test('buildBncrStructuredContextFactsFromInboundParts adapts dispatch-shaped inb
         id: '-1001',
       },
       clientId: 'client-1',
+      shouldRespond: true,
+      triggerKind: 'reply',
+      isBotMentioned: false,
+      isReplyToBot: true,
       msgId: 'msg-2',
       mimeType: 'audio/ogg',
     },
@@ -303,7 +387,13 @@ test('buildBncrStructuredContextFactsFromInboundParts adapts dispatch-shaped inb
     prepared: {
       rawBody: 'voice inbound',
       body: 'ENV:voice inbound',
-      mediaPath: '/tmp/voice.ogg',
+      mediaItems: [
+        {
+          path: '/tmp/voice.ogg',
+          contentType: 'audio/ogg',
+          kind: 'audio',
+        },
+      ],
     },
     senderIdForContext: 'client-1',
     senderDisplayName: 'bncr-client',
@@ -326,6 +416,10 @@ test('buildBncrStructuredContextFactsFromInboundParts adapts dispatch-shaped inb
   assert.equal(facts.message.bodyForAgent, 'voice inbound');
   assert.equal(facts.message.commandBody, 'voice inbound');
   assert.equal(facts.message.envelopeBody, 'ENV:voice inbound');
+  assert.equal(facts.trigger.shouldRespond, true);
+  assert.equal(facts.trigger.triggerKind, 'reply');
+  assert.equal(facts.trigger.isBotMentioned, false);
+  assert.equal(facts.trigger.isReplyToBot, true);
   assert.deepEqual(facts.media, [
     {
       path: '/tmp/voice.ogg',
@@ -334,6 +428,48 @@ test('buildBncrStructuredContextFactsFromInboundParts adapts dispatch-shaped inb
       messageId: 'msg-2',
     },
   ]);
+});
+
+test('buildBncrStructuredContextFactsFromInboundParts exposes bncr owner authorization facts', () => {
+  const facts = buildBncrStructuredContextFactsFromInboundParts({
+    channelId: 'bncr',
+    parsed: {
+      accountId: 'Primary',
+      peer: {
+        kind: 'group',
+        id: '-1001',
+      },
+      userId: '10001',
+      userName: 'xmo',
+      isAdmin: true,
+    },
+    resolution: {
+      chatType: 'group',
+      canonicalTo: 'Bncr:tgBot:-1001:0',
+      originatingTo: 'Bncr:tgBot:-1001:0',
+      resolvedRoute: {},
+    },
+    prepared: {
+      rawBody: 'hello',
+    },
+    senderIdForContext: '10001',
+    senderDisplayName: 'xmo',
+    senderIsOwner: true,
+    senderIsAuthorized: true,
+  });
+
+  assert.equal(facts.sender.isAdmin, true);
+  assert.equal(facts.sender.isOwner, true);
+  assert.equal(facts.sender.isAuthorizedSender, true);
+  assert.equal(facts.sender.role, 'owner');
+  assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
+    sender: {
+      isAdmin: true,
+      isOwner: true,
+      isAuthorizedSender: true,
+      role: 'owner',
+    },
+  });
 });
 
 test('buildBncrStructuredContextFactsFromInboundParts keeps media empty and falls back sender display name', () => {

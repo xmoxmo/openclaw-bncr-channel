@@ -19,6 +19,27 @@ export type BncrStructuredContextFactsInput = {
   sender: {
     id: string;
     displayName?: string;
+    userId?: string;
+    userName?: string;
+    bridgeId?: string;
+    bridgeName?: string;
+    isAdmin?: boolean;
+    isOwner?: boolean;
+    isAuthorizedSender?: boolean;
+    role?: 'owner' | 'admin' | 'user';
+  };
+  platform?: string;
+  group?: {
+    id?: string;
+    name?: string;
+    isGroup?: boolean;
+  };
+  trigger?: {
+    shouldRespond?: boolean;
+    triggerKind?: string;
+    botName?: string;
+    isBotMentioned?: boolean;
+    isReplyToBot?: boolean;
   };
   message: {
     id?: string | null;
@@ -60,6 +81,27 @@ export function buildBncrStructuredContextFacts(input: BncrStructuredContextFact
     sender: {
       id: input.sender.id,
       displayName: input.sender.displayName || input.sender.id,
+      userId: input.sender.userId,
+      userName: input.sender.userName,
+      bridgeId: input.sender.bridgeId,
+      bridgeName: input.sender.bridgeName,
+      isAdmin: input.sender.isAdmin,
+      ...(input.sender.isOwner === true ? { isOwner: true } : {}),
+      ...(input.sender.isAuthorizedSender === true ? { isAuthorizedSender: true } : {}),
+      ...(input.sender.role !== undefined ? { role: input.sender.role } : {}),
+    },
+    platform: input.platform,
+    group: {
+      id: input.group?.id,
+      name: input.group?.name,
+      isGroup: input.group?.isGroup,
+    },
+    trigger: {
+      shouldRespond: input.trigger?.shouldRespond,
+      triggerKind: input.trigger?.triggerKind,
+      botName: input.trigger?.botName,
+      isBotMentioned: input.trigger?.isBotMentioned,
+      isReplyToBot: input.trigger?.isReplyToBot,
     },
     message: {
       id: input.message.id || undefined,
@@ -85,6 +127,15 @@ export function buildBncrPromptVisibleContextFacts(
   facts: ReturnType<typeof buildBncrStructuredContextFacts>,
 ) {
   const result: {
+    trigger?: {
+      botName?: string;
+    };
+    sender?: {
+      isAdmin?: boolean;
+      isOwner?: boolean;
+      isAuthorizedSender?: boolean;
+      role?: 'owner' | 'admin' | 'user';
+    };
     reply?: {
       to: string;
       originatingTo: string;
@@ -95,6 +146,30 @@ export function buildBncrPromptVisibleContextFacts(
       messageId?: string;
     }>;
   } = {};
+
+  if (
+    facts.sender.isAdmin === true ||
+    facts.sender.isOwner === true ||
+    facts.sender.isAuthorizedSender === true ||
+    facts.sender.role === 'owner' ||
+    facts.sender.role === 'admin'
+  ) {
+    const sender = {
+      ...(facts.sender.isAdmin === true ? { isAdmin: true } : {}),
+      ...(facts.sender.isOwner === true ? { isOwner: true } : {}),
+      ...(facts.sender.isAuthorizedSender === true ? { isAuthorizedSender: true } : {}),
+      ...(facts.sender.role === 'owner' || facts.sender.role === 'admin'
+        ? { role: facts.sender.role }
+        : {}),
+    };
+    if (Object.keys(sender).length > 0) result.sender = sender;
+  }
+
+  if (facts.trigger.botName) {
+    result.trigger = {
+      botName: facts.trigger.botName,
+    };
+  }
 
   if (facts.reply.originatingTo !== facts.reply.to) {
     result.reply = {
@@ -125,11 +200,25 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
   channelId: string;
   parsed: {
     accountId: string;
+    platform?: string;
     peer: {
       kind: string;
       id: string;
     };
     clientId?: string;
+    bridgeId?: string;
+    bridgeName?: string;
+    groupId?: string;
+    groupName?: string;
+    userId?: string;
+    userName?: string;
+    isGroup?: boolean;
+    isAdmin?: boolean;
+    shouldRespond?: boolean;
+    triggerKind?: string;
+    botName?: string;
+    isBotMentioned?: boolean;
+    isReplyToBot?: boolean;
     msgId?: string;
     mimeType?: string;
   };
@@ -147,18 +236,24 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
   prepared: {
     rawBody: string;
     body?: string;
-    mediaPath?: string | null;
-    mediaContentType?: string;
+    mediaItems?: Array<{
+      path: string;
+      contentType?: string;
+      kind?: string;
+    }>;
   };
   senderIdForContext: string;
   senderDisplayName?: string;
+  bridgeSenderId?: string;
+  bridgeSenderName?: string;
+  senderIsOwner?: boolean;
+  senderIsAuthorized?: boolean;
 };
 
 export function buildBncrStructuredContextFactsFromInboundParts(
   input: BncrStructuredContextFactsFromInboundPartsInput,
 ) {
-  const mediaPath = input.prepared.mediaPath || undefined;
-  const mediaContentType = input.prepared.mediaContentType || input.parsed.mimeType;
+  const mediaItems = Array.isArray(input.prepared.mediaItems) ? input.prepared.mediaItems : [];
   return buildBncrStructuredContextFacts({
     channelId: input.channelId,
     accountId: input.parsed.accountId,
@@ -180,6 +275,27 @@ export function buildBncrStructuredContextFactsFromInboundParts(
     sender: {
       id: input.senderIdForContext,
       displayName: input.senderDisplayName,
+      userId: input.parsed.userId,
+      userName: input.parsed.userName,
+      bridgeId: input.bridgeSenderId || input.parsed.bridgeId || input.parsed.clientId,
+      bridgeName: input.bridgeSenderName || input.parsed.bridgeName,
+      isAdmin: input.parsed.isAdmin,
+      isOwner: input.senderIsOwner === true ? true : undefined,
+      isAuthorizedSender: input.senderIsAuthorized === true ? true : undefined,
+      role: input.senderIsOwner ? 'owner' : input.parsed.isAdmin ? 'admin' : undefined,
+    },
+    platform: input.parsed.platform,
+    group: {
+      id: input.parsed.groupId,
+      name: input.parsed.groupName,
+      isGroup: input.parsed.isGroup,
+    },
+    trigger: {
+      shouldRespond: input.parsed.shouldRespond,
+      triggerKind: input.parsed.triggerKind,
+      botName: input.parsed.botName,
+      isBotMentioned: input.parsed.isBotMentioned,
+      isReplyToBot: input.parsed.isReplyToBot,
     },
     message: {
       id: input.parsed.msgId,
@@ -188,15 +304,11 @@ export function buildBncrStructuredContextFactsFromInboundParts(
       commandBody: input.prepared.rawBody,
       envelopeBody: input.prepared.body,
     },
-    media: mediaPath
-      ? [
-          {
-            path: mediaPath,
-            contentType: mediaContentType,
-            kind: inferBncrStructuredMediaKind(mediaContentType),
-            messageId: input.parsed.msgId,
-          },
-        ]
-      : [],
+    media: mediaItems.map((item) => ({
+      path: item.path,
+      contentType: item.contentType,
+      kind: item.kind || inferBncrStructuredMediaKind(item.contentType),
+      messageId: input.parsed.msgId,
+    })),
   });
 }

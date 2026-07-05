@@ -47,6 +47,7 @@ export type OpenClawInboundRuntimeResolvedTurn = {
   record: {
     updateLastRoute: unknown;
     onRecordError: (err: unknown) => void;
+    trackSessionMetaTask?: (task: Promise<unknown>) => void;
   };
   runDispatch: () => Promise<unknown> | unknown;
 };

@@ -8,16 +8,25 @@ import {
   writeOpenClawJsonFileAtomically,
 } from '../openclaw/sdk-helpers.ts';
 import type {
+  BncrGroupReplyMode,
   BncrPersistedAccountTimestamp,
+  BncrPersistedGroupHistoryBucket,
+  BncrPersistedGroupHistoryEntry,
+  BncrPersistedGroupHistoryMediaEntry,
   BncrPersistedLastSession,
   BncrPersistedSessionRoute,
   PersistedState as BncrPersistedState,
+  BncrSceneRecord,
 } from './channel-runtime-types.ts';
+
+const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
 
 type BncrPersistedStateStoreInput = {
   outbox?: unknown;
   deadLetter?: unknown;
   sessionRoutes?: unknown;
+  sceneRegistry?: unknown;
+  groupHistories?: unknown;
   lastSessionByAccount?: unknown;
   lastActivityByAccount?: unknown;
   lastInboundByAccount?: unknown;
@@ -28,6 +37,9 @@ type BncrPersistedStateStoreInput = {
 type PersistedAccountTimestampInput = Partial<BncrPersistedAccountTimestamp>;
 type PersistedLastSessionInput = Partial<BncrPersistedLastSession>;
 type PersistedSessionRouteInput = Partial<BncrPersistedSessionRoute>;
+type PersistedSceneRecordInput = Partial<BncrSceneRecord>;
+type PersistedGroupHistoryBucketInput = Partial<BncrPersistedGroupHistoryBucket>;
+type PersistedGroupHistoryEntryInput = Partial<BncrPersistedGroupHistoryEntry>;
 
 export function createBncrStateStore(runtime: {
   getStatePath: () => string | null;
@@ -50,6 +62,8 @@ export function createBncrStateStore(runtime: {
   maxDeadLetterEntries: number;
   maxSessionRouteEntries: number;
   maxAccountActivityEntries: number;
+  sceneRegistry: Map<string, BncrSceneRecord>;
+  groupHistories: Map<string, BncrPersistedGroupHistoryEntry[]>;
   outbox: Map<string, OutboxEntry>;
   getDeadLetter: () => OutboxEntry[];
   setDeadLetter: (entries: OutboxEntry[]) => void;
@@ -62,6 +76,117 @@ export function createBncrStateStore(runtime: {
   getLastDriftSnapshot: () => BncrPersistedState['lastDriftSnapshot'];
   setLastDriftSnapshot: (value: BncrPersistedState['lastDriftSnapshot']) => void;
 }) {
+  function loadPersistedSceneRegistry(persisted: unknown): void {
+    runtime.sceneRegistry.clear();
+    const items = Array.isArray(persisted) ? (persisted as PersistedSceneRecordInput[]) : [];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const sceneKey = runtime.asString(item.sceneKey || '').trim();
+      const kind = runtime.asString(item.kind || '').trim();
+      const status = runtime.asString(item.status || '').trim();
+      const platform = runtime.asString(item.platform || '').trim();
+      const lastSeenAt = runtime.finiteNumberOr(item.lastSeenAt, 0);
+      if (!sceneKey || !platform || lastSeenAt <= 0) continue;
+      if (kind !== 'direct' && kind !== 'group') continue;
+      if (status !== 'pending' && status !== 'allowed' && status !== 'denied') continue;
+
+      runtime.sceneRegistry.set(sceneKey, {
+        sceneKey,
+        kind,
+        status,
+        platform,
+        ...(runtime.asString(item.userId || '').trim()
+          ? { userId: runtime.asString(item.userId || '').trim() }
+          : {}),
+        ...(runtime.asString(item.userName || '').trim()
+          ? { userName: runtime.asString(item.userName || '').trim() }
+          : {}),
+        ...(runtime.asString(item.groupId || '').trim()
+          ? { groupId: runtime.asString(item.groupId || '').trim() }
+          : {}),
+        ...(runtime.asString(item.groupName || '').trim()
+          ? { groupName: runtime.asString(item.groupName || '').trim() }
+          : {}),
+        ...(runtime.asString(item.agentId || '').trim()
+          ? { agentId: runtime.asString(item.agentId || '').trim() }
+          : {}),
+        ...(kind === 'group' &&
+        GROUP_REPLY_MODES.has(
+          runtime.asString(item.groupReplyMode || '').trim() as BncrGroupReplyMode,
+        )
+          ? {
+              groupReplyMode: runtime
+                .asString(item.groupReplyMode || '')
+                .trim() as BncrGroupReplyMode,
+            }
+          : {}),
+        lastSeenAt,
+      });
+    }
+  }
+
+  function dumpPersistedSceneRegistry() {
+    return Array.from(runtime.sceneRegistry.values()).sort((a, b) => a.lastSeenAt - b.lastSeenAt);
+  }
+
+  function loadPersistedGroupHistories(persisted: unknown): void {
+    runtime.groupHistories.clear();
+    const buckets = Array.isArray(persisted)
+      ? (persisted as PersistedGroupHistoryBucketInput[])
+      : [];
+    for (const bucket of buckets) {
+      const key = runtime.asString(bucket?.key || '').trim();
+      if (!key) continue;
+      const entries: BncrPersistedGroupHistoryEntry[] = [];
+      const rawEntries = Array.isArray(bucket?.entries)
+        ? (bucket.entries as PersistedGroupHistoryEntryInput[])
+        : [];
+      for (const entry of rawEntries) {
+        const sender = runtime.asString(entry?.sender || '').trim();
+        const body = runtime.asString(entry?.body || '').trim();
+        if (!sender || !body) continue;
+        const timestamp = runtime.finiteNumberOr(entry?.timestamp, 0);
+        const messageId = runtime.asString(entry?.messageId || '').trim();
+
+        const media: BncrPersistedGroupHistoryMediaEntry[] = [];
+        const rawMedia = Array.isArray(entry?.media)
+          ? (entry.media as Partial<BncrPersistedGroupHistoryMediaEntry>[])
+          : [];
+        for (const item of rawMedia) {
+          const path = runtime.asString(item?.path || '').trim();
+          if (!path) continue;
+          const contentType = runtime.asString(item?.contentType || '').trim();
+          const kind = runtime.asString(item?.kind || '').trim();
+          const mediaMessageId = runtime.asString(item?.messageId || '').trim();
+          const normalizedMedia: BncrPersistedGroupHistoryMediaEntry = {
+            path,
+            ...(contentType ? { contentType } : {}),
+            ...(kind ? { kind: kind as BncrPersistedGroupHistoryMediaEntry['kind'] } : {}),
+            ...(mediaMessageId ? { messageId: mediaMessageId } : {}),
+          };
+          media.push(normalizedMedia);
+        }
+
+        const normalizedEntry: BncrPersistedGroupHistoryEntry = {
+          sender,
+          body,
+          ...(timestamp > 0 ? { timestamp } : {}),
+          ...(messageId ? { messageId } : {}),
+          ...(media.length > 0 ? { media } : {}),
+        };
+        entries.push(normalizedEntry);
+      }
+      if (entries.length > 0) runtime.groupHistories.set(key, entries.slice(-50));
+    }
+  }
+
+  function dumpPersistedGroupHistories() {
+    return Array.from(runtime.groupHistories.entries()).map(([key, entries]) => ({
+      key,
+      entries: entries.slice(-50),
+    }));
+  }
+
   function loadPersistedAccountTimestampMap(target: Map<string, number>, persisted: unknown): void {
     target.clear();
     const items = Array.isArray(persisted)
@@ -208,6 +333,8 @@ export function createBncrStateStore(runtime: {
     runtime.setDeadLetter(deadLetter);
 
     loadPersistedSessionRoutes(data.sessionRoutes);
+    loadPersistedSceneRegistry(data.sceneRegistry);
+    loadPersistedGroupHistories(data.groupHistories);
     loadPersistedLastSessionMap(data.lastSessionByAccount);
     loadPersistedAccountTimestampMap(runtime.lastActivityByAccount, data.lastActivityByAccount);
     loadPersistedAccountTimestampMap(runtime.lastInboundByAccount, data.lastInboundByAccount);
@@ -225,6 +352,8 @@ export function createBncrStateStore(runtime: {
       outbox: Array.from(runtime.outbox.values()),
       deadLetter: runtime.getDeadLetter().slice(-runtime.maxDeadLetterEntries),
       sessionRoutes: dumpPersistedSessionRoutes(),
+      sceneRegistry: dumpPersistedSceneRegistry(),
+      groupHistories: dumpPersistedGroupHistories(),
       lastSessionByAccount: dumpPersistedLastSessionMap(),
       lastActivityByAccount: dumpPersistedAccountTimestampMap(runtime.lastActivityByAccount),
       lastInboundByAccount: dumpPersistedAccountTimestampMap(runtime.lastInboundByAccount),
@@ -242,6 +371,10 @@ export function createBncrStateStore(runtime: {
     dumpPersistedLastSessionMap,
     loadPersistedSessionRoutes,
     dumpPersistedSessionRoutes,
+    loadPersistedSceneRegistry,
+    dumpPersistedSceneRegistry,
+    loadPersistedGroupHistories,
+    dumpPersistedGroupHistories,
     backfillAccountActivityFromSessionRoutes,
     loadState,
     flushState,

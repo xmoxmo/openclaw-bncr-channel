@@ -15,7 +15,7 @@ function createRuntimeHarness() {
     resolveVerifiedTarget: () => ({
       sessionKey: 'agent:orion:bncr:direct:7467426f743a303a3130303031',
       route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-      displayScope: 'Bncr:tgBot:10001',
+      displayScope: 'Bncr:tgBot:0:10001',
     }),
     rememberSessionRoute: () => {},
     enqueueFromReply: async (args) => {
@@ -42,13 +42,13 @@ test('createBncrChannelSendRuntime preserves supported reply kinds for text and 
 
   await runtime.channelMessageSendText({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     text: 'hi',
     kind: 'tool',
   });
   await runtime.channelMessageSendMedia({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     mediaUrl: '/tmp/a.png',
     kind: 'block',
   });
@@ -62,7 +62,7 @@ test('createBncrChannelSendRuntime drops unsupported reply kind values', async (
 
   await runtime.channelMessageSendText({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     text: 'hi',
     kind: 'unexpected',
     payload: { kind: 'still-bad' },
@@ -76,12 +76,12 @@ test('createBncrChannelSendRuntime normalizes payload kind before enqueue', asyn
 
   await runtime.channelMessageSendPayload({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     payload: { text: 'hi', kind: 'final' },
   });
   await runtime.channelMessageSendPayload({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     payload: { text: 'hi', kind: 'invalid' },
   });
 
@@ -94,14 +94,14 @@ test('createBncrChannelSendRuntime preserves mediaUrls and asVoice for media and
 
   await runtime.channelSendMedia({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     text: 'voice album',
     mediaUrls: ['/tmp/runtime-voice-1.ogg', '/tmp/runtime-voice-2.ogg'],
     asVoice: true,
   });
   await runtime.channelMessageSendPayload({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     payload: {
       text: 'payload voice album',
       mediaUrls: ['/tmp/runtime-payload-voice-1.ogg', '/tmp/runtime-payload-voice-2.ogg'],
@@ -132,7 +132,7 @@ test('channel send runtime group exposes channel.message and direct send runtime
     resolveVerifiedTarget: () => ({
       sessionKey: 'agent:orion:bncr:direct:7467426f743a303a3130303031',
       route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-      displayScope: 'Bncr:tgBot:10001',
+      displayScope: 'Bncr:tgBot:0:10001',
     }),
     rememberSessionRoute: () => {},
     enqueueFromReply: async (args) => {
@@ -154,7 +154,7 @@ test('channel send runtime group exposes channel.message and direct send runtime
 
   await group.channelSendRuntime.channelSendText({
     accountId: 'Primary',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     text: 'hello',
   });
 

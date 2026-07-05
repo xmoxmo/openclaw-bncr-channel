@@ -186,30 +186,40 @@ test('bncr messaging exposes parse/display/session target helpers on the owning 
   assert.equal(channel.durableFinal, undefined);
   assert.equal(channel.capabilities?.durableFinal, undefined);
 
-  const direct = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:10001' });
+  const direct = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:0:10001' });
   assert.ok(direct);
-  assert.equal(direct.displayScope, 'Bncr:tgBot:10001');
+  assert.equal(direct.displayScope, 'Bncr:tgBot:0:10001');
+  const directLegacy = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:10001' });
+  assert.ok(directLegacy);
+  assert.equal(directLegacy.displayScope, 'Bncr:tgBot:0:10001');
+  const directAlias = channel.messaging.parseExplicitTarget({ raw: 'Bncr:tgBot:User:10001' });
+  assert.ok(directAlias);
+  assert.equal(directAlias.displayScope, 'Bncr:tgBot:0:10001');
 
   const group = channel.messaging.parseExplicitTarget({
-    raw: 'Bncr:tgBot:-1001:10001',
+    raw: 'Bncr:tgBot:Group:-1001',
   });
   assert.ok(group);
-  assert.equal(group.displayScope, 'Bncr:tgBot:-1001:10001');
-  assert.equal(channel.messaging.formatTargetDisplay({ target: group }), group.displayScope);
+  assert.equal(group.displayScope, 'Bncr:tgBot:-1001:0');
+  assert.equal(channel.messaging.formatTargetDisplay({ target: group }), 'Bncr:tgBot:Group:-1001');
   assert.equal(
-    channel.messaging.resolveSessionTarget({ id: 'Bncr:tgBot:10001' }),
-    'Bncr:tgBot:10001',
+    channel.messaging.resolveSessionTarget({ id: 'Bncr:tgBot:0:10001' }),
+    'Bncr:tgBot:0:10001',
   );
   assert.equal(
-    channel.messaging.formatTargetDisplay({ target: 'Bncr:tgBot:-1001:10001' }),
-    'Bncr:tgBot:-1001:10001',
+    channel.messaging.resolveSessionTarget({ id: 'Bncr:tgBot:10001' }),
+    'Bncr:tgBot:0:10001',
+  );
+  assert.equal(
+    channel.messaging.formatTargetDisplay({ target: 'Bncr:tgBot:Group:-1001' }),
+    'Bncr:tgBot:Group:-1001',
   );
 
   const outboundSessionRoute = channel.messaging.resolveOutboundSessionRoute({
     cfg: {},
     agentId: 'orion',
     accountId: 'Primary',
-    target: 'Bncr:tgBot:10001',
+    target: 'Bncr:tgBot:0:10001',
     threadId: 123,
   });
   assert.ok(outboundSessionRoute);
@@ -219,13 +229,39 @@ test('bncr messaging exposes parse/display/session target helpers on the owning 
   const resolvedTarget = await channel.messaging.targetResolver.resolveTarget({
     cfg: {},
     accountId: null,
+    input: 'Bncr:tgBot:0:10001',
+    normalized: 'Bncr:tgBot:0:10001',
+  });
+  assert.deepEqual(resolvedTarget, {
+    to: 'Bncr:tgBot:0:10001',
+    kind: 'user',
+    display: 'Bncr:tgBot:User:10001',
+    source: 'normalized',
+  });
+
+  const resolvedLegacyDirectTarget = await channel.messaging.targetResolver.resolveTarget({
+    cfg: {},
+    accountId: null,
     input: 'Bncr:tgBot:10001',
     normalized: 'Bncr:tgBot:10001',
   });
-  assert.deepEqual(resolvedTarget, {
-    to: 'Bncr:tgBot:10001',
+  assert.deepEqual(resolvedLegacyDirectTarget, {
+    to: 'Bncr:tgBot:0:10001',
     kind: 'user',
-    display: 'Bncr:tgBot:10001',
+    display: 'Bncr:tgBot:User:10001',
+    source: 'normalized',
+  });
+
+  const resolvedGroupTarget = await channel.messaging.targetResolver.resolveTarget({
+    cfg: {},
+    accountId: null,
+    input: 'Bncr:tgBot:Group:-1001',
+    normalized: 'Bncr:tgBot:Group:-1001',
+  });
+  assert.deepEqual(resolvedGroupTarget, {
+    to: 'Bncr:tgBot:-1001:0',
+    kind: 'group',
+    display: 'Bncr:tgBot:Group:-1001',
     source: 'normalized',
   });
 });

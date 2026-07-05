@@ -10,7 +10,7 @@ function entry(overrides = {}) {
   return {
     messageId: 'mid',
     accountId: 'Primary',
-    sessionKey: 'agent:main:bncr:direct:74673a313a32',
+    sessionKey: 'agent:main:bncr:group:74673a31',
     route: { platform: 'tg', groupId: '1', userId: '2' },
     payload: {},
     createdAt: 1,

@@ -28,7 +28,7 @@ test('outbox drain ack logs wait-start and reroutes retry entries', () => {
     defaultAckTimeoutMs: 30_000,
     adaptiveAckTimeoutEnabled: true,
     outboxSize: () => 1,
-    formatDisplayScope: () => 'Bncr:tgBot:10001',
+    formatDisplayScope: () => 'Bncr:tgBot:0:10001',
     isFileTransferEntry: () => false,
     setOutboxEntry(messageId, entry) {
       calls.set.push([messageId, entry]);

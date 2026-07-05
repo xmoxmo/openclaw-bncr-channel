@@ -143,8 +143,8 @@ test('channel send target runtime preserves target resolution route memory and e
     },
   });
 
-  assert.deepEqual(runtime.resolveVerifiedTarget('Bncr:tgBot:10001', 'Primary'), {
-    to: 'Bncr:tgBot:10001',
+  assert.deepEqual(runtime.resolveVerifiedTarget('Bncr:tgBot:0:10001', 'Primary'), {
+    to: 'Bncr:tgBot:0:10001',
     accountId: 'Primary',
   });
   runtime.rememberSessionRoute('session-1', 'Primary', { userId: '10001' });

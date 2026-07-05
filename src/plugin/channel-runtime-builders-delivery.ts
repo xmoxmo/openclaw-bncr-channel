@@ -7,6 +7,7 @@ import type {
   FileSendTransferState,
   OutboxEntry,
 } from '../core/types.ts';
+import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import type {
   NormalizedReplyPayload,
@@ -18,7 +19,11 @@ import type {
   buildInboundAcceptedLifecycleDebugInfo as buildInboundAcceptedLifecycleDebugInfoFromRuntime,
   buildInboundResponsePayload as buildInboundResponsePayloadFromRuntime,
 } from './channel-inbound-helpers.ts';
-import type { BncrChannelConfigRoot, BncrVerifiedTarget } from './channel-runtime-types.ts';
+import type {
+  BncrChannelConfigRoot,
+  BncrSceneRecord,
+  BncrVerifiedTarget,
+} from './channel-runtime-types.ts';
 import type { LeaseEventPayload } from './connection-handlers.ts';
 import type { BncrActiveConnectionDebugEntry } from './connection-state.ts';
 import type { FileAckPayloadState, FileAckWaiter } from './file-ack-runtime.ts';
@@ -121,6 +126,11 @@ export function buildBncrStateTransientRuntime(deps: {
   maxDeadLetterEntries: number;
   maxSessionRouteEntries: number;
   maxAccountActivityEntries: number;
+  sceneRegistry: Map<string, BncrSceneRecord>;
+  groupHistories: Map<
+    string,
+    import('./channel-runtime-types.ts').BncrPersistedGroupHistoryEntry[]
+  >;
   outbox: Map<string, OutboxEntry>;
   getDeadLetter: () => OutboxEntry[];
   setDeadLetter: (entries: OutboxEntry[]) => void;
@@ -446,6 +456,15 @@ export function buildBncrInboundSurfaceRuntime(deps: {
     peer?: unknown;
     channelId?: string;
   }) => string;
+  defaultAdminAgentId: (args: {
+    cfg: BncrChannelConfigRoot;
+    accountId: string;
+    peer?: unknown;
+    channelId?: string;
+  }) => string;
+  defaultPublicAgentId: () => string;
+  sceneRegistry: Map<string, BncrSceneRecord>;
+  groupHistories: BncrGroupHistoryMap;
   prepareInboundAcceptance: (args: {
     parsed: ReturnType<typeof parseBncrInboundParams>;
     canonicalAgentId: string;
@@ -456,6 +475,9 @@ export function buildBncrInboundSurfaceRuntime(deps: {
         sessionKey: string;
         inboundText: string;
         hasMedia: boolean;
+        resolvedAgentId: string;
+        shouldDispatch: boolean;
+        shouldAccumulate: boolean;
       }
     | {
         ok: false;
@@ -486,6 +508,7 @@ export function buildBncrInboundSurfaceRuntime(deps: {
   }) => Promise<void>;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
+  buildCanonicalSessionKey: (route: BncrRoute) => string;
   fileRecvTransfers: Parameters<typeof createBncrFileInboundHandlers>[0]['fileRecvTransfers'];
   inboundFileTransferMaxBytes: number;
   inboundFileTransferMaxChunks: number;

@@ -53,12 +53,12 @@ export function buildNativeCommandHandledResult(args: {
 
 export function buildBncrNativeCommandSessionState(args: {
   parsed: ParsedInbound;
-  canonicalAgentId: string;
+  sessionAgentId: string;
   resolvedRoute: { sessionKey: string };
 }) {
-  const { parsed, canonicalAgentId, resolvedRoute } = args;
+  const { parsed, sessionAgentId, resolvedRoute } = args;
   const baseSessionKey =
-    normalizeInboundSessionKey(parsed.sessionKeyfromroute, parsed.route, canonicalAgentId) ||
+    normalizeInboundSessionKey(parsed.sessionKeyfromroute, parsed.route, sessionAgentId) ||
     resolvedRoute.sessionKey;
   const taskSessionKey = withTaskSessionKey(baseSessionKey, parsed.extracted.taskKey);
   const sessionKey = taskSessionKey || baseSessionKey;
@@ -87,71 +87,87 @@ export function createNativeCommandTurnContext(args: {
   senderDisplayName: string;
   body: string;
 }): BncrInboundContextPayload | Promise<BncrInboundContextPayload> {
-  return resolveBncrChannelInboundRuntime(args.api).buildContext({
-    channel: args.channelId,
-    provider: args.channelId,
-    surface: args.channelId,
-    accountId: args.accountId,
-    messageId: args.msgId,
-    timestamp: Date.now(),
-    from: args.senderIdForContext,
-    sender: {
-      id: args.senderIdForContext,
-      name: args.senderDisplayName,
-      username: args.senderDisplayName,
-    },
-    conversation: {
-      kind: args.peer.kind,
-      id: args.peer.id,
-      label: args.displayTo,
-      routePeer: {
+  return Promise.resolve(
+    resolveBncrChannelInboundRuntime(args.api).buildContext({
+      channel: args.channelId,
+      provider: args.channelId,
+      surface: args.channelId,
+      accountId: args.accountId,
+      messageId: args.msgId,
+      timestamp: Date.now(),
+      from: args.senderIdForContext,
+      sender: {
+        id: args.senderIdForContext,
+        name: args.senderDisplayName,
+        username: args.senderDisplayName,
+      },
+      conversation: {
         kind: args.peer.kind,
         id: args.peer.id,
+        label: args.displayTo,
+        routePeer: {
+          kind: args.peer.kind,
+          id: args.peer.id,
+        },
       },
-    },
-    route: {
-      agentId: args.resolvedRoute.agentId,
-      accountId: args.accountId,
-      routeSessionKey: args.resolvedRoute.sessionKey,
-      dispatchSessionKey: args.sessionKey,
-      mainSessionKey: args.resolvedRoute.mainSessionKey,
-    },
-    reply: {
-      to: args.displayTo,
-      originatingTo: args.originatingTo,
-      replyToId: args.msgId,
-    },
-    message: {
-      inboundEventKind: 'user_request',
-      body: args.body,
-      rawBody: args.body,
-      bodyForAgent: args.body,
-      commandBody: args.body,
-      envelopeFrom: args.originatingTo,
-      senderLabel: args.senderDisplayName,
-    },
-    commandTurn: {
+      route: {
+        agentId: args.resolvedRoute.agentId,
+        accountId: args.accountId,
+        routeSessionKey: args.resolvedRoute.sessionKey,
+        dispatchSessionKey: args.sessionKey,
+        mainSessionKey: args.resolvedRoute.mainSessionKey,
+      },
+      reply: {
+        to: args.displayTo,
+        originatingTo: args.originatingTo,
+        replyToId: args.msgId,
+      },
+      message: {
+        inboundEventKind: 'user_request',
+        body: args.body,
+        rawBody: args.body,
+        bodyForAgent: args.body,
+        commandBody: args.body,
+        envelopeFrom: args.originatingTo,
+        senderLabel: args.senderDisplayName,
+      },
+      commandTurn: {
+        kind: 'native',
+        source: 'native',
+        authorized: true,
+        body: args.body,
+      },
+      access: {
+        mentions: {
+          canDetectMention: true,
+          wasMentioned: true,
+          effectiveWasMentioned: true,
+        },
+        commands: {
+          authorized: true,
+          allowTextCommands: true,
+          useAccessGroups: false,
+          authorizers: [],
+        },
+      },
+      extra: {
+        OriginatingChannel: args.channelId,
+      },
+    }),
+  ).then((ctx) => {
+    ctx.From = args.senderIdForContext;
+    ctx.To = args.displayTo;
+    ctx.SenderId = args.senderIdForContext;
+    ctx.OriginatingChannel = args.channelId;
+    ctx.CommandAuthorized = true;
+    ctx.CommandSource = 'native';
+    ctx.CommandTurn = {
       kind: 'native',
       source: 'native',
       authorized: true,
       body: args.body,
-    },
-    access: {
-      mentions: {
-        canDetectMention: true,
-        wasMentioned: true,
-        effectiveWasMentioned: true,
-      },
-      commands: {
-        authorized: true,
-        allowTextCommands: true,
-        useAccessGroups: false,
-        authorizers: [],
-      },
-    },
-    extra: {
-      OriginatingChannel: args.channelId,
-    },
+    };
+    return ctx;
   });
 }
 

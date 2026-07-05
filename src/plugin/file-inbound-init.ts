@@ -45,34 +45,49 @@ export function createBncrFileInboundInitHandler(runtime: BncrFileInboundRuntime
     const chunkSize = runtime.finiteNonNegativeNumberOrNull(params?.chunkSize ?? 256 * 1024);
     const totalChunks = runtime.finiteNonNegativeNumberOrNull(params?.totalChunks);
     const fileSha256 = runtime.asString(params?.fileSha256 || '').trim();
+    const routeFromParams = runtime.parseRouteLike({
+      platform: runtime.asString(params?.platform || '').trim(),
+      groupId: runtime.asString(params?.groupId || '0').trim() || '0',
+      userId: runtime.asString(params?.userId || '0').trim() || '0',
+    });
+
+    const reject = (error: string) => {
+      runtime.logWarn(
+        'file',
+        `file.init reject accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId || '-'} error=${error} sessionKey=${sessionKey || '-'} fileSize=${fileSize ?? 'null'} chunkSize=${chunkSize ?? 'null'} totalChunks=${totalChunks ?? 'null'}`,
+      );
+      respond(false, { error });
+    };
 
     if (!transferId || !sessionKey || !fileSize || !chunkSize || !totalChunks) {
-      respond(false, { error: 'transferId/sessionKey/fileSize/chunkSize/totalChunks required' });
+      reject('transferId/sessionKey/fileSize/chunkSize/totalChunks required');
       return;
     }
     if (fileSize > runtime.inboundFileTransferMaxBytes) {
-      respond(false, {
-        error: `fileSize too large size=${fileSize} max=${runtime.inboundFileTransferMaxBytes}`,
-      });
+      reject(`fileSize too large size=${fileSize} max=${runtime.inboundFileTransferMaxBytes}`);
       return;
     }
     if (totalChunks > runtime.inboundFileTransferMaxChunks) {
-      respond(false, {
-        error: `totalChunks too large total=${totalChunks} max=${runtime.inboundFileTransferMaxChunks}`,
-      });
+      reject(
+        `totalChunks too large total=${totalChunks} max=${runtime.inboundFileTransferMaxChunks}`,
+      );
       return;
     }
     const expectedTotalChunks = Math.ceil(fileSize / chunkSize);
     if (totalChunks !== expectedTotalChunks) {
-      respond(false, {
-        error: `totalChunks mismatch total=${totalChunks} expected=${expectedTotalChunks}`,
-      });
+      reject(`totalChunks mismatch total=${totalChunks} expected=${expectedTotalChunks}`);
       return;
     }
 
-    const normalized = runtime.normalizeStoredSessionKey(sessionKey);
+    let normalized = runtime.normalizeStoredSessionKey(sessionKey);
+    if (!normalized && routeFromParams) {
+      normalized = {
+        sessionKey: runtime.buildCanonicalSessionKey(routeFromParams),
+        route: routeFromParams,
+      };
+    }
     if (!normalized) {
-      respond(false, { error: 'invalid sessionKey' });
+      reject('invalid sessionKey');
       return;
     }
 

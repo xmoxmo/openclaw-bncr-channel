@@ -14,8 +14,8 @@ import { resolveBncrOutboundTarget } from '../../src/messaging/outbound/target-r
 
 const route = {
   platform: 'tgBot',
-  userId: '6278285192',
   groupId: '-1003776014601',
+  userId: '0',
 };
 
 function textEntry(id = 'adapter-text-1') {
@@ -67,7 +67,7 @@ test('createBncrDurableMessageQueuedAdapter maps text sends to queued receipts',
 
   const result = await adapter.send.text({
     cfg: {},
-    to: 'Bncr:tgBot:-1003776014601:6278285192',
+    to: 'Bncr:tgBot:-1003776014601:0',
     text: 'hello',
     accountId: 'Primary',
     replyToId: 'source-mid-adapter',
@@ -92,7 +92,7 @@ test('createBncrDurableMessageQueuedAdapter can map media sends without taking o
 
   const result = await adapter.send.media({
     cfg: {},
-    to: 'Bncr:tgBot:-1003776014601:6278285192',
+    to: 'Bncr:tgBot:-1003776014601:0',
     text: 'caption',
     mediaUrl: '/tmp/adapter.png',
     accountId: 'Primary',
@@ -112,7 +112,7 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows text context int
     normalizeAccountId: (value) => value || 'Primary',
     normalizeReplyToId: (value) => value || '',
     resolveTarget: (ctx) => {
-      assert.equal(ctx.to, 'Bncr:tgBot:-1003776014601:6278285192');
+      assert.equal(ctx.to, 'Bncr:tgBot:-1003776014601:0');
       return {
         route,
         sessionKey: 'agent:orion:bncr:direct:demo',
@@ -123,7 +123,7 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows text context int
 
   const result = await adapter.send.text({
     cfg: {},
-    to: 'Bncr:tgBot:-1003776014601:6278285192',
+    to: 'Bncr:tgBot:-1003776014601:0',
     text: 'shadow text',
     accountId: 'Primary',
     replyToId: 'source-shadow-text',
@@ -153,7 +153,7 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows media context in
 
   const result = await adapter.send.media({
     cfg: {},
-    to: 'Bncr:tgBot:-1003776014601:6278285192',
+    to: 'Bncr:tgBot:-1003776014601:0',
     text: 'shadow media',
     mediaUrl: '/tmp/shadow.png',
     mediaLocalRoots: ['/tmp'],
@@ -186,7 +186,7 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows standard target 
         target: ctx.to,
       });
       assert.ok(sessionRoute);
-      assert.equal(sessionRoute.target.to, 'Bncr:tgBot:-1003776014601:6278285192');
+      assert.equal(sessionRoute.target.to, 'Bncr:tgBot:-1003776014601:0');
       return {
         route: target.route,
         sessionKey: sessionRoute.sessionKey,
@@ -197,7 +197,7 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows standard target 
 
   const result = await adapter.send.text({
     cfg: {},
-    to: 'Bncr:tgBot:-1003776014601:6278285192',
+    to: 'Bncr:tgBot:-1003776014601:0',
     text: 'shadow through real resolver',
     accountId: 'Primary',
   });
@@ -206,7 +206,7 @@ test('createBncrDurableMessageQueuedAdapterFromBuilders shadows standard target 
   assert.deepEqual(result.receipt.raw[0].meta.route, route);
   assert.equal(
     result.receipt.raw[0].meta.sessionKey,
-    'agent:orion:bncr:direct:7467426f743a2d313030333737363031343630313a36323738323835313932',
+    'agent:orion:bncr:group:7467426f743a2d31303033373736303134363031',
   );
   assert.equal(result.receipt.raw[0].meta.deliveryStage, 'queued');
 });
@@ -223,7 +223,7 @@ test('createBncrDurableMessageQueuedAdapter can map explicitly wired payload sen
 
   const result = await adapter.send.payload({
     cfg: {},
-    to: 'Bncr:tgBot:-1003776014601:6278285192',
+    to: 'Bncr:tgBot:-1003776014601:0',
     payload: { type: 'custom-test-payload', text: 'payload text' },
     accountId: 'Primary',
   });
@@ -248,7 +248,7 @@ test('createBncrDurableMessageQueuedAdapter propagates enqueue failures instead 
     () =>
       adapter.send.text({
         cfg: {},
-        to: 'Bncr:tgBot:-1003776014601:6278285192',
+        to: 'Bncr:tgBot:-1003776014601:0',
         text: 'must not be acknowledged',
         accountId: 'Primary',
       }),
@@ -268,7 +268,7 @@ test('createBncrDurableMessageQueuedAdapter propagates payload enqueue failures 
     () =>
       adapter.send.payload({
         cfg: {},
-        to: 'Bncr:tgBot:-1003776014601:6278285192',
+        to: 'Bncr:tgBot:-1003776014601:0',
         payload: { type: 'custom-test-payload' },
         accountId: 'Primary',
       }),

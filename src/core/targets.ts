@@ -36,6 +36,14 @@ export function asTargetString(value: unknown, fallback = ''): string {
 
 export function parseRouteFromStandardDisplayScope(scope: string): BncrRoute | null {
   const parts = asTargetString(scope).trim().split(':');
+  if (parts.length === 3) {
+    const [platform, kind, id] = parts;
+    if (!platform || !kind || !id) return null;
+    if (kind === 'User') return { platform, groupId: '0', userId: id };
+    if (kind === 'Group') return { platform, groupId: id, userId: '0' };
+    if (kind.toLowerCase() === 'user' || kind.toLowerCase() === 'group') return null;
+  }
+
   if (parts.length === 2) {
     const [platform, userId] = parts;
     if (!platform || !userId) return null;
@@ -45,10 +53,31 @@ export function parseRouteFromStandardDisplayScope(scope: string): BncrRoute | n
   if (parts.length === 3) {
     const [platform, groupId, userId] = parts;
     if (!platform || !groupId || !userId) return null;
+    if (groupId !== '0' && userId !== '0') {
+      // Legacy group routes may still include the triggering userId; collapse them
+      // back to the shared group route so old targets remain deliverable.
+      return { platform, groupId, userId: '0' };
+    }
     return { platform, groupId, userId };
   }
 
   return null;
+}
+
+function parseGroupScope(scope: string): { platform: string; groupId: string } | null {
+  const parts = asTargetString(scope).trim().split(':');
+  if (parts.length !== 2) return null;
+  const [platform, groupId] = parts;
+  if (!platform || !groupId) return null;
+  return { platform, groupId };
+}
+
+function parseDirectScope(scope: string): { platform: string; userId: string } | null {
+  const parts = asTargetString(scope).trim().split(':');
+  if (parts.length !== 2) return null;
+  const [platform, userId] = parts;
+  if (!platform || !userId) return null;
+  return { platform, userId };
 }
 
 export function normalizeDisplayScopePrefix(scope: string): string {
@@ -102,11 +131,22 @@ export function routeScopeToHex(route: BncrRoute): string {
   return Buffer.from(raw, 'utf8').toString('hex').toLowerCase();
 }
 
+export function groupScopeToHex(route: BncrRoute): string {
+  const raw = `${route.platform}:${route.groupId}`;
+  return Buffer.from(raw, 'utf8').toString('hex').toLowerCase();
+}
+
+export function directScopeToHex(route: BncrRoute): string {
+  const raw = `${route.platform}:${route.userId}`;
+  return Buffer.from(raw, 'utf8').toString('hex').toLowerCase();
+}
+
 export function parseRouteFromScope(scope: string): BncrRoute | null {
   const parts = asTargetString(scope).trim().split(':');
   if (parts.length < 3) return null;
   const [platform, groupId, userId] = parts;
   if (!platform || !groupId || !userId) return null;
+  if (groupId !== '0' && userId !== '0') return null;
   return { platform, groupId, userId };
 }
 
@@ -117,6 +157,34 @@ export function parseRouteFromHexScope(scopeHex: string): BncrRoute | null {
   try {
     const decoded = Buffer.from(rawHex, 'hex').toString('utf8');
     return parseRouteFromScope(decoded);
+  } catch {
+    return null;
+  }
+}
+
+export function parseGroupRouteFromHexScope(scopeHex: string): BncrRoute | null {
+  const rawHex = asTargetString(scopeHex).trim();
+  if (!isLowerHex(rawHex)) return null;
+
+  try {
+    const decoded = Buffer.from(rawHex, 'hex').toString('utf8');
+    const parsed = parseGroupScope(decoded);
+    if (!parsed) return null;
+    return { platform: parsed.platform, groupId: parsed.groupId, userId: '0' };
+  } catch {
+    return null;
+  }
+}
+
+export function parseDirectRouteFromHexScope(scopeHex: string): BncrRoute | null {
+  const rawHex = asTargetString(scopeHex).trim();
+  if (!isLowerHex(rawHex)) return null;
+
+  try {
+    const decoded = Buffer.from(rawHex, 'hex').toString('utf8');
+    const parsed = parseDirectScope(decoded);
+    if (!parsed) return null;
+    return { platform: parsed.platform, groupId: '0', userId: parsed.userId };
   } catch {
     return null;
   }
@@ -143,9 +211,24 @@ export function parseStrictBncrSessionKey(input: string): {
 
   if (isLowerHex(payload)) {
     scopeHex = payload.toLowerCase();
-    route = parseRouteFromHexScope(scopeHex);
+    route =
+      inputKind === 'group'
+        ? parseGroupRouteFromHexScope(scopeHex)
+        : parseDirectRouteFromHexScope(scopeHex) || parseRouteFromHexScope(scopeHex);
   } else {
-    route = parseRouteFromScope(payload);
+    route =
+      inputKind === 'group'
+        ? (() => {
+            const parsed = parseGroupScope(payload);
+            return parsed
+              ? { platform: parsed.platform, groupId: parsed.groupId, userId: '0' }
+              : null;
+          })()
+        : (() => {
+            const direct = parseDirectScope(payload);
+            if (direct) return { platform: direct.platform, groupId: '0', userId: direct.userId };
+            return parseRouteFromScope(payload);
+          })();
     if (route) scopeHex = routeScopeToHex(route);
   }
 
@@ -237,13 +320,17 @@ export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
 
   const payload = raw.match(/^Bncr:(.+)$/)?.[1];
   if (!payload) return null;
-  return parseRouteFromStandardDisplayScope(payload);
+  const route = parseRouteFromStandardDisplayScope(payload);
+  if (!route) return null;
+  return route;
 }
 
 export function buildCanonicalBncrSessionKey(route: BncrRoute, canonicalAgentId: string): string {
   const agentId = asTargetString(canonicalAgentId).trim() || 'main';
-  const kind = resolveCanonicalSessionKind();
-  return `agent:${agentId}:bncr:${kind}:${routeScopeToHex(route)}`;
+  if (route.groupId !== '0') {
+    return `agent:${agentId}:bncr:group:${groupScopeToHex(route)}`;
+  }
+  return `agent:${agentId}:bncr:direct:${directScopeToHex(route)}`;
 }
 
 export function normalizeStoredSessionKey(
@@ -266,17 +353,17 @@ export function normalizeStoredSessionKey(
   let route: BncrRoute | null = null;
   let passthroughAgentId: string | null = null;
 
-  const strict = parseStrictBncrSessionKey(base);
-  if (strict) {
-    route = strict.route;
-    passthroughAgentId = strict.inputAgentId;
+  const legacy = parseLegacySessionKey(base);
+  if (legacy) {
+    route = legacy.route;
+    passthroughAgentId = legacy.inputAgentId || null;
   }
 
   if (!route) {
-    const legacy = parseLegacySessionKey(base);
-    if (legacy) {
-      route = legacy.route;
-      passthroughAgentId = legacy.inputAgentId || null;
+    const strict = parseStrictBncrSessionKey(base);
+    if (strict) {
+      route = strict.route;
+      passthroughAgentId = strict.inputAgentId;
     }
   }
 
@@ -322,6 +409,7 @@ export function parseRouteLike(input: unknown): BncrRoute | null {
   const groupId = asTargetString(routeInput?.groupId || '').trim();
   const userId = asTargetString(routeInput?.userId || '').trim();
   if (!platform || !groupId || !userId) return null;
+  if (groupId !== '0' && userId !== '0') return null;
   return { platform, groupId, userId };
 }
 
@@ -333,10 +421,11 @@ export type BncrExplicitTargetSource =
   | 'route-scope';
 
 export function formatDisplayScope(route: BncrRoute): string {
-  if (route.groupId === '0' && route.userId !== '0') {
-    return `Bncr:${route.platform}:${route.userId}`;
-  }
-  return `Bncr:${route.platform}:${route.groupId}:${route.userId}`;
+  const platform = asTargetString(route?.platform).trim();
+  const groupId = asTargetString(route?.groupId || '0').trim() || '0';
+  const userId = asTargetString(route?.userId || '0').trim() || '0';
+  if (groupId !== '0') return `Bncr:${platform}:${groupId}:0`;
+  return `Bncr:${platform}:0:${userId}`;
 }
 
 export function buildDisplayScopeCandidates(route: BncrRoute): string[] {

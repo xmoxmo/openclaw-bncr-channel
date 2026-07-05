@@ -18,6 +18,8 @@ export function createInboundApiStub(options = {}) {
     turnRuns: [],
     sessionPatches: [],
     savedMediaBuffers: [],
+    replyDispatchStarts: [],
+    replyDispatchCompletions: [],
   };
 
   const restoreSessionRuntime = setBncrInboundSessionRuntimeForTest({
@@ -99,7 +101,7 @@ export function createInboundApiStub(options = {}) {
             : {}),
           async saveMediaBuffer(buffer, mimeType, direction, maxBytes, fileName) {
             calls.savedMediaBuffers.push({ buffer, mimeType, direction, maxBytes, fileName });
-            return { path: '/tmp/bncr-inbound-media.bin' };
+            return { path: `/tmp/bncr-inbound-media-${calls.savedMediaBuffers.length}.bin` };
           },
         },
         reply: {
@@ -110,15 +112,33 @@ export function createInboundApiStub(options = {}) {
             return `ENV:${body}`;
           },
           async dispatchReplyWithBufferedBlockDispatcher({ ctx, dispatcherOptions }) {
+            calls.replyDispatchStarts.push({
+              sessionKey: ctx?.SessionKey,
+              to: ctx?.To,
+              messageSid: ctx?.MessageSid,
+            });
+            if (typeof options.onReplyDispatchStart === 'function') {
+              await options.onReplyDispatchStart({ ctx, dispatcherOptions, calls });
+            }
             if (ctx?.CommandTurn?.kind === 'native' && !nativeCommandProducesReply) {
               calls.delivered.push({ text: null, kind: 'native-noop' });
+              calls.replyDispatchCompletions.push({
+                sessionKey: ctx?.SessionKey,
+                to: ctx?.To,
+                messageSid: ctx?.MessageSid,
+              });
               return;
             }
             await dispatcherOptions.deliver({ text: 'reply from agent' }, { kind: 'final' });
             calls.delivered.push({ text: 'reply from agent', kind: 'final' });
+            calls.replyDispatchCompletions.push({
+              sessionKey: ctx?.SessionKey,
+              to: ctx?.To,
+              messageSid: ctx?.MessageSid,
+            });
           },
         },
-        turn: {
+        inbound: {
           buildContext(args) {
             calls.builtContextArgs.push(args);
             const ctx = {
@@ -132,9 +152,12 @@ export function createInboundApiStub(options = {}) {
               MediaType: args.media?.[0]?.contentType,
               ChatType: args.conversation.kind,
               SenderId: args.sender.id,
+              From: args.from,
+              OwnerAllowFrom: args.extra?.OwnerAllowFrom,
               MessageSid: args.messageId,
               To: args.reply.to,
               OriginatingTo: args.reply.originatingTo,
+              OriginatingChannel: args.extra?.OriginatingChannel,
               EnvelopeFrom: args.message.envelopeFrom,
               ConversationLabel: args.conversation.label,
               SessionKey: args.route.dispatchSessionKey,
@@ -142,13 +165,18 @@ export function createInboundApiStub(options = {}) {
               DispatchSessionKey: args.route.dispatchSessionKey,
               MainSessionKey: args.route.mainSessionKey,
               CommandTurn: args.commandTurn,
+              CommandAuthorized: args.commandTurn?.authorized,
+              CommandSource: args.commandTurn?.source,
+              AccessCommands: args.access?.commands,
               UntrustedStructuredContext: args.supplemental?.untrustedContext,
             };
             calls.builtContexts.push(ctx);
             return ctx;
           },
           async run({ adapter }) {
-            const turn = adapter.resolveTurn();
+            const input = adapter.ingest();
+            const preflight = await adapter.preflight?.(input);
+            const turn = adapter.resolveTurn(input, { kind: 'message' }, preflight);
             calls.turnRuns.push(turn);
             await turn.recordInboundSession({
               storePath: turn.storePath,
@@ -156,8 +184,11 @@ export function createInboundApiStub(options = {}) {
               ctx: turn.ctxPayload,
               updateLastRoute: turn.record.updateLastRoute,
               onRecordError: turn.record.onRecordError,
+              trackSessionMetaTask: turn.record.trackSessionMetaTask,
             });
-            await turn.runDispatch();
+            if (preflight?.admission?.kind !== 'observeOnly') {
+              await turn.runDispatch();
+            }
             adapter.onFinalize?.();
           },
         },
@@ -177,10 +208,14 @@ export function withInboundSessionRuntimeStub(runtime) {
 export function buildParsedInboundText(overrides = {}) {
   return {
     accountId: 'Primary',
+    protocolVersion: 'scene-routing-v1',
+    capabilities: ['scene-routing-v1'],
     clientId: 'client-1',
     platform: 'tgBot',
     groupId: '-1001',
     userId: '10001',
+    isGroup: true,
+    isAdmin: false,
     type: 'text',
     msg: 'hello inbound',
     mimeType: 'text/plain',

@@ -100,9 +100,9 @@ test('supportsAction only accepts send and extractToolSend normalizes invalid ar
   assert.equal(messageActions.supportsAction({ action: 'delete' }), false);
   assert.equal(messageActions.extractToolSend({ args: null }), null);
   assert.deepEqual(
-    messageActions.extractToolSend({ args: { to: 'Bncr:tgBot:10001', message: 'hi' } }),
+    messageActions.extractToolSend({ args: { to: 'Bncr:tgBot:0:10001', message: 'hi' } }),
     {
-      to: 'Bncr:tgBot:10001',
+      to: 'Bncr:tgBot:0:10001',
       message: 'hi',
     },
   );

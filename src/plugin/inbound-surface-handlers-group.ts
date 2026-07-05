@@ -53,6 +53,9 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     clientId?: string;
     context: GatewayRequestHandlerOptions['context'];
   }) => void;
+  buildCanonicalSessionKey: Parameters<
+    typeof createBncrFileInboundHandlersComponent
+  >[0]['buildCanonicalSessionKey'];
   refreshLiveConnectionState: (args: {
     accountId: string;
     connId: string;
@@ -75,6 +78,14 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
   ensureCanonicalAgentId: Parameters<
     typeof createBncrInboundHandlersComponent
   >[0]['ensureCanonicalAgentId'];
+  defaultAdminAgentId: Parameters<
+    typeof createBncrInboundHandlersComponent
+  >[0]['defaultAdminAgentId'];
+  defaultPublicAgentId: Parameters<
+    typeof createBncrInboundHandlersComponent
+  >[0]['defaultPublicAgentId'];
+  sceneRegistry: Parameters<typeof createBncrInboundHandlersComponent>[0]['sceneRegistry'];
+  groupHistories: Parameters<typeof createBncrInboundHandlersComponent>[0]['groupHistories'];
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlersComponent
   >[0]['prepareInboundAcceptance'];
@@ -111,6 +122,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     matchesTransferOwner: runtime.matchesTransferOwner,
     refreshAcceptedFileTransferLiveState: runtime.refreshAcceptedFileTransferLiveState,
     logWarn: runtime.logWarn,
+    buildCanonicalSessionKey: runtime.buildCanonicalSessionKey,
     fileRecvTransfers: runtime.fileRecvTransfers,
     inboundFileTransferMaxBytes: runtime.inboundFileTransferMaxBytes,
     inboundFileTransferMaxChunks: runtime.inboundFileTransferMaxChunks,
@@ -136,6 +148,10 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     buildActiveConnectionDebugList: runtime.buildActiveConnectionDebugList,
     markLastInboundAt: runtime.markLastInboundAt,
     ensureCanonicalAgentId: runtime.ensureCanonicalAgentId,
+    defaultAdminAgentId: runtime.defaultAdminAgentId,
+    defaultPublicAgentId: runtime.defaultPublicAgentId,
+    sceneRegistry: runtime.sceneRegistry,
+    groupHistories: runtime.groupHistories,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     logInboundSummary: runtime.logInboundSummary,
     flushPushQueueBestEffort: runtime.flushPushQueueBestEffort,

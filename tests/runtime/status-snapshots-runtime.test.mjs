@@ -97,7 +97,7 @@ test('buildAccountRuntimeSnapshot preserves zero timestamp fields', () => {
     startedAt: Date.now(),
     lastSession: {
       sessionKey: 'agent:main:bncr:direct:deadbeef',
-      scope: 'Bncr:tgBot:10001',
+      scope: 'Bncr:tgBot:0:10001',
       updatedAt: 0,
     },
     lastActivityAt: 0,

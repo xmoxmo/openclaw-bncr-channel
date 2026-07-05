@@ -5,6 +5,7 @@ import { formatDisplayScope, normalizeStoredSessionKey, parseRouteLike } from '.
 import type { BncrRoute } from '../core/types.ts';
 import type { BncrInboundParamsInput } from '../messaging/inbound/contracts.ts';
 import { dispatchBncrInbound } from '../messaging/inbound/dispatch.ts';
+import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
 import { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from '../messaging/outbound/reasons.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
@@ -150,6 +151,9 @@ export function createBncrFileInboundHandlersComponent(runtime: {
     typeof createBncrFileInboundHandlers
   >[0]['refreshAcceptedFileTransferLiveState'];
   logWarn: Parameters<typeof createBncrFileInboundHandlers>[0]['logWarn'];
+  buildCanonicalSessionKey: Parameters<
+    typeof createBncrFileInboundHandlers
+  >[0]['buildCanonicalSessionKey'];
   fileRecvTransfers: Parameters<typeof createBncrFileInboundHandlers>[0]['fileRecvTransfers'];
   inboundFileTransferMaxBytes: number;
   inboundFileTransferMaxChunks: number;
@@ -166,6 +170,7 @@ export function createBncrFileInboundHandlersComponent(runtime: {
     logWarn: runtime.logWarn,
     parseRouteLike,
     normalizeStoredSessionKey,
+    buildCanonicalSessionKey: runtime.buildCanonicalSessionKey,
     saveInboundMediaBuffer: async ({ buffer, mimeType, fileName }) =>
       await saveOpenClawChannelMediaBuffer(
         runtime.getApi(),
@@ -209,6 +214,10 @@ export function createBncrInboundHandlersComponent(runtime: {
   >[0]['buildActiveConnectionDebugList'];
   markLastInboundAt: (accountId: string) => void;
   ensureCanonicalAgentId: Parameters<typeof createBncrInboundHandlers>[0]['ensureCanonicalAgentId'];
+  defaultAdminAgentId: Parameters<typeof createBncrInboundHandlers>[0]['defaultAdminAgentId'];
+  defaultPublicAgentId: Parameters<typeof createBncrInboundHandlers>[0]['defaultPublicAgentId'];
+  sceneRegistry: Parameters<typeof createBncrInboundHandlers>[0]['sceneRegistry'];
+  groupHistories: BncrGroupHistoryMap;
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlers
   >[0]['prepareInboundAcceptance'];
@@ -250,6 +259,10 @@ export function createBncrInboundHandlersComponent(runtime: {
     markLastInboundAt: runtime.markLastInboundAt,
     getConfig: () => getOpenClawRuntimeConfig(runtime.getApi()),
     ensureCanonicalAgentId: runtime.ensureCanonicalAgentId,
+    defaultAdminAgentId: runtime.defaultAdminAgentId,
+    defaultPublicAgentId: runtime.defaultPublicAgentId,
+    sceneRegistry: runtime.sceneRegistry,
+    groupHistories: runtime.groupHistories,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     formatDisplayScope,
     logInboundSummary: runtime.logInboundSummary,
@@ -259,13 +272,33 @@ export function createBncrInboundHandlersComponent(runtime: {
         trigger: OUTBOUND_FLUSH_TRIGGER.INBOUND,
         reason: OUTBOUND_FLUSH_REASON.INBOUND_ACCEPTED,
       }),
-    dispatchInbound: ({ cfg, parsed, canonicalAgentId }) =>
+    dispatchInbound: ({
+      cfg,
+      parsed,
+      canonicalAgentId,
+      resolvedAgentId,
+      shouldDispatch,
+      shouldAccumulate,
+      sceneRegistry,
+      groupHistories,
+      defaultAdminAgentId,
+      defaultPublicAgentId,
+      now,
+    }) =>
       dispatchBncrInbound({
         api: runtime.getApi(),
         channelId: runtime.channelId,
         cfg,
         parsed,
         canonicalAgentId,
+        resolvedAgentId,
+        shouldDispatch,
+        shouldAccumulate,
+        sceneRegistry,
+        groupHistories,
+        defaultAdminAgentId,
+        defaultPublicAgentId,
+        now,
         rememberSessionRoute: runtime.rememberSessionRoute,
         enqueueFromReply: runtime.enqueueFromReply,
         setInboundActivity: runtime.setInboundActivity,

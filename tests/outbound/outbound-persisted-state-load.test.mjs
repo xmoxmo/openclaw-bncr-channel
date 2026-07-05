@@ -32,7 +32,7 @@ test('startService caps oversized persisted account activity arrays during load'
       const groupId = `-${200000 + i}`;
       return {
         accountId: mkAccount(i),
-        sessionKey: `agent:orion:bncr:direct:${Buffer.from(`tgBot:${groupId}:10001`).toString('hex')}`,
+        sessionKey: `agent:orion:bncr:group:${Buffer.from(`tgBot:${groupId}`).toString('hex')}`,
         scope: 'ignored',
         updatedAt: nowTs + i,
       };
@@ -81,9 +81,9 @@ test('startService caps oversized persisted session routes during load', async (
   try {
     const sessionRoutes = Array.from({ length: 1005 }, (_, i) => {
       const groupId = `-${100000 + i}`;
-      const route = { platform: 'tgBot', groupId, userId: '10001' };
+      const route = { platform: 'tgBot', groupId, userId: '0' };
       return {
-        sessionKey: `agent:orion:bncr:direct:${Buffer.from(`tgBot:${groupId}:10001`).toString('hex')}`,
+        sessionKey: `agent:orion:bncr:group:${Buffer.from(`tgBot:${groupId}`).toString('hex')}`,
         accountId: 'Primary',
         route,
         updatedAt: Date.now() + i,
@@ -106,25 +106,25 @@ test('startService caps oversized persisted session routes during load', async (
     assert.equal(bridge.routeAliases.size, 1000);
     assert.equal(
       bridge.sessionRoutes.has(
-        `agent:orion:bncr:direct:${Buffer.from('tgBot:-100000:10001').toString('hex')}`,
+        `agent:orion:bncr:group:${Buffer.from('tgBot:-100000').toString('hex')}`,
       ),
       false,
     );
     assert.equal(
       bridge.sessionRoutes.has(
-        `agent:orion:bncr:direct:${Buffer.from('tgBot:-100004:10001').toString('hex')}`,
+        `agent:orion:bncr:group:${Buffer.from('tgBot:-100004').toString('hex')}`,
       ),
       false,
     );
     assert.equal(
       bridge.sessionRoutes.has(
-        `agent:orion:bncr:direct:${Buffer.from('tgBot:-100005:10001').toString('hex')}`,
+        `agent:orion:bncr:group:${Buffer.from('tgBot:-100005').toString('hex')}`,
       ),
       true,
     );
     assert.equal(
       bridge.sessionRoutes.has(
-        `agent:orion:bncr:direct:${Buffer.from('tgBot:-101004:10001').toString('hex')}`,
+        `agent:orion:bncr:group:${Buffer.from('tgBot:-101004').toString('hex')}`,
       ),
       true,
     );
@@ -138,7 +138,7 @@ test('startService caps oversized persisted deadLetter state during load', async
   const bridge = createBridge();
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bncr-large-dead-state-'));
   try {
-    const persistedSessionKey = 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031';
+    const persistedSessionKey = 'agent:orion:bncr:group:7467426f743a2d31303031';
     const deadLetter = Array.from({ length: 1005 }, (_, i) => {
       const entry = makeEntry(`persisted-dead-${i}`, `dead ${i}`);
       entry.sessionKey = persistedSessionKey;
@@ -172,7 +172,7 @@ test('startService skips malformed persisted entries without blocking valid stat
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bncr-dirty-state-'));
   try {
     const nowTs = Date.now();
-    const persistedSessionKey = 'agent:orion:bncr:direct:7467426f743a2d313030313a3130303031';
+    const persistedSessionKey = 'agent:orion:bncr:group:7467426f743a2d31303031';
     const goodOutbox = makeEntry('persisted-good-outbox', 'good outbox');
     goodOutbox.sessionKey = persistedSessionKey;
     goodOutbox.payload.sessionKey = persistedSessionKey;
@@ -256,7 +256,7 @@ test('startService skips malformed persisted entries without blocking valid stat
     assert.deepEqual(loadedOutbox.route, {
       platform: 'tgBot',
       groupId: '-1001',
-      userId: '10001',
+      userId: '0',
     });
     assert.deepEqual(
       bridge.deadLetter.map((entry) => entry.messageId),
@@ -268,7 +268,7 @@ test('startService skips malformed persisted entries without blocking valid stat
     assert.equal(bridge.deadLetter[0].lastAttemptAt, undefined);
     assert.equal(bridge.sessionRoutes.size, 1);
     assert.equal(Number.isFinite(Array.from(bridge.sessionRoutes.values())[0].updatedAt), true);
-    assert.equal(bridge.lastSessionByAccount.get('Primary')?.scope, 'Bncr:tgBot:-1001:10001');
+    assert.equal(bridge.lastSessionByAccount.get('Primary')?.scope, 'Bncr:tgBot:-1001:0');
     assert.equal(bridge.lastActivityByAccount.get('Primary'), nowTs - 1_000);
     assert.equal(bridge.lastInboundByAccount.get('Primary'), nowTs - 2_000);
     assert.equal(bridge.lastOutboundByAccount.get('Primary'), nowTs - 3_000);
@@ -278,6 +278,77 @@ test('startService skips malformed persisted entries without blocking valid stat
     assert.equal(diagnostics.register.lastDriftSnapshot.apiGeneration, 2);
     assert.equal(diagnostics.register.lastDriftSnapshot.postWarmupRegisterCount, 3);
     assert.equal(diagnostics.register.lastDriftSnapshot.traceWindowSize, 0);
+  } finally {
+    cleanupBridge(bridge);
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('startService restores persisted scene registry entries', async () => {
+  const bridge = createBridge();
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bncr-scene-state-'));
+  try {
+    const state = {
+      outbox: [],
+      deadLetter: [],
+      sessionRoutes: [],
+      sceneRegistry: [
+        {
+          sceneKey: 'tgBot:10001',
+          kind: 'direct',
+          status: 'allowed',
+          platform: 'tgBot',
+          userId: '10001',
+          userName: 'xmo',
+          agentId: 'main',
+          lastSeenAt: 100,
+        },
+        {
+          sceneKey: 'tgBot:-1001',
+          kind: 'group',
+          status: 'denied',
+          platform: 'tgBot',
+          groupId: '-1001',
+          groupName: 'wind_system',
+          lastSeenAt: 90,
+        },
+      ],
+    };
+    await fs.writeFile(
+      path.join(stateDir, 'bncr-bridge-state.json'),
+      JSON.stringify(state),
+      'utf8',
+    );
+
+    await bridge.startService({ stateDir }, false);
+
+    assert.deepEqual(Array.from(bridge.sceneRegistry.entries()), [
+      [
+        'tgBot:10001',
+        {
+          sceneKey: 'tgBot:10001',
+          kind: 'direct',
+          status: 'allowed',
+          platform: 'tgBot',
+          userId: '10001',
+          userName: 'xmo',
+          agentId: 'main',
+          lastSeenAt: 100,
+        },
+      ],
+      [
+        'tgBot:-1001',
+        {
+          sceneKey: 'tgBot:-1001',
+          kind: 'group',
+          status: 'denied',
+          platform: 'tgBot',
+          groupId: '-1001',
+          groupName: 'wind_system',
+          lastSeenAt: 90,
+        },
+      ],
+    ]);
   } finally {
     cleanupBridge(bridge);
     await fs.rm(stateDir, { recursive: true, force: true });

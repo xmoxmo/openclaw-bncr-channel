@@ -8,7 +8,7 @@ import {
   setGatewayContextRecorder,
 } from '../helpers/bncr-bridge.mjs';
 
-const target = 'Bncr:tgBot:-1001:10001';
+const target = 'Bncr:tgBot:-1001:0';
 
 test('channel.message text sends enqueue bncr outbox entries and return queued handoff receipts', async () => {
   const bridge = createBridge();

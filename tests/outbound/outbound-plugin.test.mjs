@@ -15,7 +15,7 @@ test('outbound replyAction drops reply target before channel text send', async (
 
   const result = await outbound.replyAction({
     accountId: ' Primary ',
-    to: ' Bncr:tgBot:-1001:10001 ',
+    to: ' Bncr:tgBot:-1001:0 ',
     text: ' status-like reply text ',
     replyToId: ' source-message-id ',
   });
@@ -24,7 +24,7 @@ test('outbound replyAction drops reply target before channel text send', async (
   assert.deepEqual(calls, [
     {
       accountId: 'Primary',
-      to: 'Bncr:tgBot:-1001:10001',
+      to: 'Bncr:tgBot:-1001:0',
       text: ' status-like reply text ',
     },
   ]);

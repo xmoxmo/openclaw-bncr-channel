@@ -15,21 +15,45 @@ export type BncrInboundParsedPeer = OpenClawChannelPeer;
 
 export type BncrInboundParamsInput = {
   accountId?: unknown;
+  protocolVersion?: unknown;
+  capabilities?: unknown;
   platform?: unknown;
   groupId?: unknown;
+  groupName?: unknown;
   userId?: unknown;
+  userName?: unknown;
   sessionKey?: unknown;
   originatingTo?: unknown;
   providedOriginatingTo?: unknown;
   to?: unknown;
   clientId?: unknown;
+  bridgeId?: unknown;
+  bridgeName?: unknown;
+  isGroup?: unknown;
+  isAdmin?: unknown;
   msg?: unknown;
   type?: unknown;
   base64?: unknown;
   path?: unknown;
+  paths?: unknown;
+  mediaList?: unknown;
   mimeType?: unknown;
   fileName?: unknown;
   msgId?: unknown;
+  shouldRespond?: unknown;
+  triggerKind?: unknown;
+  botName?: unknown;
+  isBotMentioned?: unknown;
+  isReplyToBot?: unknown;
+};
+
+export type BncrInboundMediaItem = {
+  path?: string;
+  base64?: string;
+  mimeType?: string;
+  fileName?: string;
+  type?: string;
+  transferId?: string;
 };
 
 export type BncrRememberSessionRoute = (

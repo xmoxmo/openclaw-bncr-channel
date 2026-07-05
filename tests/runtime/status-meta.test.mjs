@@ -17,7 +17,7 @@ test('buildStatusMetaFromRuntime exposes scope but not raw lastSessionKey', () =
     startedAt: Date.now() - 5_000,
     lastSession: {
       sessionKey: 'agent:main:bncr:direct:deadbeef',
-      scope: 'Bncr:tgBot:10001',
+      scope: 'Bncr:tgBot:0:10001',
       updatedAt: Date.now() - 1_000,
     },
     sessionRoutesCount: 1,
@@ -25,7 +25,7 @@ test('buildStatusMetaFromRuntime exposes scope but not raw lastSessionKey', () =
     legacyAccountResidue: 0,
   });
 
-  assert.equal(meta.lastSessionScope, 'Bncr:tgBot:10001');
+  assert.equal(meta.lastSessionScope, 'Bncr:tgBot:0:10001');
   assert.equal('lastSessionKey' in meta, false);
 });
 
@@ -43,7 +43,7 @@ test('buildStatusMetaFromRuntime preserves zero timestamp fields', () => {
     startedAt: Date.now(),
     lastSession: {
       sessionKey: 'agent:main:bncr:direct:deadbeef',
-      scope: 'Bncr:tgBot:10001',
+      scope: 'Bncr:tgBot:0:10001',
       updatedAt: 0,
     },
     lastActivityAt: 0,
@@ -78,7 +78,7 @@ test('buildStatusMetaFromRuntime drops non-finite timestamp fields', () => {
     startedAt: Date.now(),
     lastSession: {
       sessionKey: 'agent:main:bncr:direct:deadbeef',
-      scope: 'Bncr:tgBot:10001',
+      scope: 'Bncr:tgBot:0:10001',
       updatedAt: Number.NaN,
     },
     lastActivityAt: Number.POSITIVE_INFINITY,

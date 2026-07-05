@@ -55,6 +55,7 @@ export function resolveInboundSessionContext(args: {
   route: BncrRoute;
   sessionKeyFromRoute?: string;
   canonicalAgentId: string;
+  resolvedAgentId?: string;
   taskKey?: string;
   text: string;
   extractedText?: string;
@@ -74,15 +75,21 @@ export function resolveInboundSessionContext(args: {
       peer: args.peer,
     }),
   );
+  const normalizedAgentId =
+    (args.resolvedAgentId || '').trim() || resolvedRoute.agentId || args.canonicalAgentId;
   const baseSessionKey =
     normalizeInboundSessionKey(
       args.sessionKeyFromRoute || '',
       args.route,
-      args.canonicalAgentId || '',
+      normalizedAgentId || '',
     ) || resolvedRoute.sessionKey;
   const taskSessionKey = withTaskSessionKey(baseSessionKey, args.taskKey);
   return {
-    resolvedRoute,
+    resolvedRoute: {
+      ...resolvedRoute,
+      agentId: normalizedAgentId || resolvedRoute.agentId,
+      sessionKey: baseSessionKey || resolvedRoute.sessionKey,
+    },
     baseSessionKey,
     taskSessionKey,
     sessionKey: taskSessionKey || baseSessionKey,

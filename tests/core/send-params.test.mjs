@@ -12,12 +12,12 @@ test('normalizes text send params', () => {
     normalizeBncrSendParams({
       ...baseInput,
       params: {
-        to: ' Bncr:tgBot:-1001:10001 ',
+        to: ' Bncr:tgBot:-1001:0 ',
         message: ' hello ',
       },
     }),
     {
-      to: 'Bncr:tgBot:-1001:10001',
+      to: 'Bncr:tgBot:-1001:0',
       accountId: 'Primary',
       message: 'hello',
       caption: '',

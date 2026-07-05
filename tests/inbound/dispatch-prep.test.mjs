@@ -6,6 +6,7 @@ import {
   prepareBncrInboundSessionContext,
   resolveBncrInboundConversation,
 } from '../../src/messaging/inbound/dispatch-prep.ts';
+import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
 import { withInboundSessionRuntimeStub } from '../helpers/inbound-runtime.mjs';
 
 function createParsed(overrides = {}) {
@@ -60,6 +61,39 @@ function createApi(routeResult, extra = {}) {
     ...extra,
   };
 }
+
+test('parseBncrInboundParams prefers mediaList and falls back to legacy path/base64 fields', () => {
+  const parsedWithList = parseBncrInboundParams({
+    accountId: 'Primary',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    type: 'image',
+    mediaList: [
+      { path: '/tmp/a.png', mimeType: 'image/png', fileName: 'a.png', type: 'image' },
+      { path: '/tmp/b.jpg', mimeType: 'image/jpeg', fileName: 'b.jpg', type: 'image' },
+    ],
+    path: '/tmp/legacy.png',
+  });
+  assert.deepEqual(parsedWithList.mediaItems, [
+    { path: '/tmp/a.png', mimeType: 'image/png', fileName: 'a.png', type: 'image' },
+    { path: '/tmp/b.jpg', mimeType: 'image/jpeg', fileName: 'b.jpg', type: 'image' },
+  ]);
+
+  const parsedLegacy = parseBncrInboundParams({
+    accountId: 'Primary',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    type: 'image',
+    path: '/tmp/legacy.png',
+    mimeType: 'image/png',
+    fileName: 'legacy.png',
+  });
+  assert.deepEqual(parsedLegacy.mediaItems, [
+    { path: '/tmp/legacy.png', mimeType: 'image/png', fileName: 'legacy.png', type: 'image' },
+  ]);
+});
 
 test('resolveBncrInboundConversation throws when resolved route sessionKey is empty', () => {
   assert.throws(
@@ -126,6 +160,71 @@ test('prepareBncrInboundSessionContext resolves storePath from resolved agentId'
         sessionKey: resolution.baseSessionKey,
         accountId: 'Primary',
         route: resolution.route,
+      },
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test('prepareBncrInboundSessionContext saves multiple inbound media items and builds aggregated placeholder', async () => {
+  const { restore } = withInboundSessionRuntimeStub({
+    resolveStorePath(storeConfig, options) {
+      return `/tmp/${String(storeConfig || 'store')}-${options?.agentId || 'unknown'}.json`;
+    },
+    readSessionUpdatedAt() {
+      return 42;
+    },
+  });
+  const api = createApi({ sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion-worker' });
+  const resolution = resolveBncrInboundConversation({
+    api,
+    cfg: { session: { store: '/tmp/store' } },
+    channelId: 'bncr',
+    parsed: createParsed(),
+    canonicalAgentId: 'orion',
+  });
+
+  try {
+    const prepared = await prepareBncrInboundSessionContext({
+      api,
+      cfg: { session: { store: '/tmp/store' } },
+      parsed: createParsed({
+        msgType: 'image',
+        extracted: { text: '收到媒体文件' },
+        mediaItems: [
+          {
+            base64: Buffer.from('a').toString('base64'),
+            mimeType: 'image/png',
+            fileName: 'a.png',
+            type: 'image',
+          },
+          {
+            base64: Buffer.from('b').toString('base64'),
+            mimeType: 'image/jpeg',
+            fileName: 'b.jpg',
+            type: 'image',
+          },
+        ],
+      }),
+      resolution,
+      rememberSessionRoute() {},
+    });
+
+    assert.equal(prepared.rawBody, '<media:image> (2 images)');
+    assert.equal(prepared.mediaItems.length, 2);
+    assert.deepEqual(prepared.mediaItems, [
+      {
+        path: '/tmp/inbound.bin',
+        contentType: 'image/png',
+        fileName: 'a.png',
+        kind: 'image',
+      },
+      {
+        path: '/tmp/inbound.bin',
+        contentType: 'image/jpeg',
+        fileName: 'b.jpg',
+        kind: 'image',
       },
     ]);
   } finally {

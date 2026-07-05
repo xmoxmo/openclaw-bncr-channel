@@ -4,7 +4,17 @@ import test from 'node:test';
 import { checkBncrMessageGate } from '../../src/messaging/inbound/gate.ts';
 
 function makeParsed(route) {
-  return { route };
+  return {
+    protocolVersion: 'scene-routing-v1',
+    capabilities: ['scene-routing-v1'],
+    platform: route?.platform,
+    groupId: route?.groupId,
+    userId: route?.userId,
+    clientId: 'bncr-client-1',
+    isGroup: route?.groupId !== '0',
+    isAdmin: false,
+    route,
+  };
 }
 
 function makeCfg(overrides = {}) {
@@ -20,7 +30,7 @@ function makeCfg(overrides = {}) {
   };
 }
 
-test('allows DM when dmPolicy=open', async () => {
+test('allows valid inbound when channel and account are enabled', async () => {
   const result = await checkBncrMessageGate({
     parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
     cfg: makeCfg({ dmPolicy: 'open' }),
@@ -29,46 +39,89 @@ test('allows DM when dmPolicy=open', async () => {
   assert.deepEqual(result, { allowed: true });
 });
 
-test('blocks DM when dmPolicy=disabled', async () => {
+test('blocks inbound when account is disabled', async () => {
   const result = await checkBncrMessageGate({
     parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
-    cfg: makeCfg({ dmPolicy: 'disabled' }),
+    cfg: makeCfg({ enabled: false }),
     account: { accountId: 'Primary', enabled: true },
   });
-  assert.deepEqual(result, { allowed: false, reason: 'dm disabled' });
+  assert.deepEqual(result, { allowed: false, reason: 'account disabled' });
 });
 
-test('allows DM allowlist by standard display scope', async () => {
+test('blocks inbound when route is malformed', async () => {
   const result = await checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
-    cfg: makeCfg({ dmPolicy: 'allowlist', allowFrom: ['Bncr:tgBot:10001'] }),
+    parsed: {
+      ...makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
+      route: { platform: 'tgBot', groupId: '', userId: '10001' },
+    },
+    cfg: makeCfg(),
     account: { accountId: 'Primary', enabled: true },
   });
-  assert.deepEqual(result, { allowed: true });
+  assert.deepEqual(result, { allowed: false, reason: 'invalid route' });
 });
 
-test('blocks DM when allowlist misses', async () => {
+test('blocks inbound when client protocol version is outdated', async () => {
+  const result = await checkBncrMessageGate({
+    parsed: {
+      ...makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
+      protocolVersion: 'legacy-v0',
+    },
+    cfg: makeCfg(),
+    account: { accountId: 'Primary', enabled: true },
+  });
+  assert.deepEqual(result, { allowed: false, reason: 'client protocol outdated' });
+});
+
+test('blocks inbound when required capability is missing', async () => {
+  const result = await checkBncrMessageGate({
+    parsed: {
+      ...makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
+      capabilities: [],
+    },
+    cfg: makeCfg(),
+    account: { accountId: 'Primary', enabled: true },
+  });
+  assert.deepEqual(result, { allowed: false, reason: 'client protocol outdated' });
+});
+
+test('blocks inbound when required schema fields are incomplete', async () => {
+  const result = await checkBncrMessageGate({
+    parsed: {
+      ...makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
+      clientId: '',
+    },
+    cfg: makeCfg(),
+    account: { accountId: 'Primary', enabled: true },
+  });
+  assert.deepEqual(result, { allowed: false, reason: 'inbound schema incomplete' });
+});
+
+test('blocks inbound when group scene is missing groupId', async () => {
+  const result = await checkBncrMessageGate({
+    parsed: {
+      ...makeParsed({ platform: 'tgBot', groupId: '', userId: '10001' }),
+      isGroup: true,
+      route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+    },
+    cfg: makeCfg(),
+    account: { accountId: 'Primary', enabled: true },
+  });
+  assert.deepEqual(result, { allowed: false, reason: 'inbound schema incomplete' });
+});
+
+test('does not enforce legacy ingress allowlist policy anymore', async () => {
   const result = await checkBncrMessageGate({
     parsed: makeParsed({ platform: 'tgBot', groupId: '0', userId: '10001' }),
     cfg: makeCfg({ dmPolicy: 'allowlist', allowFrom: ['tgBot:other'] }),
     account: { accountId: 'Primary', enabled: true },
   });
-  assert.deepEqual(result, { allowed: false, reason: 'dm allowlist blocked' });
+  assert.deepEqual(result, { allowed: true });
 });
 
-test('blocks group when groupPolicy=disabled', async () => {
+test('does not enforce legacy group allowlist policy anymore', async () => {
   const result = await checkBncrMessageGate({
     parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
     cfg: makeCfg({ groupPolicy: 'disabled' }),
-    account: { accountId: 'Primary', enabled: true },
-  });
-  assert.deepEqual(result, { allowed: false, reason: 'group disabled' });
-});
-
-test('allows group allowlist by standard display scope', async () => {
-  const result = await checkBncrMessageGate({
-    parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
-    cfg: makeCfg({ groupPolicy: 'allowlist', groupAllowFrom: ['Bncr:tgBot:-1001:10001'] }),
     account: { accountId: 'Primary', enabled: true },
   });
   assert.deepEqual(result, { allowed: true });

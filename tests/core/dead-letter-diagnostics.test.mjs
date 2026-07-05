@@ -132,7 +132,7 @@ test('summarizeDeadLetterEntry formats stable inspect output without mutating en
     messageId: 'dead-1',
     accountId: 'Primary',
     sessionKey: 'agent:main:bncr:direct:74673a313a32',
-    route: 'Bncr:tg:1:2',
+    route: 'Bncr:tg:1:0',
     kind: 'message',
     createdAt: null,
     retryCount: 0,

@@ -12,7 +12,7 @@ test('buildOpenClawChannelOutboundSessionRoute forwards canonical params to host
     peer: { kind: 'direct', id: '10001' },
     chatType: 'direct',
     from: 'Bncr:tgBot:service',
-    to: 'Bncr:tgBot:10001',
+    to: 'Bncr:tgBot:0:10001',
     threadId: '123',
   });
 
@@ -23,7 +23,7 @@ test('buildOpenClawChannelOutboundSessionRoute forwards canonical params to host
   assert.equal(route.sessionKey, 'agent:orion:main');
   assert.equal(route.baseSessionKey, 'agent:orion:main');
   assert.equal(route.from, 'Bncr:tgBot:service');
-  assert.equal(route.to, 'Bncr:tgBot:10001');
+  assert.equal(route.to, 'Bncr:tgBot:0:10001');
   assert.equal(route.thread, undefined);
   assert.equal(route.threadId, '123');
   assert.deepEqual(route.peer, { kind: 'direct', id: '10001' });

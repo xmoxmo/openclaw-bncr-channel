@@ -16,9 +16,13 @@ function bridge() {
 
 test('plugin messaging parseExplicitTarget falls back to main when bridge has no canonicalAgentId', () => {
   const parse = createBncrMessagingExplicitTargetParser(() => bridge());
-  const result = parse({ raw: 'Bncr:tgBot:10001' });
+  const result = parse({ raw: 'Bncr:tgBot:0:10001' });
   assert.ok(result);
-  assert.equal(result.displayScope, 'Bncr:tgBot:10001');
+  assert.equal(result.displayScope, 'Bncr:tgBot:0:10001');
+
+  const groupResult = parse({ raw: 'Bncr:tgBot:Group:-1001' });
+  assert.ok(groupResult);
+  assert.equal(groupResult.displayScope, 'Bncr:tgBot:-1001:0');
 });
 
 test('plugin messaging resolveSessionTarget falls back to raw id when not parseable', () => {
@@ -35,7 +39,7 @@ test('plugin messaging resolveOutboundSessionRoute normalizes null account and t
     cfg: {},
     agentId: 'orion',
     accountId: null,
-    target: 'Bncr:tgBot:10001',
+    target: 'Bncr:tgBot:0:10001',
     threadId: null,
   });
 

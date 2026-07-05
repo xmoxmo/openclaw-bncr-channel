@@ -1,4 +1,5 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import type { BncrSessionKind } from '../core/targets.ts';
 import type { BncrRoute, FileRecvTransferState } from '../core/types.ts';
 
 export type BncrFileInboundLeaseEventKind =
@@ -40,6 +41,7 @@ export type BncrFileInboundRuntime = {
   normalizeStoredSessionKey: (
     sessionKey: string,
   ) => { sessionKey: string; route: BncrRoute } | null;
+  buildCanonicalSessionKey: (route: BncrRoute, kind?: BncrSessionKind) => string;
   saveInboundMediaBuffer: (args: {
     buffer: Buffer;
     mimeType: string;

@@ -6,6 +6,7 @@ import type {
   FileSendTransferState,
   OutboxEntry,
 } from '../core/types.ts';
+import type { BncrPersistedGroupHistoryEntry, BncrSceneRecord } from './channel-runtime-types.ts';
 import { createBncrStateStore } from './state-store.ts';
 import { createBncrTransientStateRuntime } from './transient-state-runtime.ts';
 
@@ -31,6 +32,8 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
   maxDeadLetterEntries: number;
   maxSessionRouteEntries: number;
   maxAccountActivityEntries: number;
+  sceneRegistry: Map<string, BncrSceneRecord>;
+  groupHistories: Map<string, BncrPersistedGroupHistoryEntry[]>;
   outbox: Map<string, OutboxEntry>;
   getDeadLetter: () => OutboxEntry[];
   setDeadLetter: (entries: OutboxEntry[]) => void;
@@ -69,6 +72,8 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
     maxDeadLetterEntries: runtime.maxDeadLetterEntries,
     maxSessionRouteEntries: runtime.maxSessionRouteEntries,
     maxAccountActivityEntries: runtime.maxAccountActivityEntries,
+    sceneRegistry: runtime.sceneRegistry,
+    groupHistories: runtime.groupHistories,
     outbox: runtime.outbox,
     getDeadLetter: runtime.getDeadLetter,
     setDeadLetter: runtime.setDeadLetter,

@@ -141,10 +141,15 @@ test('handleInbound flushes queued outbound for the same account before async di
     await bridge.handleInbound({
       params: {
         accountId: 'Primary',
+        protocolVersion: 'scene-routing-v1',
+        capabilities: ['scene-routing-v1'],
         clientId: 'client-1',
         platform: 'tgBot',
         groupId: '-1001',
         userId: '10001',
+        isGroup: true,
+        isAdmin: true,
+        shouldRespond: true,
         type: 'text',
         msg: 'hello inbound',
         msgId: 'inbound-1',
@@ -211,6 +216,8 @@ test('handleInbound does not force inboundOnly false', async () => {
     await bridge.handleInbound({
       params: {
         accountId: 'Primary',
+        protocolVersion: 'scene-routing-v1',
+        capabilities: ['scene-routing-v1'],
         clientId: 'client-a',
         platform: 'tgBot',
         groupId: '-1001',
