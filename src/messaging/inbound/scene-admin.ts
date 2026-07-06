@@ -146,15 +146,46 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
   }
 }
 
-function formatSceneLine(scene: BncrSceneRecord): string {
+function formatSceneDetailsLine(scene: BncrSceneRecord): string {
   const idPart =
     scene.kind === 'group' ? scene.groupId || scene.sceneKey : scene.userId || scene.sceneKey;
   const namePart = scene.kind === 'group' ? scene.groupName || '' : scene.userName || '';
-  const agentPart = scene.agentId ? ` agent=${scene.agentId}` : '';
-  const modePart =
-    scene.kind === 'group' && scene.groupReplyMode ? ` mode=${scene.groupReplyMode}` : '';
   const labelPart = namePart ? ` name=${namePart}` : '';
-  return `${scene.sceneKey} status=${scene.status} kind=${scene.kind} id=${idPart}${labelPart}${agentPart}${modePart}`;
+  return `  Details: status=${scene.status} id=${idPart}${labelPart}`;
+}
+
+function formatSceneEntry(scene: BncrSceneRecord): string {
+  return [`  SceneId: ${scene.sceneKey}`, formatSceneDetailsLine(scene)].join('\n');
+}
+
+function buildSceneGroupTitle(scene: BncrSceneRecord): string {
+  const agentId = normalizeToken(scene.agentId || '') || 'public';
+  if (scene.kind === 'group') {
+    const mode = normalizeToken(scene.groupReplyMode || '') || 'admin';
+    return `👥 Group Chat ${agentId} ${mode}`;
+  }
+  return `📱 Private Chat ${agentId}`;
+}
+
+function formatSceneGroups(scenes: BncrSceneRecord[]): string {
+  const directGrouped = new Map<string, string[]>();
+  const groupGrouped = new Map<string, string[]>();
+  for (const scene of scenes) {
+    const title = buildSceneGroupTitle(scene);
+    const target = scene.kind === 'group' ? groupGrouped : directGrouped;
+    const current = target.get(title) || [];
+    current.push(formatSceneEntry(scene));
+    target.set(title, current);
+  }
+
+  const orderedGroups = [
+    ...Array.from(directGrouped.entries()),
+    ...Array.from(groupGrouped.entries()).sort(([left], [right]) => left.localeCompare(right)),
+  ];
+
+  return orderedGroups
+    .map(([title, entries]) => [title, '', entries.join('\n\n')].join('\n'))
+    .join('\n\n');
 }
 
 function applySceneStatus(scene: BncrSceneRecord, status: BncrSceneStatus): BncrSceneRecord {
@@ -188,7 +219,7 @@ export function executeSceneAdminCommand(args: {
         text: command.scope === 'pending' ? 'No pending scenes.' : 'No scenes recorded.',
       };
     }
-    return { ok: true, text: scenes.map(formatSceneLine).join('\n') };
+    return { ok: true, text: formatSceneGroups(scenes) };
   }
 
   if (command.kind === 'mode-help') {

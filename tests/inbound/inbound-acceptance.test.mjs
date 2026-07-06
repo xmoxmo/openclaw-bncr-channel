@@ -301,7 +301,7 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
   assert.equal(all.shouldDispatch, true);
 });
 
-test('prepareBncrInboundAcceptance marks non-admin direct scene pending and denies dispatch', async () => {
+test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public agent', async () => {
   const sceneRegistry = new Map();
   const result = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -316,21 +316,22 @@ test('prepareBncrInboundAcceptance marks non-admin direct scene pending and deni
   );
 
   assert.deepEqual(result, {
-    ok: false,
-    status: true,
-    payload: {
-      kind: 'gate-denied',
-      accountId: 'Primary',
-      msgId: 'msg-1',
-      reason: 'scene pending approval',
-    },
+    ok: true,
+    accountId: 'Primary',
+    sessionKey: 'agent:public:bncr:direct:7467426f743a3130303031',
+    inboundText: 'hello',
+    hasMedia: false,
+    resolvedAgentId: 'public',
+    shouldDispatch: true,
+    shouldAccumulate: true,
   });
   assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
-    status: 'pending',
+    status: 'allowed',
     platform: 'tgBot',
     userId: '10001',
+    agentId: 'public',
     lastSeenAt: 123,
   });
 });
@@ -381,6 +382,193 @@ test('prepareBncrInboundAcceptance lets admin callers recover denied group scene
     userId: '20002',
     userName: 'admin-user',
     groupReplyMode: 'admin',
+    lastSeenAt: 123,
+  });
+});
+
+test('prepareBncrInboundAcceptance promotes denied group scenes to public when an admin arrives later', async () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'denied',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'wind_system',
+        userId: '10001',
+        userName: 'member-user',
+        lastSeenAt: 100,
+      },
+    ],
+  ]);
+
+  const result = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: buildParsed({
+        peer: { kind: 'group', id: '-1001' },
+        isAdmin: true,
+        shouldRespond: true,
+        userId: '20002',
+        userName: 'admin-user',
+      }),
+      sceneRegistry,
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolvedAgentId, 'public');
+  assert.equal(result.sessionKey, 'agent:public:bncr:group:7467426f743a2d31303031');
+  assert.deepEqual(sceneRegistry.get('tgBot:-1001'), {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    userId: '20002',
+    userName: 'admin-user',
+    groupReplyMode: 'admin',
+    lastSeenAt: 123,
+  });
+});
+
+test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes back to public', async () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'legacy-user',
+        agentId: 'orion',
+        lastSeenAt: 100,
+      },
+    ],
+  ]);
+
+  const result = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: buildParsed({
+        groupId: '0',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        peer: { kind: 'direct', id: '10001' },
+        isAdmin: false,
+        userName: 'xmo',
+      }),
+      sceneRegistry,
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolvedAgentId, 'public');
+  assert.equal(result.sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
+  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    agentId: 'public',
+    lastSeenAt: 123,
+  });
+});
+
+test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes with empty agent to public', async () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'legacy-user',
+        agentId: '',
+        lastSeenAt: 100,
+      },
+    ],
+  ]);
+
+  const result = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: buildParsed({
+        groupId: '0',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        peer: { kind: 'direct', id: '10001' },
+        isAdmin: false,
+        userName: 'xmo',
+      }),
+      sceneRegistry,
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolvedAgentId, 'public');
+  assert.equal(result.sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
+  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    agentId: 'public',
+    lastSeenAt: 123,
+  });
+});
+
+test('prepareBncrInboundAcceptance preserves explicit custom agent on legacy non-admin direct scenes', async () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'legacy-user',
+        agentId: 'custom-agent',
+        lastSeenAt: 100,
+      },
+    ],
+  ]);
+
+  const result = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: buildParsed({
+        groupId: '0',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        peer: { kind: 'direct', id: '10001' },
+        isAdmin: false,
+        userName: 'xmo',
+      }),
+      sceneRegistry,
+      resolveAgentRoute: () => ({
+        sessionKey: 'agent:custom-agent:bncr:direct:7467426f743a3130303031',
+        agentId: 'custom-agent',
+      }),
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolvedAgentId, 'custom-agent');
+  assert.equal(result.sessionKey, 'agent:custom-agent:bncr:direct:7467426f743a3130303031');
+  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    agentId: 'custom-agent',
     lastSeenAt: 123,
   });
 });

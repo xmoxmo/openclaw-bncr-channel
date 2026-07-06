@@ -243,6 +243,122 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
   assert.equal(calls.builtContexts[0].ChatType, 'group');
 });
 
+test('dispatchBncrInbound routes non-admin direct sessions to public when resolvedAgentId is public', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: false,
+    type: 'text',
+    msg: 'hello direct inbound',
+    mimeType: 'text/plain',
+    msgId: 'direct-1',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.deepEqual(calls.builtContextArgs[0].route, {
+    agentId: 'public',
+    accountId: 'Primary',
+    routeSessionKey: 'agent:public:bncr:direct:7467426f743a3130303031',
+    dispatchSessionKey: 'agent:public:bncr:direct:7467426f743a3130303031',
+    mainSessionKey: undefined,
+  });
+  assert.deepEqual(calls.builtContextArgs[0].conversation, {
+    kind: 'direct',
+    id: '10001',
+    label: 'Bncr:tgBot:0:10001',
+    routePeer: {
+      kind: 'direct',
+      id: '10001',
+    },
+  });
+  assert.equal(calls.builtContexts[0].To, 'Bncr:tgBot:0:10001');
+  assert.equal(calls.builtContexts[0].ConversationLabel, 'Bncr:tgBot:0:10001');
+  assert.equal(
+    calls.builtContexts[0].DispatchSessionKey,
+    'agent:public:bncr:direct:7467426f743a3130303031',
+  );
+  assert.equal(enqueueCalls[0].sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
+});
+
+test('dispatchBncrInbound preserves explicit custom agent for non-admin direct sessions', async () => {
+  const { api, calls } = createInboundApiStub({
+    onRequest({ method }) {
+      if (method === 'channel.resolveAgentRoute') {
+        return {
+          ok: true,
+          sessionKey: 'agent:custom-agent:bncr:direct:7467426f743a3130303031',
+          agentId: 'custom-agent',
+        };
+      }
+      return { ok: true };
+    },
+  });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: false,
+    type: 'text',
+    msg: 'hello direct inbound',
+    mimeType: 'text/plain',
+    msgId: 'direct-2',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'custom-agent',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.deepEqual(calls.builtContextArgs[0].route, {
+    agentId: 'custom-agent',
+    accountId: 'Primary',
+    routeSessionKey: 'agent:custom-agent:bncr:direct:7467426f743a3130303031',
+    dispatchSessionKey: 'agent:custom-agent:bncr:direct:7467426f743a3130303031',
+    mainSessionKey: undefined,
+  });
+  assert.equal(
+    calls.builtContexts[0].DispatchSessionKey,
+    'agent:custom-agent:bncr:direct:7467426f743a3130303031',
+  );
+  assert.equal(enqueueCalls[0].sessionKey, 'agent:custom-agent:bncr:direct:7467426f743a3130303031');
+});
+
 test('admin OpenClaw native command grants owner allowFrom to real sender id', async () => {
   const { api, calls } = createInboundApiStub();
   const parsed = parseBncrInboundParams({

@@ -266,6 +266,7 @@ export function createBncrInboundHandlersComponent(runtime: {
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     formatDisplayScope,
     logInboundSummary: runtime.logInboundSummary,
+    enqueueFromReply: runtime.enqueueFromReply,
     flushOnInboundAccepted: (accountId) =>
       runtime.flushPushQueueBestEffort({
         accountId,

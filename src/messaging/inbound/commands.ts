@@ -22,7 +22,10 @@ import type { ParsedInbound } from './dispatch-prep.ts';
 import { buildBncrInboundRecordUpdateLastRoute } from './last-route.ts';
 import {
   parseBncrNativeCommand,
+  parseBncrUnsupportedDirectCommand,
   resolveBncrNativeHelpCommand,
+  resolveBncrNativeSessionResetCommand,
+  resolveBncrNativeStatusCommand,
   resolveBncrNativeVerboseCommand,
   resolveBncrNativeWhoamiCommand,
 } from './native-command.ts';
@@ -129,7 +132,48 @@ export async function handleBncrNativeCommand(params: {
   const { accountId, route, peer, clientId, extracted, msgId } = parsed;
   const command = parseBncrNativeCommand(extracted.text, {
     allowBareWhoami: parsed.isAdmin !== true,
+    allowBareStatus: parsed.isAdmin !== true && parsed.peer.kind === 'direct',
+    allowBareSessionReset: parsed.isAdmin !== true && parsed.peer.kind === 'direct',
   });
+  if (!command && parsed.peer.kind === 'direct') {
+    const unsupportedDirectCommand = parseBncrUnsupportedDirectCommand(extracted.text);
+    if (unsupportedDirectCommand) {
+      const rejectedRoute = buildBncrNativeCommandResolvedRoute({
+        api,
+        cfg,
+        channelId,
+        accountId,
+        peer,
+        resolvedAgentId,
+      });
+      const { baseSessionKey, sessionKey } = buildBncrNativeCommandSessionState({
+        parsed,
+        sessionAgentId: rejectedRoute.agentId || canonicalAgentId,
+        resolvedRoute: rejectedRoute,
+      });
+      const displayTo = formatDisplayScope(route);
+      logBncrNativeCommandSummary(
+        buildBncrNativeCommandSummary({
+          kind: 'unsupported',
+          command: unsupportedDirectCommand.command,
+          accountId,
+          to: displayTo,
+          msgId: msgId || null,
+          result: 'rejected',
+        }),
+      );
+      await enqueueFromReply({
+        accountId,
+        sessionKey: baseSessionKey,
+        route,
+        payload: {
+          text: `Unsupported private-chat command: /${unsupportedDirectCommand.command}`,
+          replyToId: msgId || undefined,
+        },
+      });
+      return { handled: true, command: unsupportedDirectCommand.command, sessionKey };
+    }
+  }
   if (!command) return { handled: false };
   const nativeCommandDebugEnabled = resolveNativeCommandDebugEnabled({ cfg, channelId });
 
@@ -213,6 +257,16 @@ export async function handleBncrNativeCommand(params: {
     isGroup: parsed.isGroup,
     isAdmin: parsed.isAdmin,
   });
+  const nativeStatus = resolveBncrNativeStatusCommand({
+    command,
+    accountId,
+    platform: parsed.platform,
+    userId: parsed.userId,
+    userName: parsed.userName,
+    resolvedAgentId: resolvedRoute.agentId || canonicalAgentId,
+    sessionKey,
+  });
+  const nativeSessionReset = resolveBncrNativeSessionResetCommand({ command });
   if (nativeHelp) {
     logBncrNativeCommandSummary(
       buildBncrNativeCommandSummary({
@@ -273,6 +327,103 @@ export async function handleBncrNativeCommand(params: {
     return { handled: true, command: command.command, sessionKey };
   }
 
+  if (nativeStatus) {
+    logBncrNativeCommandSummary(
+      buildBncrNativeCommandSummary({
+        kind: 'status',
+        command: command.command,
+        accountId,
+        to: displayTo,
+        msgId: msgId || null,
+        result: 'handled',
+      }),
+    );
+    await recordAndPatchBncrInboundSessionEntry({
+      storePath,
+      sessionKey,
+      ctx: ctxPayload,
+      patch: sessionIdentityPatch,
+    });
+    rememberSessionRoute(baseSessionKey, accountId, route);
+    await enqueueFromReply({
+      accountId,
+      sessionKey,
+      route,
+      payload: {
+        text: nativeStatus.text,
+        replyToId: msgId || undefined,
+      },
+    });
+    return { handled: true, command: command.command, sessionKey };
+  }
+
+  if (nativeSessionReset) {
+    const allowLocalSessionReset = parsed.peer.kind === 'direct';
+    if (!allowLocalSessionReset) {
+      logBncrNativeCommandSummary(
+        buildBncrNativeCommandSummary({
+          kind: nativeSessionReset.reason,
+          command: command.command,
+          accountId,
+          to: displayTo,
+          msgId: msgId || null,
+          result: 'rejected',
+        }),
+      );
+      await recordAndPatchBncrInboundSessionEntry({
+        storePath,
+        sessionKey,
+        ctx: ctxPayload,
+        patch: sessionIdentityPatch,
+      });
+      rememberSessionRoute(baseSessionKey, accountId, route);
+      return { handled: true, command: command.command, sessionKey };
+    }
+
+    const requestedAgentId = resolvedRoute.agentId || canonicalAgentId;
+    const requestApi = api as BncrInboundApi & {
+      request?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+    };
+    if (typeof requestApi.request !== 'function') {
+      throw new Error('OpenClaw plugin api.request is unavailable for sessions.reset');
+    }
+    await recordAndPatchBncrInboundSessionEntry({
+      storePath,
+      sessionKey,
+      ctx: ctxPayload,
+      patch: sessionIdentityPatch,
+    });
+    const resetResult = (await requestApi.request('sessions.reset', {
+      key: baseSessionKey,
+      reason: nativeSessionReset.reason,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+    })) as { ok?: boolean } | undefined;
+    if (resetResult?.ok === false) {
+      throw new Error(`sessions.reset failed for ${baseSessionKey}`);
+    }
+    logBncrNativeCommandSummary(
+      buildBncrNativeCommandSummary({
+        kind: nativeSessionReset.reason,
+        command: command.command,
+        accountId,
+        to: displayTo,
+        msgId: msgId || null,
+        result: 'handled',
+      }),
+    );
+    rememberSessionRoute(baseSessionKey, accountId, route);
+    await enqueueFromReply({
+      accountId,
+      sessionKey: baseSessionKey,
+      route,
+      payload: {
+        text: nativeSessionReset.text,
+        replyToId: msgId || undefined,
+      },
+    });
+    return { handled: true, command: command.command, sessionKey: baseSessionKey };
+  }
+
   if (nativeVerbose) {
     if (!parsed.isAdmin) {
       logBncrNativeCommandSummary(
@@ -292,15 +443,17 @@ export async function handleBncrNativeCommand(params: {
         patch: sessionIdentityPatch,
       });
       rememberSessionRoute(baseSessionKey, accountId, route);
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: 'Admin permission required.',
-          replyToId: msgId || undefined,
-        },
-      });
+      if (parsed.peer.kind !== 'group') {
+        await enqueueFromReply({
+          accountId,
+          sessionKey,
+          route,
+          payload: {
+            text: 'Admin permission required.',
+            replyToId: msgId || undefined,
+          },
+        });
+      }
       return { handled: true, command: command.command, sessionKey };
     }
 
@@ -350,6 +503,7 @@ export async function handleBncrNativeCommand(params: {
 
   const sceneAdmin = parseSceneAdminCommand(command);
   if (sceneAdmin.matched) {
+    const silentNonAdminGroupReject = !parsed.isAdmin && parsed.peer.kind === 'group';
     if (!sceneAdmin.valid) {
       logBncrNativeCommandSummary(
         buildBncrNativeCommandSummary({
@@ -367,15 +521,17 @@ export async function handleBncrNativeCommand(params: {
         ctx: ctxPayload,
         patch: sessionIdentityPatch,
       });
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: sceneAdmin.text,
-          replyToId: msgId || undefined,
-        },
-      });
+      if (!silentNonAdminGroupReject) {
+        await enqueueFromReply({
+          accountId,
+          sessionKey,
+          route,
+          payload: {
+            text: sceneAdmin.text,
+            replyToId: msgId || undefined,
+          },
+        });
+      }
       return { handled: true, command: command.command, sessionKey };
     }
 
@@ -403,15 +559,17 @@ export async function handleBncrNativeCommand(params: {
       ctx: ctxPayload,
       patch: sessionIdentityPatch,
     });
-    await enqueueFromReply({
-      accountId,
-      sessionKey,
-      route,
-      payload: {
-        text: outcome.text,
-        replyToId: msgId || undefined,
-      },
-    });
+    if (!(silentNonAdminGroupReject && !outcome.ok)) {
+      await enqueueFromReply({
+        accountId,
+        sessionKey,
+        route,
+        payload: {
+          text: outcome.text,
+          replyToId: msgId || undefined,
+        },
+      });
+    }
     return { handled: true, command: command.command, sessionKey };
   }
 

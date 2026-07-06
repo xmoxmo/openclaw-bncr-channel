@@ -71,14 +71,20 @@ export function decideSceneAdmission(args: {
   const sceneKey = buildSceneKey(parsed);
   const kind = asSceneKind(parsed);
   const existing = sceneRegistry.get(sceneKey);
+  const shouldForceDirectNonAdminPublic = (agentId?: string) =>
+    kind === 'direct' && parsed.isAdmin !== true && (!agentId || agentId === defaultAdminAgentId);
 
   if (existing) {
+    const forcedAgentId = shouldForceDirectNonAdminPublic(existing.agentId)
+      ? defaultPublicAgentId
+      : existing.agentId;
     const nextScene = {
       ...existing,
       ...(parsed.userId ? { userId: parsed.userId } : {}),
       ...(parsed.userName ? { userName: parsed.userName } : {}),
       ...(kind === 'group' && parsed.groupId ? { groupId: parsed.groupId } : {}),
       ...(kind === 'group' && parsed.groupName ? { groupName: parsed.groupName } : {}),
+      ...(forcedAgentId ? { agentId: forcedAgentId } : {}),
       ...(kind === 'group' && !existing.groupReplyMode
         ? { groupReplyMode: defaultGroupReplyMode(kind) }
         : {}),
@@ -137,19 +143,29 @@ export function decideSceneAdmission(args: {
     return { allowed: true, scene, agentId };
   }
 
+  const directNonAdminAllowed = kind === 'direct';
   const scene = buildSceneRecord({
     parsed,
     sceneKey,
     kind,
-    status: kind === 'direct' ? 'pending' : 'denied',
+    status: directNonAdminAllowed ? 'allowed' : 'denied',
+    agentId: directNonAdminAllowed ? defaultPublicAgentId : undefined,
     lastSeenAt: now,
   });
   sceneRegistry.set(sceneKey, scene);
 
+  if (directNonAdminAllowed) {
+    return {
+      allowed: true,
+      scene,
+      agentId: scene.agentId || defaultPublicAgentId,
+    };
+  }
+
   return {
     allowed: false,
     scene,
-    reason: kind === 'direct' ? 'scene pending approval' : 'scene denied',
-    replyPolicy: kind === 'direct' ? 'pending' : 'silent',
+    reason: 'scene denied',
+    replyPolicy: 'silent',
   };
 }

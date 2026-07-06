@@ -81,6 +81,14 @@ openclaw devices approve --latest
 - 状态诊断
 - 文件互传
 
+补充口径：
+
+- 入站会话按正式 scene / route 语义接入 OpenClaw，区分私聊与群聊会话。
+- 非管理员私聊支持受控的本地命令能力：`/whoami`、`/status`、`/new`、`/reset`，以及对应的 `/bncr ...` 入口。
+- 非管理员私聊中，不在支持范围内的 slash 命令会由 bncr 直接拒绝，不再 fallback 到 agent。
+- 群聊里的管理型 / 控制型命令对非管理员按静默拒绝处理，不给用户可见回复。
+- `/bncr list pending` 与 `/bncr list scenes` 采用按私聊 / 群聊分组的摘要展示格式，便于现场排查 scene 状态。
+
 ---
 
 ## 5. 架构定位

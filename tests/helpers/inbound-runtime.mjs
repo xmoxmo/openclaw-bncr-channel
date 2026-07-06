@@ -20,6 +20,7 @@ export function createInboundApiStub(options = {}) {
     savedMediaBuffers: [],
     replyDispatchStarts: [],
     replyDispatchCompletions: [],
+    requests: [],
   };
 
   const restoreSessionRuntime = setBncrInboundSessionRuntimeForTest({
@@ -60,6 +61,13 @@ export function createInboundApiStub(options = {}) {
 
   const api = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
+    async request(method, params) {
+      calls.requests.push({ method, params });
+      if (typeof options.onRequest === 'function') {
+        return await options.onRequest({ method, params, calls });
+      }
+      return { ok: true };
+    },
     runtime: {
       config: {
         current() {

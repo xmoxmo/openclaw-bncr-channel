@@ -3,7 +3,10 @@ import test from 'node:test';
 
 import { parseBncrNativeCommand } from '../../src/messaging/inbound/commands.ts';
 import {
+  parseBncrUnsupportedDirectCommand,
   resolveBncrNativeHelpCommand,
+  resolveBncrNativeSessionResetCommand,
+  resolveBncrNativeStatusCommand,
   resolveBncrNativeVerboseCommand,
   resolveBncrNativeWhoamiCommand,
 } from '../../src/messaging/inbound/native-command.ts';
@@ -43,7 +46,28 @@ test('parseBncrNativeCommand only recognizes bncr builtin /bncr subcommands, wit
     body: '/whoami',
     argsText: '',
   });
+  assert.deepEqual(parseBncrNativeCommand('/status', { allowBareStatus: true }), {
+    command: 'status',
+    raw: '/status',
+    body: '/status',
+    argsText: '',
+  });
+  assert.deepEqual(parseBncrNativeCommand('/new', { allowBareSessionReset: true }), {
+    command: 'new',
+    raw: '/new',
+    body: '/new',
+    argsText: '',
+  });
+  assert.deepEqual(parseBncrNativeCommand('/reset', { allowBareSessionReset: true }), {
+    command: 'reset',
+    raw: '/reset',
+    body: '/reset',
+    argsText: '',
+  });
   assert.equal(parseBncrNativeCommand('/whoami', { allowBareWhoami: false }), null);
+  assert.equal(parseBncrNativeCommand('/status'), null);
+  assert.equal(parseBncrNativeCommand('/new'), null);
+  assert.equal(parseBncrNativeCommand('/reset'), null);
   assert.deepEqual(parseBncrNativeCommand('/bncr verbose on'), {
     command: 'verbose',
     raw: '/bncr verbose on',
@@ -56,11 +80,52 @@ test('parseBncrNativeCommand ignores non-slash text', () => {
   assert.equal(parseBncrNativeCommand('help'), null);
   assert.equal(parseBncrNativeCommand('/help'), null);
   assert.equal(parseBncrNativeCommand('/status'), null);
+  assert.equal(parseBncrNativeCommand('/new'), null);
+  assert.equal(parseBncrNativeCommand('/reset'), null);
   assert.equal(parseBncrNativeCommand('/whoami@AixmoClaw_bot'), null);
   assert.equal(parseBncrNativeCommand('/bncrstatus'), null);
   assert.equal(parseBncrNativeCommand('/bncr@'), null);
-  assert.equal(parseBncrNativeCommand('/bncr status'), null);
+  assert.deepEqual(parseBncrNativeCommand('/bncr status'), {
+    command: 'status',
+    raw: '/bncr status',
+    body: '/status',
+    argsText: '',
+  });
+  assert.deepEqual(parseBncrNativeCommand('/bncr new'), {
+    command: 'new',
+    raw: '/bncr new',
+    body: '/new',
+    argsText: '',
+  });
+  assert.deepEqual(parseBncrNativeCommand('/bncr reset'), {
+    command: 'reset',
+    raw: '/bncr reset',
+    body: '/reset',
+    argsText: '',
+  });
   assert.equal(parseBncrNativeCommand('hello /bncr help'), null);
+});
+
+test('parseBncrUnsupportedDirectCommand detects unsupported direct slash commands only outside allowed set', () => {
+  assert.deepEqual(parseBncrUnsupportedDirectCommand('/model gpt-5'), {
+    command: 'model',
+    raw: '/model gpt-5',
+  });
+  assert.deepEqual(parseBncrUnsupportedDirectCommand('/bncr verbose on'), {
+    command: 'bncr verbose',
+    raw: '/bncr verbose on',
+  });
+  assert.deepEqual(parseBncrUnsupportedDirectCommand('/bncr deny tgBot:10001'), {
+    command: 'bncr deny',
+    raw: '/bncr deny tgBot:10001',
+  });
+  assert.equal(parseBncrUnsupportedDirectCommand('/whoami'), null);
+  assert.equal(parseBncrUnsupportedDirectCommand('/status'), null);
+  assert.equal(parseBncrUnsupportedDirectCommand('/new'), null);
+  assert.equal(parseBncrUnsupportedDirectCommand('/reset'), null);
+  assert.equal(parseBncrUnsupportedDirectCommand('/bncr help'), null);
+  assert.equal(parseBncrUnsupportedDirectCommand('/bncr status'), null);
+  assert.equal(parseBncrUnsupportedDirectCommand('hello'), null);
 });
 
 test('resolveBncrNativeHelpCommand returns builtin bncr help text', () => {
@@ -68,12 +133,12 @@ test('resolveBncrNativeHelpCommand returns builtin bncr help text', () => {
   assert.match(helpText, /🦞 Bncr command usage/);
   assert.match(helpText, /\/bncr whoami/);
   assert.match(helpText, /\/bncr verbose on\|off\|full/);
-  assert.match(helpText, /\/bncr allow \[<platform>:<groupId>\]/);
-  assert.match(helpText, /\/bncr deny \[<platform>:<groupId>\]/);
-  assert.match(helpText, /\/bncr bind <agentId> \[<platform>:<groupId>\]/);
+  assert.match(helpText, /\/bncr allow \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr deny \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr bind <agentId> \[<SceneId>\]/);
   assert.match(helpText, /\/bncr mode help/);
-  assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all> \[<platform>:<groupId>\]/);
-  assert.match(helpText, /\/bncr revoke \[<platform>:<groupId>\]/);
+  assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all> \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr revoke \[<SceneId>\]/);
   assert.match(helpText, /\/bncr list pending/);
   assert.match(helpText, /\/bncr list scenes/);
   assert.doesNotMatch(helpText, /💬 Group reply modes/);
@@ -103,6 +168,61 @@ test('resolveBncrNativeWhoamiCommand returns user and scene identity without bri
   assert.doesNotMatch(whoami.text, /client/i);
   assert.equal(
     resolveBncrNativeWhoamiCommand({ command: parseBncrNativeCommand('/bncr help') }),
+    null,
+  );
+});
+
+test('resolveBncrNativeStatusCommand returns scoped direct-session status for bncr-local bare status', () => {
+  const status = resolveBncrNativeStatusCommand({
+    command: parseBncrNativeCommand('/status', { allowBareStatus: true }),
+    accountId: 'Primary',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    resolvedAgentId: 'public',
+    sessionKey: 'agent:public:bncr:direct:7467426f743a3130303031',
+  });
+  assert.match(status.text, /🦞 Bncr Status/);
+  assert.match(status.text, /Channel: bncr/);
+  assert.match(status.text, /Account: Primary/);
+  assert.match(status.text, /User: xmo \(10001\)/);
+  assert.match(status.text, /Scene: tgBot:10001/);
+  assert.match(status.text, /Agent: public/);
+  assert.match(status.text, /SessionKey: agent:public:bncr:direct:7467426f743a3130303031/);
+  assert.equal(
+    resolveBncrNativeStatusCommand({
+      command: parseBncrNativeCommand('/bncr whoami'),
+      accountId: 'Primary',
+      platform: 'tgBot',
+      userId: '10001',
+      resolvedAgentId: 'public',
+      sessionKey: 'agent:public:bncr:direct:7467426f743a3130303031',
+    }),
+    null,
+  );
+});
+
+test('resolveBncrNativeSessionResetCommand returns direct-session reset intents', () => {
+  assert.deepEqual(
+    resolveBncrNativeSessionResetCommand({
+      command: parseBncrNativeCommand('/new', { allowBareSessionReset: true }),
+    }),
+    {
+      handled: true,
+      reason: 'new',
+      text: 'Started a new session for this private chat.',
+    },
+  );
+  assert.deepEqual(
+    resolveBncrNativeSessionResetCommand({ command: parseBncrNativeCommand('/bncr reset') }),
+    {
+      handled: true,
+      reason: 'reset',
+      text: 'Reset the current session for this private chat.',
+    },
+  );
+  assert.equal(
+    resolveBncrNativeSessionResetCommand({ command: parseBncrNativeCommand('/bncr whoami') }),
     null,
   );
 });

@@ -1,7 +1,9 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import { buildCanonicalBncrSessionKey } from '../core/targets.ts';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
 import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
+import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type {
   buildInboundResponsePayload,
   resolveInboundSessionContext,
@@ -49,6 +51,26 @@ type InboundAcceptanceResult =
       status: boolean;
       payload: Record<string, unknown>;
     };
+
+function buildBncrPendingDirectApprovalNotice(args: {
+  parsed: ParsedInboundParams;
+  reason: string;
+}): string | null {
+  if (args.parsed.peer.kind !== 'direct') return null;
+  if (args.reason !== 'scene pending approval') return null;
+  return `This private chat is pending approval. Ask the administrator to allow your SceneId: ${args.parsed.platform}:${args.parsed.userId}`;
+}
+
+function buildBncrPendingDirectApprovalPayload(args: {
+  msgId?: string;
+  text: string;
+}): ReplyPayloadInput {
+  return {
+    text: args.text,
+    kind: 'final',
+    ...(args.msgId ? { replyToId: args.msgId } : {}),
+  };
+}
 
 export type BncrInboundHandlersRuntime = {
   channelId: string;
@@ -123,6 +145,13 @@ export type BncrInboundHandlersRuntime = {
     text: string;
     hasMedia: boolean;
   }) => void;
+  enqueueFromReply: (args: {
+    accountId: string;
+    sessionKey: string;
+    route: BncrRoute;
+    payload: ReplyPayloadInput;
+    mediaLocalRoots?: readonly string[];
+  }) => Promise<void>;
   respond: GatewayRequestHandlerOptions['respond'];
   flushOnInboundAccepted: (accountId: string) => void;
   dispatchInbound: (args: {
@@ -227,6 +256,19 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           'inbound',
           `accept reject|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|status=${acceptance.status}|reason=${reason || '-'}|isAdmin=${parsed.isAdmin === true}|shouldRespond=${parsed.shouldRespond === true}`,
         );
+        const pendingNotice = buildBncrPendingDirectApprovalNotice({ parsed, reason });
+        if (pendingNotice) {
+          const sessionKey = buildCanonicalBncrSessionKey(route, canonicalAgentId);
+          await runtime.enqueueFromReply({
+            accountId,
+            sessionKey,
+            route,
+            payload: buildBncrPendingDirectApprovalPayload({
+              msgId: msgId ?? undefined,
+              text: pendingNotice,
+            }),
+          });
+        }
         respond(acceptance.status, acceptance.payload);
         return;
       }
