@@ -208,130 +208,143 @@ export async function runBncrInboundReplyDispatch(args: {
     return;
   }
 
-  await runBncrReplyDispatchSerial(
-    resolution.dispatchSessionKey,
-    async () =>
-      resolveBncrChannelInboundRuntime(api).run({
-        channel: channelId,
-        accountId: resolution.accountId,
-        raw: parsed,
-        adapter: {
-          ingest: () => ({
-            id: msgId ?? `${resolution.canonicalTo}:${Date.now()}`,
-            timestamp: Date.now(),
-            rawText: rawBody,
-            textForAgent: ctxPayload.BodyForAgent,
-            textForCommands: ctxPayload.CommandBody,
-            raw: parsed,
-          }),
-          preflight: () =>
-            shouldDispatch
-              ? undefined
-              : {
-                  admission: {
-                    kind: 'observeOnly' as const,
-                    reason: 'bncr-group-mode-no-reply',
+  // Stop commands should bypass the serial chain so they can interrupt a running agent.
+  const rawTrimmed = (rawBody || '').trim();
+  const isStopCommand =
+    rawTrimmed === '/stop' || rawTrimmed.startsWith('/stop ') || rawTrimmed.startsWith('/stop@');
+  const dispatchSessionKey = resolution.dispatchSessionKey;
+
+  const runStopOrSerial = () => {
+    const task = () =>
+      Promise.resolve(
+        resolveBncrChannelInboundRuntime(api).run({
+          channel: channelId,
+          accountId: resolution.accountId,
+          raw: parsed,
+          adapter: {
+            ingest: () => ({
+              id: msgId ?? `${resolution.canonicalTo}:${Date.now()}`,
+              timestamp: Date.now(),
+              rawText: rawBody,
+              textForAgent: ctxPayload.BodyForAgent,
+              textForCommands: ctxPayload.CommandBody,
+              raw: parsed,
+            }),
+            preflight: () =>
+              shouldDispatch
+                ? undefined
+                : {
+                    admission: {
+                      kind: 'observeOnly' as const,
+                      reason: 'bncr-group-mode-no-reply',
+                    },
+                  },
+            resolveTurn: () => {
+              const sessionMetaBarrier = createBncrSessionMetaTaskBarrier();
+              return {
+                channel: channelId,
+                accountId: resolution.accountId,
+                routeSessionKey: resolution.resolvedRoute.sessionKey,
+                storePath,
+                ctxPayload,
+                recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
+                  recordInboundSession: recordBncrInboundSession as (
+                    ...args: unknown[]
+                  ) => Promise<unknown> | unknown,
+                  expectedPatch: sessionIdentityPatch,
+                }),
+                record: {
+                  updateLastRoute,
+                  onRecordError: (err: unknown) => {
+                    emitBncrLogLine('warn', `[bncr] inbound record session failed: ${String(err)}`);
+                  },
+                  trackSessionMetaTask: (task: Promise<unknown>) => {
+                    sessionMetaBarrier.track(task);
                   },
                 },
-          resolveTurn: () => {
-            const sessionMetaBarrier = createBncrSessionMetaTaskBarrier();
-            return {
-              channel: channelId,
-              accountId: resolution.accountId,
-              routeSessionKey: resolution.resolvedRoute.sessionKey,
-              storePath,
-              ctxPayload,
-              recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
-                recordInboundSession: recordBncrInboundSession as (
-                  ...args: unknown[]
-                ) => Promise<unknown> | unknown,
-                expectedPatch: sessionIdentityPatch,
-              }),
-              record: {
-                updateLastRoute,
-                onRecordError: (err: unknown) => {
-                  emitBncrLogLine('warn', `[bncr] inbound record session failed: ${String(err)}`);
-                },
-                trackSessionMetaTask: (task: Promise<unknown>) => {
-                  sessionMetaBarrier.track(task);
-                },
-              },
-              runDispatch: async () => {
-                await sessionMetaBarrier.wait();
-                await correctBncrInboundSessionLabel({
-                  storePath,
-                  sessionKey: resolution.dispatchSessionKey,
-                  expectedPatch: sessionIdentityPatch,
-                });
-                return Promise.resolve(
-                  dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
-                    ctx: ctxPayload,
-                    cfg: buildBncrReplyConfig(commandDispatchCfg).replyCfg,
-                    dispatcherOptions: {
-                      deliver: async (
-                        payload: {
-                          text?: string;
-                          mediaUrl?: string;
-                          mediaUrls?: string[];
-                          audioAsVoice?: boolean;
-                        },
-                        info?: { kind?: 'tool' | 'block' | 'final' },
-                      ) => {
-                        const kind = info?.kind;
-                        const shouldForwardTool =
-                          effectiveReply.blockStreaming && effectiveReply.allowTool;
-
-                        if (kind === 'tool' && !shouldForwardTool) {
-                          return;
-                        }
-
-                        await enqueueFromReply({
-                          accountId: replyRouteFact.accountId,
-                          sessionKey: replyRouteFact.sessionKey,
-                          route: replyRouteFact.route,
-                          payload: {
-                            text: payload.text,
-                            mediaUrl: payload.mediaUrl,
-                            mediaUrls: payload.mediaUrls,
-                            kind: kind || 'final',
-                            replyToId: msgId || undefined,
-                          },
-                        });
-                      },
-                      onError: (err: unknown) => {
-                        emitBncrLogLine('error', `[bncr] outbound reply failed: ${String(err)}`);
-                      },
-                    },
-                    replyOptions: {
-                      disableBlockStreaming: !effectiveReply.blockStreaming,
-                      shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
-                    },
-                  }),
-                ).finally(async () => {
-                  await waitForBncrReplySessionQuiescence({
-                    api,
-                    storePath,
-                    sessionKey: resolution.dispatchSessionKey,
-                    msgId,
-                    to: resolution.canonicalTo,
-                    debugEnabled: cfg?.channels?.bncr?.debug?.verbose === true,
-                  });
+                runDispatch: async () => {
+                  await sessionMetaBarrier.wait();
                   await correctBncrInboundSessionLabel({
                     storePath,
-                    sessionKey: resolution.dispatchSessionKey,
+                    sessionKey: dispatchSessionKey,
                     expectedPatch: sessionIdentityPatch,
                   });
-                });
-              },
-            };
+                  return Promise.resolve(
+                    dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
+                      ctx: ctxPayload,
+                      cfg: buildBncrReplyConfig(commandDispatchCfg).replyCfg,
+                      dispatcherOptions: {
+                        deliver: async (
+                          payload: {
+                            text?: string;
+                            mediaUrl?: string;
+                            mediaUrls?: string[];
+                            audioAsVoice?: boolean;
+                          },
+                          info?: { kind?: 'tool' | 'block' | 'final' },
+                        ) => {
+                          const kind = info?.kind;
+                          const shouldForwardTool =
+                            effectiveReply.blockStreaming && effectiveReply.allowTool;
+
+                          if (kind === 'tool' && !shouldForwardTool) {
+                            return;
+                          }
+
+                          await enqueueFromReply({
+                            accountId: replyRouteFact.accountId,
+                            sessionKey: replyRouteFact.sessionKey,
+                            route: replyRouteFact.route,
+                            payload: {
+                              text: payload.text,
+                              mediaUrl: payload.mediaUrl,
+                              mediaUrls: payload.mediaUrls,
+                              kind: kind || 'final',
+                              replyToId: msgId || undefined,
+                            },
+                          });
+                        },
+                        onError: (err: unknown) => {
+                          emitBncrLogLine('error', `[bncr] outbound reply failed: ${String(err)}`);
+                        },
+                      },
+                      replyOptions: {
+                        disableBlockStreaming: !effectiveReply.blockStreaming,
+                        shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
+                      },
+                    }),
+                  );
+                },
+              };
+            },
+            onFinalize: () => {
+              const inboundAt = Date.now();
+              setInboundActivity(resolution.accountId, inboundAt);
+              scheduleSave();
+            },
           },
-          onFinalize: () => {
-            const inboundAt = Date.now();
-            setInboundActivity(resolution.accountId, inboundAt);
-            scheduleSave();
-          },
-        },
-      }),
-    { msgId, to: resolution.canonicalTo },
-  );
+        }),
+      ).finally(async () => {
+        await waitForBncrReplySessionQuiescence({
+          api,
+          storePath,
+          sessionKey: dispatchSessionKey,
+          msgId,
+          to: resolution.canonicalTo,
+          debugEnabled: cfg?.channels?.bncr?.debug?.verbose === true,
+        });
+        await correctBncrInboundSessionLabel({
+          storePath,
+          sessionKey: dispatchSessionKey,
+          expectedPatch: sessionIdentityPatch,
+        });
+      });
+
+    if (isStopCommand) {
+      return task();
+    }
+    return runBncrReplyDispatchSerial(dispatchSessionKey, task);
+  };
+
+  await runStopOrSerial();
 }
