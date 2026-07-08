@@ -11,6 +11,34 @@ import { decideSceneAdmission } from './scene-registry.ts';
 
 type InboundAcceptanceResponsePayload = ReturnType<typeof buildInboundResponsePayload>;
 
+function resolveDispatchBy(args: {
+  parsed: ReturnType<typeof parseBncrInboundParams>;
+  admission: ReturnType<typeof decideSceneAdmission>;
+  cfg: BncrChannelConfigRoot;
+}): string {
+  const { parsed, admission, cfg } = args;
+  if (parsed.peer.kind === 'direct') return 'direct';
+  if (!admission.allowed) return 'denied';
+
+  const isBncrNativeCommand =
+    parseBncrNativeCommand(parsed.extracted.text, {
+      allowBareWhoami: parsed.isAdmin !== true,
+    }) !== null;
+  const isAdminOpenClawNativeCommand =
+    parsed.isAdmin === true &&
+    !isBncrNativeCommand &&
+    hasControlCommand(parsed.extracted.text, cfg as Parameters<typeof hasControlCommand>[1]);
+  if (isAdminOpenClawNativeCommand) return 'native-command-admin';
+
+  const mode = admission.scene.groupReplyMode || 'admin';
+  if (mode === 'all') return 'mode-all';
+  if (mode === 'admin') return parsed.isAdmin === true ? 'mode-admin-admin' : 'mode-admin-blocked';
+  if (mode === 'mention')
+    return parsed.shouldRespond === true ? 'mode-mention-trigger' : 'mode-mention-idle';
+  if (parsed.isAdmin === true) return 'mode-hybrid-admin';
+  return parsed.shouldRespond === true ? 'mode-hybrid-trigger' : 'mode-hybrid-idle';
+}
+
 function shouldDispatchForScene(args: {
   parsed: ReturnType<typeof parseBncrInboundParams>;
   admission: ReturnType<typeof decideSceneAdmission>;
@@ -184,5 +212,6 @@ export async function prepareBncrInboundAcceptance(args: {
     resolvedAgentId: admission.agentId,
     shouldDispatch: shouldDispatchForScene({ parsed, admission, cfg }),
     shouldAccumulate: shouldAccumulateForScene({ parsed, admission, cfg }),
+    dispatchBy: resolveDispatchBy({ parsed, admission, cfg }),
   };
 }

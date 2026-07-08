@@ -12,8 +12,9 @@ import type {
 } from './dispatch-prep.ts';
 import {
   type BncrGroupHistoryMap,
-  buildBncrInboundHistory,
   buildBncrPendingGroupContext,
+  buildBncrPendingHistoryWindowContext,
+  collectBncrPendingHistoryMedia,
 } from './group-history.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 
@@ -88,6 +89,15 @@ export function buildBncrInboundTurnContext(args: {
   } = args;
   const senderIsOwner = parsed.isAdmin === true || Boolean(ownerAllowFrom?.length);
   const senderIsAuthorized = senderIsOwner;
+  const inboundHistory = undefined;
+  const pendingHistoryMedia =
+    shouldDispatch && parsed.peer.kind === 'group'
+      ? collectBncrPendingHistoryMedia({ historyMap: groupHistories, parsed })
+      : [];
+  const pendingHistoryWindowContext =
+    shouldDispatch && parsed.peer.kind === 'group'
+      ? buildBncrPendingHistoryWindowContext({ historyMap: groupHistories, parsed, channelId })
+      : undefined;
   const structuredContextFacts = buildBncrStructuredContextFactsFromInboundParts({
     channelId,
     parsed,
@@ -105,16 +115,19 @@ export function buildBncrInboundTurnContext(args: {
     senderIsAuthorized,
   });
   const promptVisibleContextFacts = buildBncrPromptVisibleContextFacts(structuredContextFacts);
-  const supplementalUntrustedContext = Object.keys(promptVisibleContextFacts).length
-    ? [
-        {
-          label: 'Bncr inbound context',
-          source: channelId,
-          type: 'bncr.inbound_context',
-          payload: promptVisibleContextFacts,
-        },
-      ]
-    : [];
+  const supplementalUntrustedContext = [
+    ...(pendingHistoryWindowContext ? [pendingHistoryWindowContext] : []),
+    ...(Object.keys(promptVisibleContextFacts).length
+      ? [
+          {
+            label: 'Bncr inbound context',
+            source: channelId,
+            type: 'bncr.inbound_context',
+            payload: promptVisibleContextFacts,
+          },
+        ]
+      : []),
+  ];
   const platformWantsReply = parsed.shouldRespond === true;
   const wasMentioned = parsed.isBotMentioned === true || platformWantsReply;
   const isAuthorizedTextCommand = Boolean(ownerAllowFrom?.length);
@@ -134,10 +147,13 @@ export function buildBncrInboundTurnContext(args: {
           currentMessage: prepared.body,
         })
       : prepared.body;
-  const inboundHistory =
-    shouldDispatch && parsed.peer.kind === 'group'
-      ? buildBncrInboundHistory({ historyMap: groupHistories, parsed })
-      : undefined;
+  const currentTurnMedia = prepared.mediaItems.map((item) => ({
+    path: item.path,
+    contentType: item.contentType,
+    kind: item.kind,
+    messageId: msgId ?? undefined,
+  }));
+  const media = [...pendingHistoryMedia, ...currentTurnMedia];
 
   return Promise.resolve(
     resolveBncrChannelInboundRuntime(api).buildContext({
@@ -194,15 +210,7 @@ export function buildBncrInboundTurnContext(args: {
             },
           }
         : {}),
-      media:
-        prepared.mediaItems.length > 0
-          ? prepared.mediaItems.map((item) => ({
-              path: item.path,
-              contentType: item.contentType,
-              kind: item.kind,
-              messageId: msgId ?? undefined,
-            }))
-          : [],
+      media,
       access: {
         mentions: {
           canDetectMention: true,

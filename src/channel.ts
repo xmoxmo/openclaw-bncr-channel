@@ -1551,6 +1551,7 @@ class BncrBridgeRuntime {
         resolvedAgentId: string;
         shouldDispatch: boolean;
         shouldAccumulate: boolean;
+        dispatchBy: string;
       }
     | {
         ok: false;

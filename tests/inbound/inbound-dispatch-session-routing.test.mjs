@@ -156,7 +156,7 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
     body: 'ENV:hello inbound',
     rawBody: 'hello inbound',
     bodyForAgent: 'ENV:hello inbound',
-    inboundHistory: [],
+    inboundHistory: undefined,
     commandBody: 'hello inbound',
     envelopeFrom: 'Bncr:tgBot:-1001:10001',
     senderLabel: 'xmo',
@@ -220,6 +220,7 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
       envelopeBody: 'ENV:hello inbound',
     },
     media: [],
+    pendingMediaContext: [],
   });
   assert.equal(calls.builtContexts[0].To, 'Bncr:tgBot:-1001:0');
   assert.equal(calls.builtContexts[0].OriginatingTo, 'Bncr:tgBot:-1001:10001');
@@ -698,15 +699,47 @@ test('dispatchBncrInbound replays pending group text and image history on later 
   assert.ok(triggeredCtx);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:silent text/);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image>/);
-  assert.equal(triggeredCtx.message.inboundHistory?.length, 2);
-  assert.deepEqual(triggeredCtx.message.inboundHistory?.[1]?.media, [
-    {
-      path: '/tmp/bncr-inbound-media-1.bin',
-      contentType: 'image/png',
-      kind: 'image',
-      messageId: 'pending-image-1',
+  assert.equal(triggeredCtx.message.inboundHistory, undefined);
+  assert.deepEqual(calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0], {
+    label: 'Bncr history window',
+    source: 'bncr',
+    type: 'bncr.history_window',
+    payload: {
+      relation: 'before_current_message',
+      order: 'chronological',
+      messages: [
+        {
+          messageId: 'pending-text-1',
+          sender: 'alice',
+          senderId: '10001',
+          timestampMs:
+            calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.payload?.messages?.[0]
+              ?.timestampMs,
+          body: 'silent text',
+          mediaSummary: undefined,
+          medias: [],
+        },
+        {
+          messageId: 'pending-image-1',
+          sender: 'bob',
+          senderId: '10002',
+          timestampMs:
+            calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.payload?.messages?.[1]
+              ?.timestampMs,
+          body: '<media:image>',
+          mediaSummary: '<media:image>',
+          medias: [
+            {
+              path: 'media://inbound/bncr-inbound-media-1.bin',
+              contentType: 'image/png',
+              kind: 'image',
+              messageId: 'pending-image-1',
+            },
+          ],
+        },
+      ],
     },
-  ]);
+  });
   assert.deepEqual(groupHistories.get('tgBot:-1001'), []);
 });
 
@@ -789,19 +822,143 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
   const triggeredCtx = calls.builtContextArgs.at(-1);
   assert.ok(triggeredCtx);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image> \(2 images\)/);
-  assert.equal(triggeredCtx.message.inboundHistory?.length, 1);
-  assert.deepEqual(triggeredCtx.message.inboundHistory?.[0]?.media, [
+  assert.equal(triggeredCtx.message.inboundHistory, undefined);
+  assert.deepEqual(triggeredCtx.media, [
     {
-      path: '/tmp/bncr-inbound-media-1.bin',
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
       contentType: 'image/png',
       kind: 'image',
       messageId: 'pending-album-1',
     },
     {
-      path: '/tmp/bncr-inbound-media-2.bin',
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
       contentType: 'image/jpeg',
       kind: 'image',
       messageId: 'pending-album-1',
+    },
+  ]);
+  const albumHistory = calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0];
+  assert.equal(albumHistory?.type, 'bncr.history_window');
+  assert.deepEqual(albumHistory?.payload?.messages, [
+    {
+      messageId: 'pending-album-1',
+      sender: 'bob',
+      senderId: '10002',
+      timestampMs: albumHistory?.payload?.messages?.[0]?.timestampMs,
+      body: '<media:image> (2 images)',
+      mediaSummary: '<media:image> (2 images)',
+      medias: [
+        {
+          path: 'media://inbound/bncr-inbound-media-1.bin',
+          contentType: 'image/png',
+          kind: 'image',
+          messageId: 'pending-album-1',
+        },
+        {
+          path: 'media://inbound/bncr-inbound-media-2.bin',
+          contentType: 'image/jpeg',
+          kind: 'image',
+          messageId: 'pending-album-1',
+        },
+      ],
+    },
+  ]);
+});
+
+test('dispatchBncrInbound merges pending group media into a later text trigger turn', async () => {
+  const { api, calls } = createInboundApiStub();
+  const groupHistories = new Map();
+
+  const pendingImage = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10002',
+    userName: 'bob',
+    isGroup: true,
+    shouldRespond: false,
+    type: 'image',
+    msg: '收到媒体文件',
+    base64: Buffer.from('img-1').toString('base64'),
+    mimeType: 'image/png',
+    fileName: 'pending.png',
+    msgId: 'pending-image-later-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: pendingImage,
+    canonicalAgentId: 'public',
+    shouldDispatch: false,
+    shouldAccumulate: true,
+    groupHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const trigger = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '@bot 这张图是什么',
+    mimeType: 'text/plain',
+    msgId: 'trigger-text-after-image-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: trigger,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    groupHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const triggeredCtx = calls.builtContextArgs.at(-1);
+  assert.ok(triggeredCtx);
+  assert.deepEqual(triggeredCtx.media, [
+    {
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
+      contentType: 'image/png',
+      kind: 'image',
+      messageId: 'pending-image-later-1',
+    },
+  ]);
+  assert.equal(triggeredCtx.message.inboundHistory, undefined);
+  const imageHistory = calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0];
+  assert.equal(imageHistory?.type, 'bncr.history_window');
+  assert.deepEqual(imageHistory?.payload?.messages, [
+    {
+      messageId: 'pending-image-later-1',
+      sender: 'bob',
+      senderId: '10002',
+      timestampMs: imageHistory?.payload?.messages?.[0]?.timestampMs,
+      body: '<media:image>',
+      mediaSummary: '<media:image>',
+      medias: [
+        {
+          path: 'media://inbound/bncr-inbound-media-1.bin',
+          contentType: 'image/png',
+          kind: 'image',
+          messageId: 'pending-image-later-1',
+        },
+      ],
     },
   ]);
 });
@@ -940,29 +1097,79 @@ test('dispatchBncrInbound records video, audio, and document group history marke
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:video>/);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:audio>/);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:document>/);
-  assert.deepEqual(triggeredCtx.message.inboundHistory, [
+  assert.equal(triggeredCtx.message.inboundHistory, undefined);
+  assert.deepEqual(triggeredCtx.media, [
     {
-      sender: 'alice',
-      body: '<media:video>',
-      timestamp: triggeredCtx.message.inboundHistory[0].timestamp,
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
+      contentType: 'video/mp4',
+      kind: 'video',
       messageId: 'pending-video-1',
     },
     {
-      sender: 'bob',
-      body: '<media:audio>',
-      timestamp: triggeredCtx.message.inboundHistory[1].timestamp,
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
+      contentType: 'audio/ogg',
+      kind: 'audio',
       messageId: 'pending-audio-1',
     },
     {
-      sender: 'carol',
-      body: '<media:document>',
-      timestamp: triggeredCtx.message.inboundHistory[2].timestamp,
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-3.bin',
+      contentType: 'application/pdf',
+      kind: 'document',
       messageId: 'pending-file-1',
     },
   ]);
-  assert.equal(triggeredCtx.message.inboundHistory[0].media, undefined);
-  assert.equal(triggeredCtx.message.inboundHistory[1].media, undefined);
-  assert.equal(triggeredCtx.message.inboundHistory[2].media, undefined);
+  const multiHistory = calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0];
+  assert.equal(multiHistory?.type, 'bncr.history_window');
+  assert.deepEqual(multiHistory?.payload?.messages, [
+    {
+      messageId: 'pending-video-1',
+      sender: 'alice',
+      senderId: '10002',
+      timestampMs: multiHistory?.payload?.messages?.[0]?.timestampMs,
+      body: '<media:video>',
+      mediaSummary: '<media:video>',
+      medias: [
+        {
+          path: 'media://inbound/bncr-inbound-media-1.bin',
+          contentType: 'video/mp4',
+          kind: 'video',
+          messageId: 'pending-video-1',
+        },
+      ],
+    },
+    {
+      messageId: 'pending-audio-1',
+      sender: 'bob',
+      senderId: '10003',
+      timestampMs: multiHistory?.payload?.messages?.[1]?.timestampMs,
+      body: '<media:audio>',
+      mediaSummary: '<media:audio>',
+      medias: [
+        {
+          path: 'media://inbound/bncr-inbound-media-2.bin',
+          contentType: 'audio/ogg',
+          kind: 'audio',
+          messageId: 'pending-audio-1',
+        },
+      ],
+    },
+    {
+      messageId: 'pending-file-1',
+      sender: 'carol',
+      senderId: '10004',
+      timestampMs: multiHistory?.payload?.messages?.[2]?.timestampMs,
+      body: '<media:document>',
+      mediaSummary: '<media:document>',
+      medias: [
+        {
+          path: 'media://inbound/bncr-inbound-media-3.bin',
+          contentType: 'application/pdf',
+          kind: 'document',
+          messageId: 'pending-file-1',
+        },
+      ],
+    },
+  ]);
 });
 
 test('prepareBncrInboundSessionContext converts generic platform media text into Telegram-style placeholders but preserves real captions', async () => {

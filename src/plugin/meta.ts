@@ -7,4 +7,5 @@ export const BNCR_CHANNEL_META = {
   docsPath: '/channels/bncr',
   blurb: 'Bncr Channel.',
   aliases: ['bncr'],
+  preferSessionLookupForAnnounceTarget: true,
 };

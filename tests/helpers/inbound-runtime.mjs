@@ -109,7 +109,9 @@ export function createInboundApiStub(options = {}) {
             : {}),
           async saveMediaBuffer(buffer, mimeType, direction, maxBytes, fileName) {
             calls.savedMediaBuffers.push({ buffer, mimeType, direction, maxBytes, fileName });
-            return { path: `/tmp/bncr-inbound-media-${calls.savedMediaBuffers.length}.bin` };
+            return {
+              path: `/home/test/.openclaw/media/inbound/bncr-inbound-media-${calls.savedMediaBuffers.length}.bin`,
+            };
           },
         },
         reply: {
@@ -158,6 +160,8 @@ export function createInboundApiStub(options = {}) {
               BodyForCommands: args.message.commandBody,
               MediaPath: args.media?.[0]?.path,
               MediaType: args.media?.[0]?.contentType,
+              MediaPaths: args.media?.map((item) => item.path),
+              MediaTypes: args.media?.map((item) => item.contentType),
               ChatType: args.conversation.kind,
               SenderId: args.sender.id,
               From: args.from,

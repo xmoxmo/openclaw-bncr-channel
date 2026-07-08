@@ -45,6 +45,7 @@ type InboundAcceptanceResult =
       resolvedAgentId: string;
       shouldDispatch: boolean;
       shouldAccumulate: boolean;
+      dispatchBy: string;
     }
   | {
       ok: false;
@@ -254,7 +255,7 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           .trim();
         runtime.logInfo(
           'inbound',
-          `accept reject|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|status=${acceptance.status}|reason=${reason || '-'}|isAdmin=${parsed.isAdmin === true}|shouldRespond=${parsed.shouldRespond === true}`,
+          `accept reject|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|status=${acceptance.status}|reason=${reason || '-'}|isAdmin=${parsed.isAdmin === true}|platformShouldRespond=${parsed.shouldRespond === true}`,
         );
         const pendingNotice = buildBncrPendingDirectApprovalNotice({ parsed, reason });
         if (pendingNotice) {
@@ -280,10 +281,11 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
         resolvedAgentId,
         shouldDispatch,
         shouldAccumulate,
+        dispatchBy,
       } = acceptance;
       runtime.logInfo(
         'inbound',
-        `accept ok|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|sessionKey=${sessionKey}|agent=${resolvedAgentId}|dispatch=${shouldDispatch}|accumulate=${shouldAccumulate}|isAdmin=${parsed.isAdmin === true}|shouldRespond=${parsed.shouldRespond === true}`,
+        `accept ok|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|sessionKey=${sessionKey}|agent=${resolvedAgentId}|dispatch=${shouldDispatch}|dispatchBy=${dispatchBy}|accumulate=${shouldAccumulate}|isAdmin=${parsed.isAdmin === true}|platformShouldRespond=${parsed.shouldRespond === true}`,
       );
       runtime.logInfo(
         'inbound',

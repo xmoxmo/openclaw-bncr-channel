@@ -153,12 +153,14 @@ export async function dispatchBncrInbound(params: {
       historyMap: groupHistories,
       parsed,
       senderDisplayName,
+      senderId: senderIdForContext,
       bodyText: rawBody,
     });
     await recordBncrPendingGroupMedia({
       historyMap: groupHistories,
       parsed,
       senderDisplayName,
+      senderId: senderIdForContext,
       bodyText: rawBody,
       mediaItems,
       mediaContentType: mediaContentType || mimeType,

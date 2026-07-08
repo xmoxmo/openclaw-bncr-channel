@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 export type BncrStructuredContextFactsInput = {
   channelId: string;
   accountId: string;
@@ -54,7 +56,53 @@ export type BncrStructuredContextFactsInput = {
     kind?: string;
     messageId?: string;
   }>;
+  pendingMediaContext?: Array<{
+    messageId?: string;
+    sender?: string;
+    senderId?: string;
+    body?: string;
+    media?: Array<{
+      path?: string;
+      contentType?: string;
+      kind?: string;
+      messageId?: string;
+    }>;
+  }>;
 };
+
+function toBncrPromptMediaPath(id: string): string | undefined {
+  if (
+    !id ||
+    id === '.' ||
+    id === '..' ||
+    id.includes('/') ||
+    id.includes('\\') ||
+    id.includes('\0')
+  ) {
+    return undefined;
+  }
+  return `media://inbound/${encodeURIComponent(id)}`;
+}
+
+function resolveBncrPromptMediaPath(mediaPath: string | undefined): string | undefined {
+  const normalized = String(mediaPath || '').trim();
+  if (!normalized) return undefined;
+
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(normalized);
+  if (canonicalMatch?.[1]) {
+    try {
+      return toBncrPromptMediaPath(decodeURIComponent(canonicalMatch[1]));
+    } catch {
+      return undefined;
+    }
+  }
+
+  const slashNormalized = normalized.replace(/\\/g, '/');
+  if (!slashNormalized.includes('/media/inbound/')) {
+    return undefined;
+  }
+  return toBncrPromptMediaPath(path.posix.basename(slashNormalized));
+}
 
 export function buildBncrStructuredContextFacts(input: BncrStructuredContextFactsInput) {
   const rawBody = input.message.rawBody;
@@ -116,6 +164,18 @@ export function buildBncrStructuredContextFacts(input: BncrStructuredContextFact
       kind: item.kind,
       messageId: item.messageId,
     })),
+    pendingMediaContext: (input.pendingMediaContext || []).map((entry) => ({
+      messageId: entry.messageId,
+      sender: entry.sender,
+      senderId: entry.senderId,
+      body: entry.body,
+      media: (entry.media || []).map((item) => ({
+        path: item.path,
+        contentType: item.contentType,
+        kind: item.kind,
+        messageId: item.messageId,
+      })),
+    })),
   };
 }
 
@@ -141,9 +201,22 @@ export function buildBncrPromptVisibleContextFacts(
       originatingTo: string;
     };
     media?: Array<{
+      path?: string;
       contentType?: string;
       kind?: string;
       messageId?: string;
+    }>;
+    pendingMediaContext?: Array<{
+      messageId?: string;
+      sender?: string;
+      senderId?: string;
+      body?: string;
+      media?: Array<{
+        path?: string;
+        contentType?: string;
+        kind?: string;
+        messageId?: string;
+      }>;
     }>;
   } = {};
 
@@ -179,11 +252,39 @@ export function buildBncrPromptVisibleContextFacts(
   }
 
   if (facts.media.length > 0) {
-    result.media = facts.media.map((item) => ({
-      contentType: item.contentType,
-      kind: item.kind,
-      messageId: item.messageId,
-    }));
+    result.media = facts.media.flatMap((item) => {
+      const promptMediaPath = resolveBncrPromptMediaPath(item.path);
+      const payload = {
+        ...(promptMediaPath ? { path: promptMediaPath } : {}),
+        contentType: item.contentType,
+        kind: item.kind,
+        messageId: item.messageId,
+      };
+      return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+    });
+  }
+
+  if (facts.pendingMediaContext?.length) {
+    result.pendingMediaContext = facts.pendingMediaContext.flatMap((entry) => {
+      const media = (entry.media || []).flatMap((item) => {
+        const promptMediaPath = resolveBncrPromptMediaPath(item.path);
+        const payload = {
+          ...(promptMediaPath ? { path: promptMediaPath } : {}),
+          contentType: item.contentType,
+          kind: item.kind,
+          messageId: item.messageId,
+        };
+        return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+      });
+      const payload = {
+        messageId: entry.messageId,
+        sender: entry.sender,
+        senderId: entry.senderId,
+        body: entry.body,
+        ...(media.length > 0 ? { media } : {}),
+      };
+      return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+    });
   }
 
   return result;
@@ -248,6 +349,18 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
   bridgeSenderName?: string;
   senderIsOwner?: boolean;
   senderIsAuthorized?: boolean;
+  pendingMediaContext?: Array<{
+    messageId?: string;
+    sender?: string;
+    senderId?: string;
+    body?: string;
+    media?: Array<{
+      path?: string;
+      contentType?: string;
+      kind?: string;
+      messageId?: string;
+    }>;
+  }>;
 };
 
 export function buildBncrStructuredContextFactsFromInboundParts(
@@ -310,5 +423,6 @@ export function buildBncrStructuredContextFactsFromInboundParts(
       kind: item.kind || inferBncrStructuredMediaKind(item.contentType),
       messageId: input.parsed.msgId,
     })),
+    pendingMediaContext: input.pendingMediaContext,
   });
 }

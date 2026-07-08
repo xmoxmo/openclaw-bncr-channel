@@ -57,7 +57,7 @@ test('buildBncrStructuredContextFacts preserves structured message, route, reply
     },
     media: [
       {
-        path: '/tmp/bncr-inbound-media.bin',
+        path: '/home/test/.openclaw/media/inbound/bncr-inbound-media.bin',
         contentType: 'image/png',
         kind: 'image',
         messageId: 'msg-1',
@@ -116,12 +116,13 @@ test('buildBncrStructuredContextFacts preserves structured message, route, reply
     },
     media: [
       {
-        path: '/tmp/bncr-inbound-media.bin',
+        path: '/home/test/.openclaw/media/inbound/bncr-inbound-media.bin',
         contentType: 'image/png',
         kind: 'image',
         messageId: 'msg-1',
       },
     ],
+    pendingMediaContext: [],
   });
 });
 
@@ -160,7 +161,7 @@ test('buildBncrPromptVisibleContextFacts only preserves facts not covered by off
     },
     media: [
       {
-        path: '/tmp/bncr-inbound-media.bin',
+        path: '/home/test/.openclaw/media/inbound/bncr-inbound-media.bin',
         contentType: 'image/png',
         kind: 'image',
         messageId: 'msg-1',
@@ -178,6 +179,7 @@ test('buildBncrPromptVisibleContextFacts only preserves facts not covered by off
     },
     media: [
       {
+        path: 'media://inbound/bncr-inbound-media.bin',
         contentType: 'image/png',
         kind: 'image',
         messageId: 'msg-1',
@@ -280,7 +282,7 @@ test('buildBncrPromptVisibleContextFacts preserves media-only facts without leak
     },
     media: [
       {
-        path: '/tmp/bncr-inbound-media.bin',
+        path: '/home/test/.openclaw/media/inbound/bncr-inbound-media.bin',
         contentType: 'image/png',
         kind: 'image',
         messageId: 'msg-1',
@@ -291,9 +293,129 @@ test('buildBncrPromptVisibleContextFacts preserves media-only facts without leak
   assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
     media: [
       {
+        path: 'media://inbound/bncr-inbound-media.bin',
         contentType: 'image/png',
         kind: 'image',
         messageId: 'msg-1',
+      },
+    ],
+  });
+});
+
+test('buildBncrPromptVisibleContextFacts drops prompt-visible path for non-inbound local media', () => {
+  const facts = buildBncrStructuredContextFacts({
+    channelId: 'bncr',
+    accountId: 'Primary',
+    route: {},
+    conversation: {
+      kind: 'direct',
+      id: '-1001',
+      label: 'Bncr:tgBot:-1001:10001',
+    },
+    reply: {
+      to: 'Bncr:tgBot:-1001:10001',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+    },
+    sender: {
+      id: 'client-1',
+      displayName: 'bncr-client',
+    },
+    message: {
+      id: 'msg-1',
+      rawBody: 'document inbound',
+    },
+    media: [
+      {
+        path: '/tmp/random-outside.bin',
+        contentType: 'application/octet-stream',
+        kind: 'document',
+        messageId: 'msg-1',
+      },
+    ],
+  });
+
+  assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
+    media: [
+      {
+        contentType: 'application/octet-stream',
+        kind: 'document',
+        messageId: 'msg-1',
+      },
+    ],
+  });
+});
+
+test('buildBncrPromptVisibleContextFacts preserves pending media context with sender, body, and multi-attachment refs', () => {
+  const facts = buildBncrStructuredContextFacts({
+    channelId: 'bncr',
+    accountId: 'Primary',
+    route: {},
+    conversation: {
+      kind: 'group',
+      id: '-1001',
+      label: 'Bncr:tgBot:-1001:0',
+    },
+    reply: {
+      to: 'Bncr:tgBot:-1001:0',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+    },
+    sender: {
+      id: '10001',
+      displayName: 'xmo',
+    },
+    message: {
+      id: 'msg-1',
+      rawBody: '@bot 看看上面的图',
+    },
+    pendingMediaContext: [
+      {
+        messageId: 'pending-1',
+        sender: 'osxmo',
+        senderId: '6278285192',
+        body: '这个',
+        media: [
+          {
+            path: '/home/test/.openclaw/media/inbound/a.jpg',
+            contentType: 'image/jpeg',
+            kind: 'image',
+            messageId: 'pending-1',
+          },
+          {
+            path: '/home/test/.openclaw/media/inbound/b.png',
+            contentType: 'image/png',
+            kind: 'image',
+            messageId: 'pending-1',
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
+    reply: {
+      to: 'Bncr:tgBot:-1001:0',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+    },
+    pendingMediaContext: [
+      {
+        messageId: 'pending-1',
+        sender: 'osxmo',
+        senderId: '6278285192',
+        body: '这个',
+        media: [
+          {
+            path: 'media://inbound/a.jpg',
+            contentType: 'image/jpeg',
+            kind: 'image',
+            messageId: 'pending-1',
+          },
+          {
+            path: 'media://inbound/b.png',
+            contentType: 'image/png',
+            kind: 'image',
+            messageId: 'pending-1',
+          },
+        ],
       },
     ],
   });

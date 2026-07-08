@@ -1,3 +1,4 @@
+import path from 'node:path';
 import {
   createChannelHistoryWindow,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -8,7 +9,11 @@ import { formatOpenClawAgentEnvelope } from '../../openclaw/reply-runtime.ts';
 import type { BncrInboundApi } from './contracts.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 
-export type BncrGroupHistoryMap = Map<string, HistoryEntry[]>;
+export type BncrHistoryEntry = HistoryEntry & {
+  senderId?: string;
+};
+
+export type BncrGroupHistoryMap = Map<string, BncrHistoryEntry[]>;
 
 type BncrHistoryMediaKind = NonNullable<HistoryMediaEntry['kind']>;
 
@@ -30,6 +35,7 @@ export function recordBncrPendingGroupText(args: {
   historyMap: BncrGroupHistoryMap;
   parsed: ParsedInbound;
   senderDisplayName: string;
+  senderId: string;
   bodyText: string;
 }) {
   const historyKey = buildBncrGroupHistoryKey(args.parsed);
@@ -40,6 +46,7 @@ export function recordBncrPendingGroupText(args: {
     limit: DEFAULT_GROUP_HISTORY_LIMIT,
     entry: {
       sender: args.senderDisplayName,
+      senderId: args.senderId,
       body,
       timestamp: Date.now(),
       messageId: args.parsed.msgId,
@@ -74,6 +81,7 @@ export async function recordBncrPendingGroupMedia(args: {
   historyMap: BncrGroupHistoryMap;
   parsed: ParsedInbound;
   senderDisplayName: string;
+  senderId: string;
   bodyText: string;
   mediaItems?: Array<{
     path: string;
@@ -101,12 +109,13 @@ export async function recordBncrPendingGroupMedia(args: {
         mediaContentType: args.mediaContentType,
       });
   const body = normalizeTextBody(args.bodyText) || buildBncrHistoryMediaBody(kind);
-  if (normalizedMediaItems.length === 0 || kind !== 'image') {
+  if (normalizedMediaItems.length === 0) {
     createChannelHistoryWindow({ historyMap: args.historyMap }).record({
       historyKey,
       limit: DEFAULT_GROUP_HISTORY_LIMIT,
       entry: {
         sender: args.senderDisplayName,
+        senderId: args.senderId,
         body,
         timestamp: Date.now(),
         messageId: args.parsed.msgId,
@@ -114,25 +123,25 @@ export async function recordBncrPendingGroupMedia(args: {
     });
     return;
   }
-  await createChannelHistoryWindow({ historyMap: args.historyMap }).recordWithMedia({
+  createChannelHistoryWindow({ historyMap: args.historyMap }).record({
     historyKey,
     limit: DEFAULT_GROUP_HISTORY_LIMIT,
     entry: {
       sender: args.senderDisplayName,
+      senderId: args.senderId,
       body,
       timestamp: Date.now(),
       messageId: args.parsed.msgId,
+      media: normalizedMediaItems.map(
+        (item) =>
+          ({
+            path: item.path,
+            contentType: item.contentType || args.mediaContentType,
+            kind: item.kind || kind,
+            messageId: args.parsed.msgId,
+          }) satisfies HistoryMediaEntry,
+      ),
     },
-    messageId: args.parsed.msgId,
-    media: normalizedMediaItems.map(
-      (item) =>
-        ({
-          path: item.path,
-          contentType: item.contentType || args.mediaContentType || 'image/*',
-          kind: 'image',
-          messageId: args.parsed.msgId,
-        }) satisfies HistoryMediaEntry,
-    ),
   });
 }
 
@@ -164,16 +173,91 @@ export function buildBncrPendingGroupContext(args: {
   });
 }
 
-export function buildBncrInboundHistory(args: {
+export function collectBncrPendingHistoryMedia(args: {
   historyMap: BncrGroupHistoryMap;
   parsed: ParsedInbound;
+}): HistoryMediaEntry[] {
+  const historyKey = buildBncrGroupHistoryKey(args.parsed);
+  if (!historyKey) return [];
+  const entries = args.historyMap.get(historyKey) || [];
+  return entries.flatMap((entry) => (Array.isArray(entry.media) ? entry.media : []));
+}
+
+function toBncrPromptMediaPath(value: string | undefined): string | undefined {
+  const normalized = String(value || '').trim();
+  if (!normalized) return undefined;
+  const slashNormalized = normalized.replace(/\\/g, '/');
+  if (!slashNormalized.includes('/media/inbound/')) return undefined;
+  const base = path.posix.basename(slashNormalized);
+  if (!base || base === '.' || base === '..') return undefined;
+  return `media://inbound/${encodeURIComponent(base)}`;
+}
+
+function buildHistoryWindowMediaSummary(
+  media: HistoryMediaEntry[] | undefined,
+): string | undefined {
+  if (!Array.isArray(media) || media.length === 0) return undefined;
+  const kinds = media
+    .map((item) =>
+      String(item?.kind || '')
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+  const uniformKind = kinds[0] && kinds.every((item) => item === kinds[0]) ? kinds[0] : 'document';
+  const count = media.length;
+  if (uniformKind === 'image')
+    return count === 1 ? '<media:image>' : `<media:image> (${count} images)`;
+  if (uniformKind === 'video')
+    return count === 1 ? '<media:video>' : `<media:video> (${count} videos)`;
+  if (uniformKind === 'audio') {
+    return count === 1 ? '<media:audio>' : `<media:audio> (${count} audio attachments)`;
+  }
+  return count === 1 ? '<media:document>' : `<media:document> (${count} attachments)`;
+}
+
+function buildHistoryWindowMedias(media: HistoryMediaEntry[] | undefined) {
+  if (!Array.isArray(media) || media.length === 0) return [];
+  return media.flatMap((item) => {
+    const promptPath = toBncrPromptMediaPath(item?.path);
+    const payload = {
+      ...(promptPath ? { path: promptPath } : {}),
+      ...(item?.contentType ? { contentType: item.contentType } : {}),
+      ...(item?.kind ? { kind: item.kind } : {}),
+      ...(item?.messageId ? { messageId: item.messageId } : {}),
+    };
+    return Object.keys(payload).length > 0 ? [payload] : [];
+  });
+}
+
+export function buildBncrPendingHistoryWindowContext(args: {
+  historyMap: BncrGroupHistoryMap;
+  parsed: ParsedInbound;
+  channelId: string;
 }) {
   const historyKey = buildBncrGroupHistoryKey(args.parsed);
   if (!historyKey) return undefined;
-  return createChannelHistoryWindow({ historyMap: args.historyMap }).buildInboundHistory({
-    historyKey,
-    limit: DEFAULT_GROUP_HISTORY_LIMIT,
-  });
+  const entries = args.historyMap.get(historyKey) || [];
+  if (entries.length === 0) return undefined;
+  const messages = entries.slice(-DEFAULT_GROUP_HISTORY_LIMIT).map((entry) => ({
+    ...(entry.messageId ? { messageId: entry.messageId } : {}),
+    sender: entry.sender,
+    senderId: entry.senderId,
+    ...(typeof entry.timestamp === 'number' ? { timestampMs: entry.timestamp } : {}),
+    body: entry.body,
+    mediaSummary: buildHistoryWindowMediaSummary(entry.media),
+    medias: buildHistoryWindowMedias(entry.media),
+  }));
+  return {
+    label: 'Bncr history window',
+    source: args.channelId,
+    type: 'bncr.history_window',
+    payload: {
+      relation: 'before_current_message',
+      order: 'chronological',
+      messages,
+    },
+  };
 }
 
 export function clearBncrPendingGroupHistory(args: {

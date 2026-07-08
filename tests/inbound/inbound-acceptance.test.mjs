@@ -152,6 +152,7 @@ test('prepareBncrInboundAcceptance returns accepted payload with normalized sess
     resolvedAgentId: 'public',
     shouldDispatch: true,
     shouldAccumulate: true,
+    dispatchBy: 'mode-admin-admin',
   });
 });
 
@@ -324,6 +325,7 @@ test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public ag
     resolvedAgentId: 'public',
     shouldDispatch: true,
     shouldAccumulate: true,
+    dispatchBy: 'direct',
   });
   assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
     sceneKey: 'tgBot:10001',

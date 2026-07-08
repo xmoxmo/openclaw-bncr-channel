@@ -77,7 +77,10 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
   assert.equal(calls.builtContexts[0].RawBody, 'image inbound');
   assert.equal(calls.builtContexts[0].CommandBody, 'image inbound');
   assert.equal(calls.builtContexts[0].BodyForCommands, 'image inbound');
-  assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media-1.bin');
+  assert.equal(
+    calls.builtContexts[0].MediaPath,
+    '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
+  );
   assert.equal(calls.builtContexts[0].MediaType, 'image/png');
   assert.deepEqual(
     calls.builtContexts[0].BncrStructuredContextFacts,
@@ -85,7 +88,7 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
   );
   assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
     {
-      path: '/tmp/bncr-inbound-media-1.bin',
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
       contentType: 'image/png',
       kind: 'image',
       messageId: 'inbound-media-small',
@@ -103,6 +106,7 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
         },
         media: [
           {
+            path: 'media://inbound/bncr-inbound-media-1.bin',
             contentType: 'image/png',
             kind: 'image',
             messageId: 'inbound-media-small',
@@ -246,11 +250,14 @@ test('dispatchBncrInbound downloads http media path before building inbound cont
     assert.equal(calls.savedMediaBuffers[0].direction, 'inbound');
     assert.equal(calls.savedMediaBuffers[0].maxBytes, 200 * 1024 * 1024);
     assert.equal(calls.savedMediaBuffers[0].fileName, '1781167496030');
-    assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media-1.bin');
+    assert.equal(
+      calls.builtContexts[0].MediaPath,
+      '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
+    );
     assert.equal(calls.builtContexts[0].MediaType, 'image/jpeg');
     assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
       {
-        path: '/tmp/bncr-inbound-media-1.bin',
+        path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
         contentType: 'image/jpeg',
         kind: 'image',
         messageId: 'inbound-media-url',
@@ -307,17 +314,20 @@ test('dispatchBncrInbound accepts mediaList and exposes multiple media entries i
   assert.equal(calls.savedMediaBuffers[1].buffer.toString(), 'img-2');
   assert.equal(calls.builtContexts[0].Body, 'ENV:<media:image> (2 images)');
   assert.equal(calls.builtContexts[0].BodyForAgent, 'ENV:<media:image> (2 images)');
-  assert.equal(calls.builtContexts[0].MediaPath, '/tmp/bncr-inbound-media-1.bin');
+  assert.equal(
+    calls.builtContexts[0].MediaPath,
+    '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
+  );
   assert.equal(calls.builtContexts[0].MediaType, 'image/png');
   assert.deepEqual(calls.builtContextArgs[0].media, [
     {
-      path: '/tmp/bncr-inbound-media-1.bin',
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
       contentType: 'image/png',
       kind: 'image',
       messageId: 'inbound-media-list-1',
     },
     {
-      path: '/tmp/bncr-inbound-media-2.bin',
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
       contentType: 'image/jpeg',
       kind: 'image',
       messageId: 'inbound-media-list-1',
@@ -325,13 +335,13 @@ test('dispatchBncrInbound accepts mediaList and exposes multiple media entries i
   ]);
   assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
     {
-      path: '/tmp/bncr-inbound-media-1.bin',
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
       contentType: 'image/png',
       kind: 'image',
       messageId: 'inbound-media-list-1',
     },
     {
-      path: '/tmp/bncr-inbound-media-2.bin',
+      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
       contentType: 'image/jpeg',
       kind: 'image',
       messageId: 'inbound-media-list-1',

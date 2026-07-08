@@ -88,12 +88,14 @@ test('buildBncrInboundTurnContext replays pending group text and image history i
         [
           {
             sender: 'alice',
+            senderId: '10002',
             body: 'first text',
             timestamp: 1,
             messageId: 'msg-history-1',
           },
           {
             sender: 'bob',
+            senderId: '10003',
             body: '<media:image>',
             timestamp: 2,
             messageId: 'msg-history-2',
@@ -119,28 +121,43 @@ test('buildBncrInboundTurnContext replays pending group text and image history i
     calls[0].message.bodyForAgent,
     /\[Current message - respond to this\]\nENV:@bot summarize/,
   );
-  assert.deepEqual(calls[0].message.inboundHistory, [
-    {
-      sender: 'alice',
-      body: 'first text',
-      timestamp: 1,
-      messageId: 'msg-history-1',
-    },
-    {
-      sender: 'bob',
-      body: '<media:image>',
-      timestamp: 2,
-      messageId: 'msg-history-2',
-      media: [
+  assert.equal(calls[0].message.inboundHistory, undefined);
+  assert.deepEqual(calls[0].supplemental.untrustedContext?.[0], {
+    label: 'Bncr history window',
+    source: 'bncr',
+    type: 'bncr.history_window',
+    payload: {
+      relation: 'before_current_message',
+      order: 'chronological',
+      messages: [
         {
-          path: '/tmp/history-image.png',
-          contentType: 'image/png',
-          kind: 'image',
+          messageId: 'msg-history-1',
+          sender: 'alice',
+          senderId: '10002',
+          timestampMs: 1,
+          body: 'first text',
+          mediaSummary: undefined,
+          medias: [],
+        },
+        {
           messageId: 'msg-history-2',
+          sender: 'bob',
+          senderId: '10003',
+          timestampMs: 2,
+          body: '<media:image>',
+          mediaSummary: '<media:image>',
+          medias: [
+            {
+              contentType: 'image/png',
+              kind: 'image',
+              messageId: 'msg-history-2',
+            },
+          ],
         },
       ],
     },
-  ]);
+  });
+  assert.equal(calls[0].supplemental.untrustedContext?.[1]?.type, 'bncr.inbound_context');
 });
 
 test('buildBncrInboundTurnContext replays pending non-image media markers without synthetic attachments', async () => {
@@ -199,12 +216,14 @@ test('buildBncrInboundTurnContext replays pending non-image media markers withou
         [
           {
             sender: 'alice',
+            senderId: '10002',
             body: '<media:video>',
             timestamp: 3,
             messageId: 'msg-history-4',
           },
           {
             sender: 'bob',
+            senderId: '10003',
             body: '<media:audio>',
             timestamp: 4,
             messageId: 'msg-history-5',
@@ -218,20 +237,37 @@ test('buildBncrInboundTurnContext replays pending non-image media markers withou
   assert.equal(calls.length, 1);
   assert.match(calls[0].message.bodyForAgent, /ENV:<media:video>/);
   assert.match(calls[0].message.bodyForAgent, /ENV:<media:audio>/);
-  assert.deepEqual(calls[0].message.inboundHistory, [
-    {
-      sender: 'alice',
-      body: '<media:video>',
-      timestamp: 3,
-      messageId: 'msg-history-4',
+  assert.equal(calls[0].message.inboundHistory, undefined);
+  assert.deepEqual(calls[0].supplemental.untrustedContext?.[0], {
+    label: 'Bncr history window',
+    source: 'bncr',
+    type: 'bncr.history_window',
+    payload: {
+      relation: 'before_current_message',
+      order: 'chronological',
+      messages: [
+        {
+          messageId: 'msg-history-4',
+          sender: 'alice',
+          senderId: '10002',
+          timestampMs: 3,
+          body: '<media:video>',
+          mediaSummary: undefined,
+          medias: [],
+        },
+        {
+          messageId: 'msg-history-5',
+          sender: 'bob',
+          senderId: '10003',
+          timestampMs: 4,
+          body: '<media:audio>',
+          mediaSummary: undefined,
+          medias: [],
+        },
+      ],
     },
-    {
-      sender: 'bob',
-      body: '<media:audio>',
-      timestamp: 4,
-      messageId: 'msg-history-5',
-    },
-  ]);
+  });
+  assert.equal(calls[0].supplemental.untrustedContext?.[1]?.type, 'bncr.inbound_context');
 });
 
 test('buildBncrInboundTurnContext passes canonical route fields and visible untrusted context', async () => {
