@@ -2354,7 +2354,7 @@ class BncrBridgeRuntime {
   // 严谨目标解析：
   // 1) 标准 to 仅认 Bncr:<platform>:0:<userId> / Bncr:<platform>:<groupId>:0
   // 2) 仍接受 strict sessionKey 作为内部兼容输入
-  // 3) 输入侧额外兼容 Bncr:<platform>:user:<userId> / Bncr:<platform>:group:<groupId>
+  // 3) 输入侧额外兼容 Bncr:<platform>:User:<userId> / Bncr:<platform>:Group:<groupId>
   // 4) 其他旧格式直接失败，并输出标准格式提示日志
   resolveVerifiedTarget(
     rawTarget: string,

@@ -1,6 +1,6 @@
 import type { ChatType } from 'openclaw/plugin-sdk/core';
 import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
-import { formatDisplayScope, parseExplicitTarget } from '../core/targets.ts';
+import { formatHumanDisplayScope, parseExplicitTarget } from '../core/targets.ts';
 import type { BncrRoute } from '../core/types.ts';
 import { asSanitizedString } from '../core/value-sanitize.ts';
 import { resolveBncrOutboundSessionRoute } from '../messaging/outbound/session-route.ts';
@@ -11,12 +11,7 @@ import {
 import type { BncrChannelConfigRoot } from './channel-runtime-types.ts';
 
 function formatBncrHumanDisplay(route: BncrRoute): string {
-  const platform = asSanitizedString(route?.platform).trim();
-  const groupId = asSanitizedString(route?.groupId).trim();
-  const userId = asSanitizedString(route?.userId).trim();
-  if (platform && groupId && groupId !== '0') return `Bncr:${platform}:Group:${groupId}`;
-  if (platform && userId && userId !== '0') return `Bncr:${platform}:User:${userId}`;
-  return formatDisplayScope(route);
+  return formatHumanDisplayScope(route);
 }
 
 type BncrMessagingRuntimeBridge = {

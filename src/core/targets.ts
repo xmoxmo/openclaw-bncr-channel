@@ -428,6 +428,15 @@ export function formatDisplayScope(route: BncrRoute): string {
   return `Bncr:${platform}:0:${userId}`;
 }
 
+export function formatHumanDisplayScope(route: BncrRoute): string {
+  const platform = asTargetString(route?.platform).trim();
+  const groupId = asTargetString(route?.groupId || '0').trim() || '0';
+  const userId = asTargetString(route?.userId || '0').trim() || '0';
+  if (groupId !== '0') return `Bncr:${platform}:Group:${groupId}`;
+  if (userId !== '0') return `Bncr:${platform}:User:${userId}`;
+  return formatDisplayScope(route);
+}
+
 export function buildDisplayScopeCandidates(route: BncrRoute): string[] {
   const candidates = [formatDisplayScope(route)].filter(Boolean);
   return Array.from(new Set(candidates.map((x) => asTargetString(x).trim()).filter(Boolean)));

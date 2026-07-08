@@ -1,4 +1,5 @@
 import { emitBncrLogLine } from '../../core/logging.ts';
+import { formatHumanDisplayScope, parseRouteFromDisplayScope } from '../../core/targets.ts';
 import type { OpenClawChannelRuntimeContext } from '../../openclaw/channel-runtime-contracts.ts';
 import {
   recordBncrSessionMetaFromInbound,
@@ -7,12 +8,8 @@ import {
 
 function formatBncrSessionLabel(displayTo: string): string {
   const raw = String(displayTo || '').trim();
-  const parts = raw.split(':');
-  if (parts.length === 4 && parts[0] === 'Bncr') {
-    const [, platform, groupId, userId] = parts;
-    if (platform && groupId && groupId !== '0') return `Bncr:${platform}:Group:${groupId}`;
-    if (platform && userId && userId !== '0') return `Bncr:${platform}:User:${userId}`;
-  }
+  const route = parseRouteFromDisplayScope(raw);
+  if (route) return formatHumanDisplayScope(route);
   return raw;
 }
 
