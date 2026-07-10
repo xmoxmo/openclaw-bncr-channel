@@ -337,6 +337,18 @@ test('parseSceneAdminCommand parses allow deny revoke bind mode and list command
       scope: 'scenes',
     },
   });
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr list scenes public tgBot')),
+    {
+      matched: true,
+      valid: true,
+      command: {
+        kind: 'list',
+        scope: 'scenes',
+        filters: ['public', 'tgbot'],
+      },
+    },
+  );
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr allow')), {
     matched: true,
     valid: true,
@@ -361,7 +373,7 @@ test('parseSceneAdminCommand parses allow deny revoke bind mode and list command
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr list nope')), {
     matched: true,
     valid: false,
-    text: 'Usage: /bncr list <pending|scenes>',
+    text: 'Usage: /bncr list <pending|scenes> [filters...]',
   });
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr help')), {
     matched: false,

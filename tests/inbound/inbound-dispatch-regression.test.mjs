@@ -50,6 +50,7 @@ test('handleInbound async dispatch path reaches built inbound context instead of
         source: 'bncr',
         type: 'bncr.inbound_context',
         payload: {
+          platform: 'bncr/tgBot',
           sender: {
             isAdmin: true,
             isOwner: true,

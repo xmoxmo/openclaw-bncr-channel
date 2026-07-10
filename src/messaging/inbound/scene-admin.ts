@@ -14,7 +14,7 @@ export type BncrSceneAdminCommand =
   | { kind: 'mode-help' }
   | { kind: 'mode-get'; sceneKey?: string }
   | { kind: 'mode'; sceneKey: string; mode: BncrGroupReplyMode }
-  | { kind: 'list'; scope: 'pending' | 'scenes' }
+  | { kind: 'list'; scope: 'pending' | 'scenes'; filters?: string[] }
   | { kind: 'history-limit-get'; sceneKey?: string }
   | { kind: 'history-limit-set'; sceneKey: string; limit: number }
   | { kind: 'history-force-get'; sceneKey?: string }
@@ -67,6 +67,11 @@ function splitArgs(raw: string): string[] {
     .split(/\s+/)
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+function normalizeFilters(args: string[]): string[] | undefined {
+  const filters = args.map((part) => normalizeToken(part).toLowerCase()).filter(Boolean);
+  return filters.length > 0 ? filters : undefined;
 }
 
 function resolveCurrentGroupSceneKey(parsed: ParsedInbound): string | null {
@@ -151,12 +156,26 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
       };
     case 'list':
       if (args[0] === 'pending') {
-        return { matched: true, valid: true, command: { kind: 'list', scope: 'pending' } };
+        const filters = normalizeFilters(args.slice(1));
+        return {
+          matched: true,
+          valid: true,
+          command: { kind: 'list', scope: 'pending', ...(filters ? { filters } : {}) },
+        };
       }
       if (args[0] === 'scenes') {
-        return { matched: true, valid: true, command: { kind: 'list', scope: 'scenes' } };
+        const filters = normalizeFilters(args.slice(1));
+        return {
+          matched: true,
+          valid: true,
+          command: { kind: 'list', scope: 'scenes', ...(filters ? { filters } : {}) },
+        };
       }
-      return { matched: true, valid: false, text: 'Usage: /bncr list <pending|scenes>' };
+      return {
+        matched: true,
+        valid: false,
+        text: 'Usage: /bncr list <pending|scenes> [filters...]',
+      };
     case 'history-limit':
       if (args.length === 0) {
         return { matched: true, valid: true, command: { kind: 'history-limit-get' } };
@@ -271,6 +290,30 @@ function formatSceneGroups(scenes: BncrSceneRecord[]): string {
     .join('\n\n');
 }
 
+function buildSceneSearchHaystack(scene: BncrSceneRecord): string[] {
+  const parts: string[] = [
+    normalizeToken(scene.sceneKey),
+    normalizeToken(scene.platform),
+    normalizeToken(scene.status),
+    normalizeToken(scene.agentId ?? ''),
+    normalizeToken(scene.kind),
+    normalizeToken(scene.userId ?? ''),
+    normalizeToken(scene.userName ?? ''),
+    normalizeToken(scene.groupId ?? ''),
+    normalizeToken(scene.groupName ?? ''),
+  ];
+  if (scene.kind === 'group') {
+    parts.push(scene.groupReplyMode || 'admin');
+  }
+  return parts.map((part) => part.toLowerCase()).filter(Boolean);
+}
+
+function matchesSceneFilters(scene: BncrSceneRecord, filters: string[] | undefined): boolean {
+  if (!filters?.length) return true;
+  const haystack = buildSceneSearchHaystack(scene);
+  return filters.every((filter) => haystack.some((part) => part.includes(filter)));
+}
+
 function applySceneStatus(scene: BncrSceneRecord, status: BncrSceneStatus): BncrSceneRecord {
   return {
     ...scene,
@@ -299,11 +342,19 @@ export function executeSceneAdminCommand(args: {
   if (command.kind === 'list') {
     const scenes = Array.from(sceneRegistry.values())
       .filter((scene) => (command.scope === 'pending' ? scene.status === 'pending' : true))
+      .filter((scene) => matchesSceneFilters(scene, command.filters))
       .sort((a, b) => a.lastSeenAt - b.lastSeenAt);
     if (scenes.length === 0) {
       return {
         ok: true,
-        text: command.scope === 'pending' ? 'No pending scenes.' : 'No scenes recorded.',
+        text:
+          command.scope === 'pending'
+            ? command.filters?.length
+              ? `No pending scenes matched: ${command.filters.join(' ')}`
+              : 'No pending scenes.'
+            : command.filters?.length
+              ? `No scenes matched: ${command.filters.join(' ')}`
+              : 'No scenes recorded.',
       };
     }
     return { ok: true, text: formatSceneGroups(scenes) };

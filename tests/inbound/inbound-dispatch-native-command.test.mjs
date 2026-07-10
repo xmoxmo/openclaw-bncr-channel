@@ -1374,6 +1374,138 @@ test('scene admin list pending only includes pending records', async () => {
   );
 });
 
+test('scene admin list pending filters pending scenes by search terms', async () => {
+  const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'pending',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'xmo',
+        lastSeenAt: 2,
+      },
+    ],
+    [
+      'tgBot:-1002',
+      {
+        sceneKey: 'tgBot:-1002',
+        kind: 'group',
+        status: 'pending',
+        platform: 'tgBot',
+        groupId: '-1002',
+        groupName: 'beta_group',
+        agentId: 'zeta',
+        groupReplyMode: 'mention',
+        lastSeenAt: 3,
+      },
+    ],
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'wind_system',
+        agentId: 'public',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    userId: '20002',
+    isAdmin: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/bncr list pending zeta mention',
+    mimeType: 'text/plain',
+    msgId: 'slash-list-pending-filtered',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 5,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.match(
+    enqueueCalls[0].payload.text,
+    /^👥 Group Chat zeta mention\n\n {2}SceneId: tgBot:-1002\n {2}Details: status=pending id=-1002 name=beta_group$/,
+  );
+});
+
+test('scene admin list pending reports when filters match no pending scenes', async () => {
+  const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'pending',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'xmo',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    userId: '20002',
+    isAdmin: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/bncr list pending zeta',
+    mimeType: 'text/plain',
+    msgId: 'slash-list-pending-no-match',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 5,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(enqueueCalls[0].payload.text, 'No pending scenes matched: zeta');
+});
+
 test('scene admin list scenes returns private groups first and group groups sorted by title', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
   const sceneRegistry = new Map([
@@ -1521,6 +1653,139 @@ test('scene admin list scenes sorts multiple group chat sections by title after 
     enqueueCalls[0].payload.text,
     /^📱 Private Chat public\n\n {2}SceneId: tgBot:10001\n {2}Details: status=allowed id=10001 name=xmo\n\n👥 Group Chat alpha admin\n\n {2}SceneId: tgBot:-1001\n {2}Details: status=pending id=-1001 name=alpha_group\n\n👥 Group Chat zeta mention\n\n {2}SceneId: tgBot:-1002\n {2}Details: status=allowed id=-1002 name=beta_group$/,
   );
+});
+
+test('scene admin list scenes filters by agent mode and platform terms', async () => {
+  const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1002',
+      {
+        sceneKey: 'tgBot:-1002',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1002',
+        groupName: 'beta_group',
+        agentId: 'zeta',
+        groupReplyMode: 'mention',
+        lastSeenAt: 1,
+      },
+    ],
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'xmo',
+        lastSeenAt: 3,
+      },
+    ],
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'pending',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'alpha_group',
+        agentId: 'alpha',
+        groupReplyMode: 'admin',
+        lastSeenAt: 2,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    userId: '20002',
+    isAdmin: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/bncr list scenes zeta mention',
+    mimeType: 'text/plain',
+    msgId: 'slash-list-scenes-filtered',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 5,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.match(
+    enqueueCalls[0].payload.text,
+    /^👥 Group Chat zeta mention\n\n {2}SceneId: tgBot:-1002\n {2}Details: status=allowed id=-1002 name=beta_group$/,
+  );
+});
+
+test('scene admin list scenes reports when filters match nothing', async () => {
+  const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'xmo',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    userId: '20002',
+    isAdmin: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/bncr list scenes nope',
+    mimeType: 'text/plain',
+    msgId: 'slash-list-scenes-no-match',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 5,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(enqueueCalls[0].payload.text, 'No scenes matched: nope');
 });
 
 test('scene admin commands reject non-admin callers without falling through to agent', async () => {
@@ -1770,6 +2035,7 @@ test('slash command with no native reply falls back to normal bncr agent inbound
       source: 'bncr',
       type: 'bncr.inbound_context',
       payload: {
+        platform: 'bncr/tgBot',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'Bncr:tgBot:-1001:10001',
@@ -1933,6 +2199,7 @@ test('slash command without clientId still falls back to normal bncr agent inbou
       source: 'bncr',
       type: 'bncr.inbound_context',
       payload: {
+        platform: 'bncr/tgBot',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'Bncr:tgBot:-1001:10001',

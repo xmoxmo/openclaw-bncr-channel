@@ -149,6 +149,7 @@ test('buildBncrPromptVisibleContextFacts only preserves facts not covered by off
       id: 'client-1',
       displayName: 'bncr-client',
     },
+    platform: 'tgBot',
     trigger: {
       botName: 'BncrBot',
     },
@@ -170,6 +171,7 @@ test('buildBncrPromptVisibleContextFacts only preserves facts not covered by off
   });
 
   assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
+    platform: 'bncr/tgBot',
     trigger: {
       botName: 'BncrBot',
     },
@@ -206,6 +208,7 @@ test('buildBncrPromptVisibleContextFacts exposes botName when the adapter provid
       id: '10001',
       displayName: 'xmo',
     },
+    platform: 'tgBot',
     trigger: {
       botName: 'AiChatXMO_bot',
     },
@@ -216,6 +219,7 @@ test('buildBncrPromptVisibleContextFacts exposes botName when the adapter provid
   });
 
   assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
+    platform: 'bncr/tgBot',
     trigger: {
       botName: 'AiChatXMO_bot',
     },

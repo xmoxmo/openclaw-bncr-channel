@@ -100,6 +100,7 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
       source: 'bncr',
       type: 'bncr.inbound_context',
       payload: {
+        platform: 'bncr/tgBot',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'Bncr:tgBot:-1001:10001',

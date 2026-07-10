@@ -1475,6 +1475,7 @@ test('dispatchBncrInbound carries provided originating target into built inbound
       source: 'bncr',
       type: 'bncr.inbound_context',
       payload: {
+        platform: 'bncr/tgBot',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'BncrRaw:tgBot:-1001:10001',
@@ -1482,6 +1483,7 @@ test('dispatchBncrInbound carries provided originating target into built inbound
       },
     },
   ]);
+  assert.equal(calls.builtContexts[0].GroupSubject, undefined);
 });
 
 test('dispatchBncrInbound keeps canonical to/session identity locked while preserving provided originating target', async () => {

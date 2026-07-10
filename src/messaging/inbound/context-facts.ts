@@ -187,6 +187,7 @@ export function buildBncrPromptVisibleContextFacts(
   facts: ReturnType<typeof buildBncrStructuredContextFacts>,
 ) {
   const result: {
+    platform?: string;
     trigger?: {
       botName?: string;
     };
@@ -219,6 +220,10 @@ export function buildBncrPromptVisibleContextFacts(
       }>;
     }>;
   } = {};
+
+  if (facts.platform) {
+    result.platform = `${facts.channel.id}/${facts.platform}`;
+  }
 
   if (
     facts.sender.isAdmin === true ||

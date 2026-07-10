@@ -265,6 +265,7 @@ export function buildBncrInboundTurnContext(args: {
       },
       extra: {
         OriginatingChannel: channelId,
+        ...(parsed.isGroup === true && parsed.groupName ? { GroupSubject: parsed.groupName } : {}),
         ...(ownerAllowFrom?.length ? { OwnerAllowFrom: ownerAllowFrom } : {}),
         BncrStructuredContextFacts: structuredContextFacts,
         StructuredContextFacts: structuredContextFacts,

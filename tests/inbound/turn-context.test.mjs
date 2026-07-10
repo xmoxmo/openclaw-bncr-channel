@@ -283,6 +283,7 @@ test('buildBncrInboundTurnContext passes canonical route fields and visible untr
       source: 'bncr',
       type: 'bncr.inbound_context',
       payload: {
+        platform: 'bncr/tgBot',
         trigger: {
           botName: 'AixmoClaw_bot',
         },
@@ -300,6 +301,7 @@ test('buildBncrInboundTurnContext passes canonical route fields and visible untr
     },
   ]);
   assert.equal(calls[0].extra.BncrStructuredContextFacts.route.agentId, 'orion');
+  assert.equal(calls[0].extra.GroupSubject, 'wind_system');
   assert.equal(calls[0].sender.id, '10001');
   assert.equal(calls[0].sender.username, 'xmo');
   assert.deepEqual(calls[0].access, {
