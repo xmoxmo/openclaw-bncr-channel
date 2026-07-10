@@ -12,6 +12,7 @@ import {
 } from '../../src/messaging/inbound/native-command.ts';
 import {
   executeSceneAdminCommand,
+  HISTORY_HELP_TEXT,
   parseSceneAdminCommand,
 } from '../../src/messaging/inbound/scene-admin.ts';
 
@@ -446,4 +447,263 @@ test('executeSceneAdminCommand requires admin and mutates scene registry determi
     { ok: true, text: 'Revoked scene tgBot:10001.' },
   );
   assert.equal(sceneRegistry.has('tgBot:10001'), false);
+});
+
+test('parseSceneAdminCommand parses history-limit and history-force commands', () => {
+  // history-limit with 0 args → get
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-limit-get' },
+  });
+  // history-limit with number → set
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit 100')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-limit-set', sceneKey: '', limit: 100 },
+  });
+  // history-limit with sceneKey → get for scene
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit tgBot:-1001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'history-limit-get', sceneKey: 'tgBot:-1001' },
+    },
+  );
+  // history-limit with number + sceneKey → set for scene
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit 200 tgBot:-1001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 200 },
+    },
+  );
+  // history-limit invalid → error
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit x y z')), {
+    matched: true,
+    valid: false,
+    text: 'Usage: /bncr history-limit [<number>] [<sceneKey>]',
+  });
+
+  // history-force with 0 args → get
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-force')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-force-get' },
+  });
+  // history-force on → set
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-force on')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-force-set', sceneKey: '', enabled: true },
+  });
+  // history-force off → set
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-force off')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-force-set', sceneKey: '', enabled: false },
+  });
+  // history-force off with sceneKey → set for scene
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-force off tgBot:-1001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'history-force-set', sceneKey: 'tgBot:-1001', enabled: false },
+    },
+  );
+  // history-force with sceneKey → get for scene
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-force tgBot:-1001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'history-force-get', sceneKey: 'tgBot:-1001' },
+    },
+  );
+
+  // history-help → help command
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-help')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-help' },
+  });
+});
+
+test('executeSceneAdminCommand handles history commands', () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        agentId: 'public',
+        groupReplyMode: 'admin',
+        historyLimit: 50,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = { isAdmin: true, peer: { kind: 'group' }, platform: 'tgBot', groupId: '-1001' };
+
+  // history-help returns help text
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-help' },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 2,
+    }),
+    { ok: true, text: HISTORY_HELP_TEXT },
+  );
+
+  // history-limit-get returns current value
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-get', sceneKey: 'tgBot:-1001' },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 2,
+    }),
+    { ok: true, text: 'Current tgBot:-1001 history limit is 50.' },
+  );
+
+  // history-limit-get for non-existent scene returns default
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-get', sceneKey: 'tgBot:-9999' },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 2,
+    }),
+    { ok: true, text: 'Default history limit is 50.' },
+  );
+
+  // history-limit-set with valid positive value
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 100 },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 3,
+    }),
+    { ok: true, text: 'Set tgBot:-1001 history limit to 100.' },
+  );
+  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 100);
+
+  // history-limit-set with hidden negative value
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: -10 },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 4,
+    }),
+    { ok: true, text: 'Set tgBot:-1001 history limit to 10.' },
+  );
+  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 10);
+
+  // history-limit-set with too-small positive value (50) → error
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 50 },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 5,
+    }),
+    {
+      ok: false,
+      text: 'Value too small, must be >= 51, or use negative number (abs >= 3) for hidden override.',
+    },
+  );
+  // Value should not have been updated
+  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 10);
+
+  // history-limit-set with negative too small (abs < 3) → error
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: -2 },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 6,
+    }),
+    {
+      ok: false,
+      text: 'Value too small, must be >= 51, or use negative number (abs >= 3) for hidden override.',
+    },
+  );
+
+  // history-limit-set with large positive value is capped
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 99999 },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 7,
+    }),
+    { ok: true, text: 'Set tgBot:-1001 history limit to 10000.' },
+  );
+  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 10000);
+
+  // history-force-get returns current value
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-force-get', sceneKey: 'tgBot:-1001' },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 8,
+    }),
+    { ok: true, text: 'Current tgBot:-1001 history auto flush is on.' },
+  );
+
+  // history-force-set to off
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-force-set', sceneKey: 'tgBot:-1001', enabled: false },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 9,
+    }),
+    { ok: true, text: 'Set tgBot:-1001 history auto flush to off.' },
+  );
+  assert.equal(sceneRegistry.get('tgBot:-1001').historyForce, false);
+
+  // non-admin is rejected for history commands
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed: { ...parsed, isAdmin: false },
+      command: { kind: 'history-help' },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 10,
+    }),
+    { ok: false, text: 'Admin permission required.' },
+  );
 });

@@ -193,7 +193,10 @@ const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-const [pack] = JSON.parse(output);
+const raw = JSON.parse(output);
+const pack = Array.isArray(raw)
+  ? raw[0]
+  : raw[Object.keys(raw).find((k) => k.startsWith('@')) || Object.keys(raw)[0]];
 const packedFiles = new Set((pack?.files ?? []).map((file) => file.path));
 const missing = requiredPackFiles.filter((file) => !packedFiles.has(file));
 const channelSource = fs.readFileSync(path.join(root, 'src/channel.ts'), 'utf8');

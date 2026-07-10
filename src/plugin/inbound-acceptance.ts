@@ -85,7 +85,10 @@ function shouldAccumulateForScene(args: {
   if (isAdminOpenClawNativeCommand) return true;
 
   const mode = admission.scene.groupReplyMode || 'admin';
-  if (mode === 'admin') return parsed.isAdmin === true;
+  // admin and all: no accumulation needed - messages are either dispatched directly or discarded
+  if (mode === 'admin') return false;
+  if (mode === 'all') return false;
+  // mention and hybrid: non-trigger messages accumulate for future context
   return true;
 }
 

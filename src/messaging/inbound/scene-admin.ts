@@ -14,12 +14,19 @@ export type BncrSceneAdminCommand =
   | { kind: 'mode-help' }
   | { kind: 'mode-get'; sceneKey?: string }
   | { kind: 'mode'; sceneKey: string; mode: BncrGroupReplyMode }
-  | { kind: 'list'; scope: 'pending' | 'scenes' };
+  | { kind: 'list'; scope: 'pending' | 'scenes' }
+  | { kind: 'history-limit-get'; sceneKey?: string }
+  | { kind: 'history-limit-set'; sceneKey: string; limit: number }
+  | { kind: 'history-force-get'; sceneKey?: string }
+  | { kind: 'history-force-set'; sceneKey: string; enabled: boolean }
+  | { kind: 'history-help' };
 
 const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
 
 const MODE_HELP_TEXT = [
-  '💬 Group reply modes',
+  '💬 Bncr Group Reply Mode Configuration',
+  '',
+  'Modes:',
   '  • default: admin',
   '  • admin: 仅管理员|消息上送并逐条回复',
   '  • mention: 全员|消息上送 仅指定消息触发回复',
@@ -32,9 +39,18 @@ const MODE_HELP_TEXT = [
   '  • platform-marked should-respond messages',
   '',
   'Usage:',
-  '  • /bncr mode',
-  '  • /bncr mode help',
-  '  • /bncr mode <admin|mention|hybrid|all> [<platform>:<groupId>]',
+  '  • /bncr mode <admin|mention|hybrid|all> [<SceneId>]',
+].join('\n');
+
+export const HISTORY_HELP_TEXT = [
+  '📋 Bncr Group History Configuration',
+  '',
+  'Commands:',
+  '  • /bncr history-limit <number> [<SceneId>]',
+  '    Set history limit (default: 50)',
+  '  • /bncr history-force on|off [<SceneId>]',
+  '    When on, overflow triggers auto context at limit (default: on)',
+  '    When off, oldest messages trim silently without context',
 ].join('\n');
 
 export type ParsedSceneAdminCommand =
@@ -141,6 +157,65 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
         return { matched: true, valid: true, command: { kind: 'list', scope: 'scenes' } };
       }
       return { matched: true, valid: false, text: 'Usage: /bncr list <pending|scenes>' };
+    case 'history-limit':
+      if (args.length === 0) {
+        return { matched: true, valid: true, command: { kind: 'history-limit-get' } };
+      }
+      if (args.length === 1) {
+        const num = parseInt(args[0], 10);
+        if (Number.isFinite(num)) {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'history-limit-set', sceneKey: '', limit: num },
+          };
+        }
+        return {
+          matched: true,
+          valid: true,
+          command: { kind: 'history-limit-get', sceneKey: args[0] },
+        };
+      }
+      if (args.length === 2) {
+        const num = parseInt(args[0], 10);
+        if (Number.isFinite(num)) {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'history-limit-set', sceneKey: args[1], limit: num },
+          };
+        }
+      }
+      return {
+        matched: true,
+        valid: false,
+        text: 'Usage: /bncr history-limit [<number>] [<sceneKey>]',
+      };
+    case 'history-force':
+      if (args.length === 0) {
+        return { matched: true, valid: true, command: { kind: 'history-force-get' } };
+      }
+      if (args[0] === 'on' || args[0] === 'off') {
+        if (args.length === 1) {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'history-force-set', sceneKey: '', enabled: args[0] === 'on' },
+          };
+        }
+        return {
+          matched: true,
+          valid: true,
+          command: { kind: 'history-force-set', sceneKey: args[1], enabled: args[0] === 'on' },
+        };
+      }
+      return {
+        matched: true,
+        valid: true,
+        command: { kind: 'history-force-get', sceneKey: args[0] },
+      };
+    case 'history-help':
+      return { matched: true, valid: true, command: { kind: 'history-help' } };
     default:
       return { matched: false };
   }
@@ -151,7 +226,15 @@ function formatSceneDetailsLine(scene: BncrSceneRecord): string {
     scene.kind === 'group' ? scene.groupId || scene.sceneKey : scene.userId || scene.sceneKey;
   const namePart = scene.kind === 'group' ? scene.groupName || '' : scene.userName || '';
   const labelPart = namePart ? ` name=${namePart}` : '';
-  return `  Details: status=${scene.status} id=${idPart}${labelPart}`;
+  const historyLimitVal = scene.historyLimit;
+  const historyForceVal = scene.historyForce;
+  const hasNonDefaultHistory =
+    scene.kind === 'group' &&
+    ((typeof historyLimitVal === 'number' && historyLimitVal !== 50) || historyForceVal === false);
+  const historyPart = hasNonDefaultHistory
+    ? ` historyLimit=${historyLimitVal ?? 50} autoFlush=${historyForceVal !== false ? 'on' : 'off'}`
+    : '';
+  return `  Details: status=${scene.status} id=${idPart}${labelPart}${historyPart}`;
 }
 
 function formatSceneEntry(scene: BncrSceneRecord): string {
@@ -209,6 +292,10 @@ export function executeSceneAdminCommand(args: {
     return { ok: false, text: 'Admin permission required.' };
   }
 
+  if (command.kind === 'history-help') {
+    return { ok: true, text: HISTORY_HELP_TEXT };
+  }
+
   if (command.kind === 'list') {
     const scenes = Array.from(sceneRegistry.values())
       .filter((scene) => (command.scope === 'pending' ? scene.status === 'pending' : true))
@@ -241,6 +328,78 @@ export function executeSceneAdminCommand(args: {
     return {
       ok: true,
       text: `Current ${sceneKey} reply mode is ${existingScene.groupReplyMode || 'admin'}.`,
+    };
+  }
+
+  if (command.kind === 'history-limit-get') {
+    const qSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    if (!qSceneKey) {
+      return { ok: true, text: 'Default history limit is 50.' };
+    }
+    const s = sceneRegistry.get(qSceneKey);
+    if (!s) return { ok: true, text: 'Default history limit is 50.' };
+    return { ok: true, text: `Current ${qSceneKey} history limit is ${s.historyLimit ?? 50}.` };
+  }
+
+  if (command.kind === 'history-limit-set') {
+    const sSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    if (!sSceneKey) {
+      return { ok: false, text: 'Current group shortcut only works inside a group chat.' };
+    }
+    const sExisting = sceneRegistry.get(sSceneKey);
+    if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
+    const rawLimit = command.limit;
+    if (!Number.isFinite(rawLimit) || Number.isNaN(rawLimit)) {
+      return { ok: false, text: 'Invalid number.' };
+    }
+    let resolvedLimit = rawLimit;
+    if (resolvedLimit >= 51) {
+      resolvedLimit = Math.min(Math.floor(resolvedLimit), 10000);
+    } else if (resolvedLimit < 0 && Math.abs(resolvedLimit) >= 3) {
+      resolvedLimit = Math.floor(Math.abs(resolvedLimit));
+    } else {
+      return {
+        ok: false,
+        text: `Value too small, must be >= 51, or use negative number (abs >= 3) for hidden override.`,
+      };
+    }
+    sceneRegistry.set(sSceneKey, {
+      ...sExisting,
+      historyLimit: resolvedLimit,
+      lastSeenAt: now(),
+    });
+    return { ok: true, text: `Set ${sSceneKey} history limit to ${resolvedLimit}.` };
+  }
+
+  if (command.kind === 'history-force-get') {
+    const qSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    if (!qSceneKey) {
+      return { ok: true, text: 'Default history auto flush is on.' };
+    }
+    const s = sceneRegistry.get(qSceneKey);
+    if (!s) return { ok: true, text: 'Default history auto flush is on.' };
+    const enabled = s.historyForce !== false;
+    return {
+      ok: true,
+      text: `Current ${qSceneKey} history auto flush is ${enabled ? 'on' : 'off'}.`,
+    };
+  }
+
+  if (command.kind === 'history-force-set') {
+    const sSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    if (!sSceneKey) {
+      return { ok: false, text: 'Current group shortcut only works inside a group chat.' };
+    }
+    const sExisting = sceneRegistry.get(sSceneKey);
+    if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
+    sceneRegistry.set(sSceneKey, {
+      ...sExisting,
+      historyForce: command.enabled,
+      lastSeenAt: now(),
+    });
+    return {
+      ok: true,
+      text: `Set ${sSceneKey} history auto flush to ${command.enabled ? 'on' : 'off'}.`,
     };
   }
 

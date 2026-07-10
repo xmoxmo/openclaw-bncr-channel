@@ -61,11 +61,14 @@ export type BncrSceneRecord = {
   groupName?: string;
   agentId?: string;
   groupReplyMode?: BncrGroupReplyMode;
+  historyLimit?: number;
+  historyForce?: boolean;
   lastSeenAt: number;
 };
 
 export type BncrPersistedGroupHistoryEntry = {
   sender: string;
+  senderId?: string;
   body: string;
   timestamp?: number;
   messageId?: string;

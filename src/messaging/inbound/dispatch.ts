@@ -1,5 +1,7 @@
+import { DEFAULT_GROUP_HISTORY_LIMIT } from 'openclaw/plugin-sdk/reply-history';
 import { emitBncrLogLine } from '../../core/logging.ts';
 import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
+import { buildSceneKey } from '../../plugin/scene-registry.ts';
 import { handleBncrNativeCommand } from './commands.ts';
 import type {
   BncrEnqueueFromReply,
@@ -18,7 +20,10 @@ import {
 } from './dispatch-prep.ts';
 import {
   type BncrGroupHistoryMap,
+  type BncrHistoryEntry,
+  buildBncrGroupHistoryKey,
   clearBncrPendingGroupHistory,
+  readBncrPendingGroupHistorySnapshot,
   recordBncrPendingGroupMedia,
   recordBncrPendingGroupText,
 } from './group-history.ts';
@@ -58,10 +63,10 @@ export async function dispatchBncrInbound(params: {
     cfg,
     parsed,
     canonicalAgentId,
-    shouldDispatch = true,
-    shouldAccumulate = shouldDispatch,
+    shouldDispatch: initialShouldDispatch = true,
+    shouldAccumulate = initialShouldDispatch,
     resolvedAgentId,
-    sceneRegistry,
+    sceneRegistry = new Map(),
     groupHistories = new Map(),
     defaultAdminAgentId,
     defaultPublicAgentId,
@@ -73,6 +78,7 @@ export async function dispatchBncrInbound(params: {
     logger,
   } = params;
   const { accountId, clientId, msgId, extracted, mimeType, peer } = parsed;
+  let shouldDispatch = initialShouldDispatch;
 
   const nativeCommand = await handleBncrNativeCommand({
     api,
@@ -130,6 +136,78 @@ export async function dispatchBncrInbound(params: {
       '[bncr] inbound missing clientId for chat identity; using route identity fallback',
     );
   }
+  const sceneHistoryLimit =
+    parsed.peer.kind === 'group'
+      ? (sceneRegistry.get(buildSceneKey(parsed))?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT)
+      : DEFAULT_GROUP_HISTORY_LIMIT;
+  const resolvedHistoryLimit =
+    typeof sceneHistoryLimit === 'number' &&
+    Number.isFinite(sceneHistoryLimit) &&
+    sceneHistoryLimit >= 0
+      ? Math.floor(sceneHistoryLimit)
+      : DEFAULT_GROUP_HISTORY_LIMIT;
+
+  let silentHistoryFlush = false;
+  let pendingHistoryEntries: BncrHistoryEntry[] = [];
+  if (!shouldDispatch && shouldAccumulate) {
+    const historyKey = buildBncrGroupHistoryKey(parsed);
+    // Record the message first so overflow context includes it
+    recordBncrPendingGroupText({
+      historyMap: groupHistories,
+      parsed,
+      senderDisplayName,
+      senderId: senderIdForContext,
+      bodyText: rawBody,
+      historyLimit: resolvedHistoryLimit,
+    });
+    await recordBncrPendingGroupMedia({
+      historyMap: groupHistories,
+      parsed,
+      senderDisplayName,
+      senderId: senderIdForContext,
+      bodyText: rawBody,
+      mediaItems,
+      mediaContentType: mediaContentType || mimeType,
+      historyLimit: resolvedHistoryLimit,
+    });
+    if (historyKey && parsed.peer.kind === 'group') {
+      const entries = groupHistories.get(historyKey);
+      if (entries && resolvedHistoryLimit > 0 && entries.length >= resolvedHistoryLimit) {
+        const sceneForHistory = sceneRegistry.get(buildSceneKey(parsed));
+        const historyForce = sceneForHistory?.historyForce !== false;
+        if (historyForce) {
+          pendingHistoryEntries = readBncrPendingGroupHistorySnapshot({
+            historyMap: groupHistories,
+            parsed,
+            historyLimit: resolvedHistoryLimit,
+          });
+          clearBncrPendingGroupHistory({
+            historyMap: groupHistories,
+            parsed,
+            historyLimit: resolvedHistoryLimit,
+          });
+          shouldDispatch = true;
+          silentHistoryFlush = true;
+        }
+      }
+    }
+  }
+
+  if (shouldDispatch && !silentHistoryFlush && parsed.peer.kind === 'group') {
+    pendingHistoryEntries = readBncrPendingGroupHistorySnapshot({
+      historyMap: groupHistories,
+      parsed,
+      historyLimit: resolvedHistoryLimit,
+    });
+    if (pendingHistoryEntries.length > 0) {
+      clearBncrPendingGroupHistory({
+        historyMap: groupHistories,
+        parsed,
+        historyLimit: resolvedHistoryLimit,
+      });
+    }
+  }
+
   const ctxPayload = await buildBncrInboundTurnContext({
     api,
     cfg,
@@ -142,30 +220,14 @@ export async function dispatchBncrInbound(params: {
     ownerAllowFrom,
     bridgeSenderId,
     bridgeSenderName,
+    historyLimit: resolvedHistoryLimit,
     resolution,
     prepared,
     groupHistories,
     shouldDispatch,
+    silentHistoryFlush,
+    pendingHistoryEntries,
   });
-
-  if (!shouldDispatch && shouldAccumulate) {
-    recordBncrPendingGroupText({
-      historyMap: groupHistories,
-      parsed,
-      senderDisplayName,
-      senderId: senderIdForContext,
-      bodyText: rawBody,
-    });
-    await recordBncrPendingGroupMedia({
-      historyMap: groupHistories,
-      parsed,
-      senderDisplayName,
-      senderId: senderIdForContext,
-      bodyText: rawBody,
-      mediaItems,
-      mediaContentType: mediaContentType || mimeType,
-    });
-  }
 
   await runBncrInboundReplyDispatch({
     api,
@@ -182,13 +244,18 @@ export async function dispatchBncrInbound(params: {
     senderIdForContext,
     senderDisplayName,
     shouldDispatch,
+    silentHistoryFlush,
     setInboundActivity,
     scheduleSave,
     enqueueFromReply,
   });
 
-  if (shouldDispatch) {
-    clearBncrPendingGroupHistory({ historyMap: groupHistories, parsed });
+  if (shouldDispatch && pendingHistoryEntries.length === 0) {
+    clearBncrPendingGroupHistory({
+      historyMap: groupHistories,
+      parsed,
+      historyLimit: resolvedHistoryLimit,
+    });
   }
 
   return {

@@ -515,12 +515,6 @@ export async function handleBncrNativeCommand(params: {
           result: 'rejected',
         }),
       );
-      await recordAndPatchBncrInboundSessionEntry({
-        storePath,
-        sessionKey,
-        ctx: ctxPayload,
-        patch: sessionIdentityPatch,
-      });
       if (!silentNonAdminGroupReject) {
         await enqueueFromReply({
           accountId,

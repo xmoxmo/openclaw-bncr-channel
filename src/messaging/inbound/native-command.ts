@@ -49,12 +49,16 @@ const BNCR_HELP_TEXT = [
   '  • /bncr allow [<SceneId>]',
   '  • /bncr deny [<SceneId>]',
   '  • /bncr bind <agentId> [<SceneId>]',
-  '  • /bncr mode',
   '  • /bncr mode help',
   '  • /bncr mode <admin|mention|hybrid|all> [<SceneId>]',
   '  • /bncr revoke [<SceneId>]',
   '  • /bncr list pending',
   '  • /bncr list scenes',
+  '',
+  '📋 Group history',
+  '  • /bncr history-help',
+  '  • /bncr history-limit [<number>] [<SceneId>]',
+  '  • /bncr history-force on|off [<SceneId>]',
 ].join('\n');
 
 const BNCR_NATIVE_COMMANDS = new Set([
@@ -70,9 +74,18 @@ const BNCR_NATIVE_COMMANDS = new Set([
   'mode',
   'revoke',
   'list',
+  'history-limit',
+  'history-help',
+  'history-force',
 ]);
 
-export const BNCR_DIRECT_ALLOWED_BARE_COMMANDS = new Set(['whoami', 'status', 'new', 'reset']);
+export const BNCR_DIRECT_ALLOWED_BARE_COMMANDS = new Set([
+  'whoami',
+  'status',
+  'new',
+  'reset',
+  'stop',
+]);
 
 export const BNCR_DIRECT_ALLOWED_SUBCOMMANDS = new Set([
   'help',

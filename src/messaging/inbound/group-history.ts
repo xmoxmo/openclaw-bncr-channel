@@ -37,13 +37,25 @@ export function recordBncrPendingGroupText(args: {
   senderDisplayName: string;
   senderId: string;
   bodyText: string;
+  historyLimit?: number;
 }) {
+  const limit =
+    typeof args.historyLimit === 'number' &&
+    Number.isFinite(args.historyLimit) &&
+    args.historyLimit >= 0
+      ? Math.floor(args.historyLimit)
+      : DEFAULT_GROUP_HISTORY_LIMIT;
   const historyKey = buildBncrGroupHistoryKey(args.parsed);
   const body = normalizeTextBody(args.bodyText);
   if (!historyKey || !body || args.parsed.msgType !== 'text') return;
+  const msgId = String(args.parsed.msgId || '').trim();
+  if (msgId) {
+    const existing = args.historyMap.get(historyKey) || [];
+    if (existing.some((e) => e.messageId === msgId)) return;
+  }
   createChannelHistoryWindow({ historyMap: args.historyMap }).record({
     historyKey,
-    limit: DEFAULT_GROUP_HISTORY_LIMIT,
+    limit,
     entry: {
       sender: args.senderDisplayName,
       senderId: args.senderId,
@@ -89,7 +101,14 @@ export async function recordBncrPendingGroupMedia(args: {
     kind?: BncrHistoryMediaKind;
   }>;
   mediaContentType?: string;
+  historyLimit?: number;
 }) {
+  const limit =
+    typeof args.historyLimit === 'number' &&
+    Number.isFinite(args.historyLimit) &&
+    args.historyLimit >= 0
+      ? Math.floor(args.historyLimit)
+      : DEFAULT_GROUP_HISTORY_LIMIT;
   const historyKey = buildBncrGroupHistoryKey(args.parsed);
   if (!historyKey || args.parsed.msgType === 'text') return;
   const normalizedMediaItems = Array.isArray(args.mediaItems) ? args.mediaItems : [];
@@ -110,9 +129,14 @@ export async function recordBncrPendingGroupMedia(args: {
       });
   const body = normalizeTextBody(args.bodyText) || buildBncrHistoryMediaBody(kind);
   if (normalizedMediaItems.length === 0) {
+    const msgId = String(args.parsed.msgId || '').trim();
+    if (msgId) {
+      const existing = args.historyMap.get(historyKey) || [];
+      if (existing.some((e) => e.messageId === msgId)) return;
+    }
     createChannelHistoryWindow({ historyMap: args.historyMap }).record({
       historyKey,
-      limit: DEFAULT_GROUP_HISTORY_LIMIT,
+      limit,
       entry: {
         sender: args.senderDisplayName,
         senderId: args.senderId,
@@ -123,9 +147,14 @@ export async function recordBncrPendingGroupMedia(args: {
     });
     return;
   }
+  const msgId = String(args.parsed.msgId || '').trim();
+  if (msgId) {
+    const existing = args.historyMap.get(historyKey) || [];
+    if (existing.some((e) => e.messageId === msgId)) return;
+  }
   createChannelHistoryWindow({ historyMap: args.historyMap }).record({
     historyKey,
-    limit: DEFAULT_GROUP_HISTORY_LIMIT,
+    limit,
     entry: {
       sender: args.senderDisplayName,
       senderId: args.senderId,
@@ -145,23 +174,56 @@ export async function recordBncrPendingGroupMedia(args: {
   });
 }
 
-export function buildBncrPendingGroupContext(args: {
-  api: BncrInboundApi;
+function cloneBncrHistoryEntry(entry: BncrHistoryEntry): BncrHistoryEntry {
+  return {
+    sender: entry.sender,
+    ...(entry.messageId ? { messageId: entry.messageId } : {}),
+    ...(typeof entry.timestamp === 'number' ? { timestamp: entry.timestamp } : {}),
+    ...(entry.senderId ? { senderId: entry.senderId } : {}),
+    body: entry.body,
+    ...(Array.isArray(entry.media)
+      ? {
+          media: entry.media.map((item) => ({
+            ...(item?.path ? { path: item.path } : {}),
+            ...(item?.contentType ? { contentType: item.contentType } : {}),
+            ...(item?.kind ? { kind: item.kind } : {}),
+            ...(item?.messageId ? { messageId: item.messageId } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+export function readBncrPendingGroupHistorySnapshot(args: {
   historyMap: BncrGroupHistoryMap;
   parsed: ParsedInbound;
+  historyLimit?: number;
+}): BncrHistoryEntry[] {
+  const limit =
+    typeof args.historyLimit === 'number' &&
+    Number.isFinite(args.historyLimit) &&
+    args.historyLimit >= 0
+      ? Math.floor(args.historyLimit)
+      : DEFAULT_GROUP_HISTORY_LIMIT;
+  const historyKey = buildBncrGroupHistoryKey(args.parsed);
+  if (!historyKey) return [];
+  const entries = args.historyMap.get(historyKey) || [];
+  if (entries.length === 0) return [];
+  return entries.slice(-limit).map(cloneBncrHistoryEntry);
+}
+
+export function buildBncrGroupContextFromEntries(args: {
+  api: BncrInboundApi;
+  entries: readonly BncrHistoryEntry[];
   channelLabel: string;
   currentTimestamp: number;
   previousTimestamp?: unknown;
   envelope?: unknown;
   currentMessage: string;
 }) {
-  const historyKey = buildBncrGroupHistoryKey(args.parsed);
-  if (!historyKey) return args.currentMessage;
-  return createChannelHistoryWindow({ historyMap: args.historyMap }).buildPendingContext({
-    historyKey,
-    limit: DEFAULT_GROUP_HISTORY_LIMIT,
-    currentMessage: args.currentMessage,
-    formatEntry: (entry) =>
+  if (args.entries.length === 0) return args.currentMessage;
+  const historyText = args.entries
+    .map((entry) =>
       formatOpenClawAgentEnvelope(args.api, {
         channel: 'Bncr',
         from: args.channelLabel,
@@ -170,17 +232,15 @@ export function buildBncrPendingGroupContext(args: {
         envelope: args.envelope,
         body: entry.body,
       }),
-  });
+    )
+    .join('\n');
+  return `[Chat messages since your last reply - for context]\n${historyText}\n\n[Current message - respond to this]${args.currentMessage}`;
 }
 
-export function collectBncrPendingHistoryMedia(args: {
-  historyMap: BncrGroupHistoryMap;
-  parsed: ParsedInbound;
+export function collectBncrHistoryMediaFromEntries(args: {
+  entries: readonly BncrHistoryEntry[];
 }): HistoryMediaEntry[] {
-  const historyKey = buildBncrGroupHistoryKey(args.parsed);
-  if (!historyKey) return [];
-  const entries = args.historyMap.get(historyKey) || [];
-  return entries.flatMap((entry) => (Array.isArray(entry.media) ? entry.media : []));
+  return args.entries.flatMap((entry) => (Array.isArray(entry.media) ? entry.media : []));
 }
 
 function toBncrPromptMediaPath(value: string | undefined): string | undefined {
@@ -230,16 +290,12 @@ function buildHistoryWindowMedias(media: HistoryMediaEntry[] | undefined) {
   });
 }
 
-export function buildBncrPendingHistoryWindowContext(args: {
-  historyMap: BncrGroupHistoryMap;
-  parsed: ParsedInbound;
+export function buildBncrHistoryWindowContextFromEntries(args: {
+  entries: readonly BncrHistoryEntry[];
   channelId: string;
 }) {
-  const historyKey = buildBncrGroupHistoryKey(args.parsed);
-  if (!historyKey) return undefined;
-  const entries = args.historyMap.get(historyKey) || [];
-  if (entries.length === 0) return undefined;
-  const messages = entries.slice(-DEFAULT_GROUP_HISTORY_LIMIT).map((entry) => ({
+  if (args.entries.length === 0) return undefined;
+  const messages = args.entries.map((entry) => ({
     ...(entry.messageId ? { messageId: entry.messageId } : {}),
     sender: entry.sender,
     senderId: entry.senderId,
@@ -263,11 +319,18 @@ export function buildBncrPendingHistoryWindowContext(args: {
 export function clearBncrPendingGroupHistory(args: {
   historyMap: BncrGroupHistoryMap;
   parsed: ParsedInbound;
+  historyLimit?: number;
 }) {
+  const limit =
+    typeof args.historyLimit === 'number' &&
+    Number.isFinite(args.historyLimit) &&
+    args.historyLimit >= 0
+      ? Math.floor(args.historyLimit)
+      : DEFAULT_GROUP_HISTORY_LIMIT;
   const historyKey = buildBncrGroupHistoryKey(args.parsed);
   if (!historyKey) return;
   createChannelHistoryWindow({ historyMap: args.historyMap }).clear({
     historyKey,
-    limit: DEFAULT_GROUP_HISTORY_LIMIT,
+    limit: limit,
   });
 }

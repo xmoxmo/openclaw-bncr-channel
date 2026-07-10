@@ -151,7 +151,7 @@ test('prepareBncrInboundAcceptance returns accepted payload with normalized sess
     hasMedia: false,
     resolvedAgentId: 'public',
     shouldDispatch: true,
-    shouldAccumulate: true,
+    shouldAccumulate: false,
     dispatchBy: 'mode-admin-admin',
   });
 });
@@ -171,7 +171,7 @@ test('prepareBncrInboundAcceptance defaults group scenes to admin-only reply mod
 
   assert.equal(result.ok, true);
   assert.equal(result.shouldDispatch, true);
-  assert.equal(result.shouldAccumulate, true);
+  assert.equal(result.shouldAccumulate, false);
   assert.deepEqual(sceneRegistry.get('tgBot:-1001'), {
     sceneKey: 'tgBot:-1001',
     kind: 'group',
@@ -181,6 +181,8 @@ test('prepareBncrInboundAcceptance defaults group scenes to admin-only reply mod
     groupId: '-1001',
     agentId: 'public',
     groupReplyMode: 'admin',
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt: 123,
   });
 });
@@ -197,6 +199,8 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
         groupId: '-1001',
         agentId: 'public',
         groupReplyMode: 'admin',
+        historyLimit: 50,
+        historyForce: true,
         lastSeenAt: 100,
       },
     ],
@@ -384,6 +388,8 @@ test('prepareBncrInboundAcceptance lets admin callers recover denied group scene
     userId: '20002',
     userName: 'admin-user',
     groupReplyMode: 'admin',
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt: 123,
   });
 });
@@ -432,6 +438,8 @@ test('prepareBncrInboundAcceptance promotes denied group scenes to public when a
     userId: '20002',
     userName: 'admin-user',
     groupReplyMode: 'admin',
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt: 123,
   });
 });

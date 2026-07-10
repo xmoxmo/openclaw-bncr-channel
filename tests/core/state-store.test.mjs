@@ -31,6 +31,7 @@ function createStore() {
     maxSessionRouteEntries: 100,
     maxAccountActivityEntries: 100,
     sceneRegistry: new Map(),
+    groupHistories: new Map(),
     outbox: new Map(),
     getDeadLetter: () => [],
     setDeadLetter: () => {},
@@ -188,4 +189,125 @@ test('createBncrStateStore restores valid persisted scene registry entries and s
       },
     ],
   ]);
+});
+
+test('createBncrStateStore preserves senderId in persisted group histories', () => {
+  const { runtime, store } = createStore();
+  runtime.sceneRegistry.set('tgBot:-1001', {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    historyLimit: 50,
+    historyForce: true,
+    lastSeenAt: 1,
+  });
+
+  store.loadPersistedGroupHistories([
+    {
+      key: 'tgBot:-1001',
+      entries: [
+        {
+          sender: 'alice',
+          senderId: '10001',
+          body: 'hello',
+          timestamp: 10,
+          messageId: 'm1',
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(runtime.groupHistories.get('tgBot:-1001'), [
+    {
+      sender: 'alice',
+      senderId: '10001',
+      body: 'hello',
+      timestamp: 10,
+      messageId: 'm1',
+    },
+  ]);
+  assert.deepEqual(store.dumpPersistedGroupHistories(), [
+    {
+      key: 'tgBot:-1001',
+      entries: [
+        {
+          sender: 'alice',
+          senderId: '10001',
+          body: 'hello',
+          timestamp: 10,
+          messageId: 'm1',
+        },
+      ],
+    },
+  ]);
+});
+
+test('createBncrStateStore persists group histories up to 1.2x configured scene history limit', () => {
+  const { runtime, store } = createStore();
+  runtime.sceneRegistry.set('tgBot:-1002', {
+    sceneKey: 'tgBot:-1002',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1002',
+    historyLimit: 80,
+    historyForce: true,
+    lastSeenAt: 1,
+  });
+
+  const entries = Array.from({ length: 120 }, (_, index) => ({
+    sender: 'alice',
+    senderId: '10001',
+    body: `m${index + 1}`,
+    timestamp: index + 1,
+    messageId: `mid-${index + 1}`,
+  }));
+
+  store.loadPersistedGroupHistories([
+    {
+      key: 'tgBot:-1002',
+      entries,
+    },
+  ]);
+
+  assert.equal(runtime.groupHistories.get('tgBot:-1002')?.length, 96);
+  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries.length, 96);
+  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[0]?.body, 'm25');
+  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[95]?.body, 'm120');
+});
+
+test('createBncrStateStore uses a minimum persisted group history cap of 60 for default 50-limit groups', () => {
+  const { runtime, store } = createStore();
+  runtime.sceneRegistry.set('tgBot:-1003', {
+    sceneKey: 'tgBot:-1003',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1003',
+    historyLimit: 50,
+    historyForce: true,
+    lastSeenAt: 1,
+  });
+
+  const entries = Array.from({ length: 70 }, (_, index) => ({
+    sender: 'alice',
+    senderId: '10001',
+    body: `d${index + 1}`,
+    timestamp: index + 1,
+    messageId: `default-mid-${index + 1}`,
+  }));
+
+  store.loadPersistedGroupHistories([
+    {
+      key: 'tgBot:-1003',
+      entries,
+    },
+  ]);
+
+  assert.equal(runtime.groupHistories.get('tgBot:-1003')?.length, 60);
+  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries.length, 60);
+  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[0]?.body, 'd11');
+  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[59]?.body, 'd70');
 });

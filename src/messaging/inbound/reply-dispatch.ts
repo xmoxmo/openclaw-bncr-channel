@@ -125,6 +125,7 @@ export async function runBncrInboundReplyDispatch(args: {
   senderIdForContext: string;
   senderDisplayName: string;
   shouldDispatch: boolean;
+  silentHistoryFlush?: boolean;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
   enqueueFromReply: BncrEnqueueFromReply;
@@ -143,6 +144,7 @@ export async function runBncrInboundReplyDispatch(args: {
     replyRouteFact,
     senderIdForContext,
     shouldDispatch,
+    silentHistoryFlush = false,
     setInboundActivity,
     scheduleSave,
     enqueueFromReply,
@@ -230,15 +232,16 @@ export async function runBncrInboundReplyDispatch(args: {
               textForCommands: ctxPayload.CommandBody,
               raw: parsed,
             }),
-            preflight: () =>
-              shouldDispatch
+            preflight: () => {
+              return shouldDispatch
                 ? undefined
                 : {
                     admission: {
                       kind: 'observeOnly' as const,
                       reason: 'bncr-group-mode-no-reply',
                     },
-                  },
+                  };
+            },
             resolveTurn: () => {
               const sessionMetaBarrier = createBncrSessionMetaTaskBarrier();
               return {
@@ -288,6 +291,10 @@ export async function runBncrInboundReplyDispatch(args: {
                             effectiveReply.blockStreaming && effectiveReply.allowTool;
 
                           if (kind === 'tool' && !shouldForwardTool) {
+                            return;
+                          }
+
+                          if (silentHistoryFlush) {
                             return;
                           }
 

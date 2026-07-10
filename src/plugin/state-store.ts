@@ -20,6 +20,7 @@ import type {
 } from './channel-runtime-types.ts';
 
 const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
+const DEFAULT_PERSISTED_GROUP_HISTORY_LIMIT = 50;
 
 type BncrPersistedStateStoreInput = {
   outbox?: unknown;
@@ -76,6 +77,18 @@ export function createBncrStateStore(runtime: {
   getLastDriftSnapshot: () => BncrPersistedState['lastDriftSnapshot'];
   setLastDriftSnapshot: (value: BncrPersistedState['lastDriftSnapshot']) => void;
 }) {
+  function resolvePersistedGroupHistoryLimit(key: string): number {
+    const scene = runtime.sceneRegistry.get(key);
+    const sceneLimit = scene?.kind === 'group' ? scene.historyLimit : undefined;
+    if (typeof sceneLimit === 'number' && Number.isFinite(sceneLimit) && sceneLimit >= 0) {
+      return Math.max(
+        DEFAULT_PERSISTED_GROUP_HISTORY_LIMIT,
+        Math.ceil(Math.floor(sceneLimit) * 1.2),
+      );
+    }
+    return DEFAULT_PERSISTED_GROUP_HISTORY_LIMIT;
+  }
+
   function loadPersistedSceneRegistry(persisted: unknown): void {
     runtime.sceneRegistry.clear();
     const items = Array.isArray(persisted) ? (persisted as PersistedSceneRecordInput[]) : [];
@@ -120,6 +133,12 @@ export function createBncrStateStore(runtime: {
                 .trim() as BncrGroupReplyMode,
             }
           : {}),
+        ...(typeof item.historyLimit === 'number' &&
+        Number.isFinite(item.historyLimit) &&
+        item.historyLimit >= 0
+          ? { historyLimit: Math.floor(item.historyLimit) }
+          : {}),
+        ...(typeof item.historyForce === 'boolean' ? { historyForce: item.historyForce } : {}),
         lastSeenAt,
       });
     }
@@ -169,6 +188,9 @@ export function createBncrStateStore(runtime: {
 
         const normalizedEntry: BncrPersistedGroupHistoryEntry = {
           sender,
+          ...(runtime.asString(entry?.senderId || '').trim()
+            ? { senderId: runtime.asString(entry?.senderId || '').trim() }
+            : {}),
           body,
           ...(timestamp > 0 ? { timestamp } : {}),
           ...(messageId ? { messageId } : {}),
@@ -176,14 +198,16 @@ export function createBncrStateStore(runtime: {
         };
         entries.push(normalizedEntry);
       }
-      if (entries.length > 0) runtime.groupHistories.set(key, entries.slice(-50));
+      if (entries.length > 0) {
+        runtime.groupHistories.set(key, entries.slice(-resolvePersistedGroupHistoryLimit(key)));
+      }
     }
   }
 
   function dumpPersistedGroupHistories() {
     return Array.from(runtime.groupHistories.entries()).map(([key, entries]) => ({
       key,
-      entries: entries.slice(-50),
+      entries: entries.slice(-resolvePersistedGroupHistoryLimit(key)),
     }));
   }
 

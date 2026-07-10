@@ -699,47 +699,15 @@ test('dispatchBncrInbound replays pending group text and image history on later 
   assert.ok(triggeredCtx);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:silent text/);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image>/);
+  assert.match(
+    triggeredCtx.message.bodyForAgent,
+    /\[Current message - respond to this]ENV:@bot summarize/,
+  );
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
-  assert.deepEqual(calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0], {
-    label: 'Bncr history window',
-    source: 'bncr',
-    type: 'bncr.history_window',
-    payload: {
-      relation: 'before_current_message',
-      order: 'chronological',
-      messages: [
-        {
-          messageId: 'pending-text-1',
-          sender: 'alice',
-          senderId: '10001',
-          timestampMs:
-            calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.payload?.messages?.[0]
-              ?.timestampMs,
-          body: 'silent text',
-          mediaSummary: undefined,
-          medias: [],
-        },
-        {
-          messageId: 'pending-image-1',
-          sender: 'bob',
-          senderId: '10002',
-          timestampMs:
-            calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.payload?.messages?.[1]
-              ?.timestampMs,
-          body: '<media:image>',
-          mediaSummary: '<media:image>',
-          medias: [
-            {
-              path: 'media://inbound/bncr-inbound-media-1.bin',
-              contentType: 'image/png',
-              kind: 'image',
-              messageId: 'pending-image-1',
-            },
-          ],
-        },
-      ],
-    },
-  });
+  assert.equal(
+    calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
+    'bncr.inbound_context',
+  );
   assert.deepEqual(groupHistories.get('tgBot:-1001'), []);
 });
 
@@ -822,6 +790,10 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
   const triggeredCtx = calls.builtContextArgs.at(-1);
   assert.ok(triggeredCtx);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image> \(2 images\)/);
+  assert.match(
+    triggeredCtx.message.bodyForAgent,
+    /\[Current message - respond to this]ENV:@bot summarize album/,
+  );
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
   assert.deepEqual(triggeredCtx.media, [
     {
@@ -837,32 +809,10 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
       messageId: 'pending-album-1',
     },
   ]);
-  const albumHistory = calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0];
-  assert.equal(albumHistory?.type, 'bncr.history_window');
-  assert.deepEqual(albumHistory?.payload?.messages, [
-    {
-      messageId: 'pending-album-1',
-      sender: 'bob',
-      senderId: '10002',
-      timestampMs: albumHistory?.payload?.messages?.[0]?.timestampMs,
-      body: '<media:image> (2 images)',
-      mediaSummary: '<media:image> (2 images)',
-      medias: [
-        {
-          path: 'media://inbound/bncr-inbound-media-1.bin',
-          contentType: 'image/png',
-          kind: 'image',
-          messageId: 'pending-album-1',
-        },
-        {
-          path: 'media://inbound/bncr-inbound-media-2.bin',
-          contentType: 'image/jpeg',
-          kind: 'image',
-          messageId: 'pending-album-1',
-        },
-      ],
-    },
-  ]);
+  assert.equal(
+    calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
+    'bncr.inbound_context',
+  );
 });
 
 test('dispatchBncrInbound merges pending group media into a later text trigger turn', async () => {
@@ -941,26 +891,277 @@ test('dispatchBncrInbound merges pending group media into a later text trigger t
     },
   ]);
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
-  const imageHistory = calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0];
-  assert.equal(imageHistory?.type, 'bncr.history_window');
-  assert.deepEqual(imageHistory?.payload?.messages, [
-    {
-      messageId: 'pending-image-later-1',
-      sender: 'bob',
-      senderId: '10002',
-      timestampMs: imageHistory?.payload?.messages?.[0]?.timestampMs,
-      body: '<media:image>',
-      mediaSummary: '<media:image>',
-      medias: [
-        {
-          path: 'media://inbound/bncr-inbound-media-1.bin',
-          contentType: 'image/png',
-          kind: 'image',
-          messageId: 'pending-image-later-1',
-        },
-      ],
-    },
+  assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image>/);
+  assert.equal(
+    calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
+    'bncr.inbound_context',
+  );
+});
+
+test('dispatchBncrInbound flushes pending group history silently at the limit and keeps prior flushes readable later', async () => {
+  const { api, calls } = createInboundApiStub();
+  const groupHistories = new Map();
+  const enqueueCalls = [];
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        agentId: 'public',
+        groupReplyMode: 'mention',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
   ]);
+
+  for (const [index, text] of ['测试1', '测试2', '测试3', '测试4', '测试5'].entries()) {
+    const parsed = parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '-1001',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: true,
+      shouldRespond: false,
+      type: 'text',
+      msg: text,
+      mimeType: 'text/plain',
+      msgId: `pending-overflow-${index + 1}`,
+    });
+
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'public',
+      shouldDispatch: false,
+      shouldAccumulate: true,
+      sceneRegistry,
+      groupHistories,
+      rememberSessionRoute() {},
+      enqueueFromReply: async (args) => {
+        enqueueCalls.push(args);
+      },
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+  }
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(enqueueCalls.length, 0);
+  assert.equal(groupHistories.get('tgBot:-1001')?.length, 2);
+  assert.deepEqual(
+    groupHistories.get('tgBot:-1001')?.map((entry) => entry.body),
+    ['测试4', '测试5'],
+  );
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.match(String(calls.turnRuns[0].ctxPayload.RawBody || ''), /Output exactly NO_REPLY\./);
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /测试1/);
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /测试2/);
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /测试3/);
+  assert.match(
+    calls.turnRuns[0].ctxPayload.BodyForAgent,
+    /\[Current message - respond to this]ENV:This message was automatically generated by the system for group context accumulation\./,
+  );
+
+  const trigger = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '@bot 测试6',
+    mimeType: 'text/plain',
+    msgId: 'pending-overflow-trigger-6',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: trigger,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    sceneRegistry,
+    groupHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 2);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0]?.payload?.text, 'reply from agent');
+  assert.match(calls.turnRuns[1].ctxPayload.BodyForAgent, /测试4/);
+  assert.match(calls.turnRuns[1].ctxPayload.BodyForAgent, /测试5/);
+  assert.match(calls.turnRuns[1].ctxPayload.BodyForAgent, /@bot 测试6/);
+  assert.equal(
+    calls.turnRuns[1].ctxPayload.UntrustedStructuredContext?.some(
+      (entry) => entry?.type === 'bncr.history_window',
+    ),
+    false,
+  );
+  assert.deepEqual(groupHistories.get('tgBot:-1001'), []);
+
+  const carry = ['测试6', '测试7', '测试8'];
+  for (const [index, text] of carry.entries()) {
+    const parsed = parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '-1001',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: true,
+      shouldRespond: false,
+      type: 'text',
+      msg: text,
+      mimeType: 'text/plain',
+      msgId: `pending-overflow-2-${index + 6}`,
+    });
+
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'public',
+      shouldDispatch: false,
+      shouldAccumulate: true,
+      sceneRegistry,
+      groupHistories,
+      rememberSessionRoute() {},
+      enqueueFromReply: async (args) => {
+        enqueueCalls.push(args);
+      },
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+  }
+
+  assert.equal(calls.turnRuns.length, 3);
+  assert.equal(enqueueCalls.length, 1);
+  assert.deepEqual(groupHistories.get('tgBot:-1001'), []);
+  assert.match(calls.turnRuns[2].ctxPayload.BodyForAgent, /测试6/);
+  assert.match(calls.turnRuns[2].ctxPayload.BodyForAgent, /测试7/);
+  assert.match(calls.turnRuns[2].ctxPayload.BodyForAgent, /测试8/);
+
+  const finalTrigger = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '@bot 请复述之前的测试消息',
+    mimeType: 'text/plain',
+    msgId: 'pending-overflow-trigger-history-readback',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: finalTrigger,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    sceneRegistry,
+    groupHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 4);
+  assert.equal(enqueueCalls.length, 2);
+  assert.equal(calls.turnRuns[3].ctxPayload.SenderId, '10001');
+  assert.equal(
+    calls.turnRuns[3].ctxPayload.UntrustedStructuredContext?.find(
+      (entry) => entry?.type === 'bncr.history_window',
+    ),
+    undefined,
+  );
+});
+
+test('dispatchBncrInbound honors scene history limit from the first accumulated group message', async () => {
+  const { api, calls } = createInboundApiStub();
+  const groupHistories = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1002',
+      {
+        sceneKey: 'tgBot:-1002',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1002',
+        agentId: 'public',
+        groupReplyMode: 'mention',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+
+  for (const [index, text] of ['首1', '首2', '首3'].entries()) {
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed: parseBncrInboundParams({
+        accountId: 'Primary',
+        clientId: 'client-1',
+        platform: 'tgBot',
+        groupId: '-1002',
+        userId: '10001',
+        userName: 'xmo',
+        isGroup: true,
+        shouldRespond: false,
+        type: 'text',
+        msg: text,
+        mimeType: 'text/plain',
+        msgId: `first-limit-${index + 1}`,
+      }),
+      canonicalAgentId: 'public',
+      shouldDispatch: false,
+      shouldAccumulate: true,
+      sceneRegistry,
+      groupHistories,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+  }
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /首1/);
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /首2/);
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /首3/);
+  assert.deepEqual(groupHistories.get('tgBot:-1002'), []);
 });
 
 test('dispatchBncrInbound records video, audio, and document group history markers for later replay', async () => {
@@ -1097,6 +1298,10 @@ test('dispatchBncrInbound records video, audio, and document group history marke
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:video>/);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:audio>/);
   assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:document>/);
+  assert.match(
+    triggeredCtx.message.bodyForAgent,
+    /\[Current message - respond to this]ENV:@bot summarize all media/,
+  );
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
   assert.deepEqual(triggeredCtx.media, [
     {
@@ -1118,58 +1323,10 @@ test('dispatchBncrInbound records video, audio, and document group history marke
       messageId: 'pending-file-1',
     },
   ]);
-  const multiHistory = calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0];
-  assert.equal(multiHistory?.type, 'bncr.history_window');
-  assert.deepEqual(multiHistory?.payload?.messages, [
-    {
-      messageId: 'pending-video-1',
-      sender: 'alice',
-      senderId: '10002',
-      timestampMs: multiHistory?.payload?.messages?.[0]?.timestampMs,
-      body: '<media:video>',
-      mediaSummary: '<media:video>',
-      medias: [
-        {
-          path: 'media://inbound/bncr-inbound-media-1.bin',
-          contentType: 'video/mp4',
-          kind: 'video',
-          messageId: 'pending-video-1',
-        },
-      ],
-    },
-    {
-      messageId: 'pending-audio-1',
-      sender: 'bob',
-      senderId: '10003',
-      timestampMs: multiHistory?.payload?.messages?.[1]?.timestampMs,
-      body: '<media:audio>',
-      mediaSummary: '<media:audio>',
-      medias: [
-        {
-          path: 'media://inbound/bncr-inbound-media-2.bin',
-          contentType: 'audio/ogg',
-          kind: 'audio',
-          messageId: 'pending-audio-1',
-        },
-      ],
-    },
-    {
-      messageId: 'pending-file-1',
-      sender: 'carol',
-      senderId: '10004',
-      timestampMs: multiHistory?.payload?.messages?.[2]?.timestampMs,
-      body: '<media:document>',
-      mediaSummary: '<media:document>',
-      medias: [
-        {
-          path: 'media://inbound/bncr-inbound-media-3.bin',
-          contentType: 'application/pdf',
-          kind: 'document',
-          messageId: 'pending-file-1',
-        },
-      ],
-    },
-  ]);
+  assert.equal(
+    calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
+    'bncr.inbound_context',
+  );
 });
 
 test('prepareBncrInboundSessionContext converts generic platform media text into Telegram-style placeholders but preserves real captions', async () => {

@@ -1180,13 +1180,13 @@ test('scene admin mode help returns dedicated mode guidance', async () => {
     scheduleSave() {},
   });
 
-  assert.match(enqueueCalls[0].payload.text, /💬 Group reply modes/);
+  assert.match(enqueueCalls[0].payload.text, /💬 Bncr Group Reply Mode Configuration/);
   assert.match(enqueueCalls[0].payload.text, /admin: 仅管理员\|消息上送并逐条回复/);
   assert.match(
     enqueueCalls[0].payload.text,
     /hybrid: 全员\|消息上送 管理员逐条回复 其他人仅指定消息触发回复/,
   );
-  assert.match(enqueueCalls[0].payload.text, /\/bncr mode help/);
+  assert.match(enqueueCalls[0].payload.text, /\/bncr mode <admin|mention|hybrid|all>/);
 });
 
 test('scene admin revoke command deletes record for later re-apply', async () => {
