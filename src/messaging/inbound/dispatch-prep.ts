@@ -48,6 +48,7 @@ export type BncrInboundReplyRouteFact = {
   sessionKey: string;
   route: ParsedInbound['route'];
   canonicalTo: string;
+  rawTo: string;
   originatingTo: string;
   chatType: 'direct' | 'group';
 };
@@ -270,7 +271,7 @@ export function resolveBncrInboundConversation(args: {
   const dispatchSessionKey = taskSessionKey || baseSessionKey;
   const rawTo = formatRawBncrInboundTarget(route);
   const canonicalTo = formatDisplayScope(route);
-  const originatingTo = providedOriginatingTo || rawTo;
+  const originatingTo = providedOriginatingTo || canonicalTo;
 
   return {
     accountId,
@@ -419,6 +420,7 @@ export function buildBncrInboundReplyRouteFact(
     sessionKey: resolution.dispatchSessionKey,
     route: resolution.route,
     canonicalTo: resolution.canonicalTo,
+    rawTo: resolution.rawTo,
     originatingTo: resolution.originatingTo,
     chatType: resolution.chatType,
   };

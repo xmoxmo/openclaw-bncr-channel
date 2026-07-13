@@ -295,6 +295,7 @@ test('buildBncrInboundTurnContext passes canonical route fields and visible untr
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'Bncr:tgBot:-1001:10001?raw',
+          rawTo: 'Bncr:tgBot:-1001:10001',
         },
         media: [{ contentType: 'image/png', kind: 'image', messageId: 'msg-1' }],
       },

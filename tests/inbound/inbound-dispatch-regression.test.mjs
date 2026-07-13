@@ -59,7 +59,8 @@ test('handleInbound async dispatch path reaches built inbound context instead of
           },
           reply: {
             to: 'Bncr:tgBot:-1001:0',
-            originatingTo: 'Bncr:tgBot:-1001:10001',
+            originatingTo: 'Bncr:tgBot:-1001:0',
+            rawTo: 'Bncr:tgBot:-1001:10001',
           },
         },
       },

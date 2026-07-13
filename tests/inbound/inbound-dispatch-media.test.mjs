@@ -103,7 +103,8 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
         platform: 'bncr/tgBot',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
-          originatingTo: 'Bncr:tgBot:-1001:10001',
+          originatingTo: 'Bncr:tgBot:-1001:0',
+          rawTo: 'Bncr:tgBot:-1001:10001',
         },
         media: [
           {

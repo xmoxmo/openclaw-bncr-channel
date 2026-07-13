@@ -17,6 +17,7 @@ export type BncrStructuredContextFactsInput = {
   reply: {
     to: string;
     originatingTo: string;
+    rawTo?: string;
   };
   sender: {
     id: string;
@@ -125,6 +126,7 @@ export function buildBncrStructuredContextFacts(input: BncrStructuredContextFact
     reply: {
       to: input.reply.to,
       originatingTo: input.reply.originatingTo,
+      ...(input.reply.rawTo ? { rawTo: input.reply.rawTo } : {}),
     },
     sender: {
       id: input.sender.id,
@@ -200,6 +202,7 @@ export function buildBncrPromptVisibleContextFacts(
     reply?: {
       to: string;
       originatingTo: string;
+      rawTo?: string;
     };
     media?: Array<{
       path?: string;
@@ -249,10 +252,11 @@ export function buildBncrPromptVisibleContextFacts(
     };
   }
 
-  if (facts.reply.originatingTo !== facts.reply.to) {
+  if (facts.reply.originatingTo !== facts.reply.to || facts.reply.rawTo) {
     result.reply = {
       to: facts.reply.to,
       originatingTo: facts.reply.originatingTo,
+      ...(facts.reply.rawTo ? { rawTo: facts.reply.rawTo } : {}),
     };
   }
 
@@ -331,6 +335,7 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
   resolution: {
     chatType: string;
     canonicalTo: string;
+    rawTo: string;
     originatingTo: string;
     resolvedRoute: {
       agentId?: string;
@@ -389,6 +394,7 @@ export function buildBncrStructuredContextFactsFromInboundParts(
     reply: {
       to: input.resolution.canonicalTo,
       originatingTo: input.resolution.originatingTo,
+      rawTo: input.resolution.rawTo,
     },
     sender: {
       id: input.senderIdForContext,

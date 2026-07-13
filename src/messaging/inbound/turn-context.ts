@@ -220,6 +220,7 @@ export function buildBncrInboundTurnContext(args: {
       reply: {
         to: resolution.canonicalTo,
         originatingTo: resolution.originatingTo,
+        rawTo: resolution.rawTo,
       },
       message: {
         inboundEventKind: 'user_request',

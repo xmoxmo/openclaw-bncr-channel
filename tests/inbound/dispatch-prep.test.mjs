@@ -254,6 +254,7 @@ test('buildBncrInboundReplyRouteFact maps dispatch route fields exactly', () => 
     sessionKey: 'agent:orion:bncr:group:demo#task',
     route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
     canonicalTo: 'Bncr:tgBot:-1001:10001',
+    rawTo: 'Bncr:tgBot:-1001:10001',
     originatingTo: 'Bncr:tgBot:-1001:10001?raw',
     chatType: 'group',
   });

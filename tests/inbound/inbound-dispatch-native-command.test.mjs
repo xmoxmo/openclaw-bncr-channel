@@ -2038,13 +2038,14 @@ test('slash command with no native reply falls back to normal bncr agent inbound
         platform: 'bncr/tgBot',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
-          originatingTo: 'Bncr:tgBot:-1001:10001',
+          originatingTo: 'Bncr:tgBot:-1001:0',
+          rawTo: 'Bncr:tgBot:-1001:10001',
         },
       },
     },
   ]);
   assert.equal(calls.turnRuns[0].ctxPayload.To, 'Bncr:tgBot:-1001:0');
-  assert.equal(calls.turnRuns[0].ctxPayload.OriginatingTo, 'Bncr:tgBot:-1001:10001');
+  assert.equal(calls.turnRuns[0].ctxPayload.OriginatingTo, 'Bncr:tgBot:-1001:0');
   assert.equal(calls.turnRuns[0].ctxPayload.ConversationLabel, 'Bncr:tgBot:-1001:0');
   assert.equal(
     calls.turnRuns[0].ctxPayload.SessionKey,
@@ -2052,7 +2053,7 @@ test('slash command with no native reply falls back to normal bncr agent inbound
   );
   assert.equal(calls.recorded.length, 1);
   assert.equal(calls.recorded[0].ctx.To, 'Bncr:tgBot:-1001:0');
-  assert.equal(calls.recorded[0].ctx.OriginatingTo, 'Bncr:tgBot:-1001:10001');
+  assert.equal(calls.recorded[0].ctx.OriginatingTo, 'Bncr:tgBot:-1001:0');
   assert.equal(calls.recorded[0].ctx.ConversationLabel, 'Bncr:tgBot:-1001:0');
   assert.equal(calls.recorded[0].ctx.SessionKey, 'agent:orion:bncr:group:7467426f743a2d31303031');
   assert.equal(
@@ -2202,7 +2203,8 @@ test('slash command without clientId still falls back to normal bncr agent inbou
         platform: 'bncr/tgBot',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
-          originatingTo: 'Bncr:tgBot:-1001:10001',
+          originatingTo: 'Bncr:tgBot:-1001:0',
+          rawTo: 'Bncr:tgBot:-1001:10001',
         },
       },
     },

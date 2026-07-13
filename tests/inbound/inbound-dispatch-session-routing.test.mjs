@@ -76,7 +76,7 @@ test('resolveBncrInboundConversation returns canonical target and dispatch sessi
   assert.equal(resolution.chatType, 'group');
   assert.equal(resolution.rawTo, 'Bncr:tgBot:-1001:10001');
   assert.equal(resolution.canonicalTo, 'Bncr:tgBot:-1001:0');
-  assert.equal(resolution.originatingTo, resolution.rawTo);
+  assert.equal(resolution.originatingTo, resolution.canonicalTo);
   assert.equal(resolution.baseSessionKey, 'agent:orion:bncr:group:7467426f743a2d31303031');
   assert.equal(resolution.dispatchSessionKey, 'agent:orion:bncr:group:7467426f743a2d31303031');
 });
@@ -149,7 +149,8 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
   });
   assert.deepEqual(calls.builtContextArgs[0].reply, {
     to: 'Bncr:tgBot:-1001:0',
-    originatingTo: 'Bncr:tgBot:-1001:10001',
+    originatingTo: 'Bncr:tgBot:-1001:0',
+    rawTo: 'Bncr:tgBot:-1001:10001',
   });
   assert.deepEqual(calls.builtContextArgs[0].message, {
     inboundEventKind: 'user_request',
@@ -158,7 +159,7 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
     bodyForAgent: 'ENV:hello inbound',
     inboundHistory: undefined,
     commandBody: 'hello inbound',
-    envelopeFrom: 'Bncr:tgBot:-1001:10001',
+    envelopeFrom: 'Bncr:tgBot:-1001:0',
     senderLabel: 'xmo',
   });
   assert.equal(calls.builtContextArgs[0].supplemental.untrustedContext.length, 1);
@@ -188,7 +189,8 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
     },
     reply: {
       to: 'Bncr:tgBot:-1001:0',
-      originatingTo: 'Bncr:tgBot:-1001:10001',
+      originatingTo: 'Bncr:tgBot:-1001:0',
+      rawTo: 'Bncr:tgBot:-1001:10001',
     },
     sender: {
       id: '10001',
@@ -223,8 +225,8 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
     pendingMediaContext: [],
   });
   assert.equal(calls.builtContexts[0].To, 'Bncr:tgBot:-1001:0');
-  assert.equal(calls.builtContexts[0].OriginatingTo, 'Bncr:tgBot:-1001:10001');
-  assert.equal(calls.builtContexts[0].EnvelopeFrom, 'Bncr:tgBot:-1001:10001');
+  assert.equal(calls.builtContexts[0].OriginatingTo, 'Bncr:tgBot:-1001:0');
+  assert.equal(calls.builtContexts[0].EnvelopeFrom, 'Bncr:tgBot:-1001:0');
   assert.equal(calls.builtContexts[0].ConversationLabel, 'Bncr:tgBot:-1001:0');
   assert.equal(
     calls.recorded[0].ctx.DispatchSessionKey,
@@ -1479,6 +1481,7 @@ test('dispatchBncrInbound carries provided originating target into built inbound
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'BncrRaw:tgBot:-1001:10001',
+          rawTo: 'Bncr:tgBot:-1001:10001',
         },
       },
     },
