@@ -226,7 +226,10 @@ export function buildBncrGroupContextFromEntries(args: {
     .map((entry) =>
       formatOpenClawAgentEnvelope(args.api, {
         channel: 'Bncr',
-        from: args.channelLabel,
+        from:
+          (entry.senderId
+            ? `${entry.sender} (${entry.senderId})`
+            : entry.sender || args.channelLabel) + (entry.messageId ? ` #${entry.messageId}` : ''),
         timestamp: entry.timestamp || args.currentTimestamp,
         previousTimestamp: args.previousTimestamp,
         envelope: args.envelope,

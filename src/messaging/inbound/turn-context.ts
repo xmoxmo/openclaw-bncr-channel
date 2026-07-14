@@ -1,3 +1,4 @@
+import type { HistoryMediaEntry } from 'openclaw/plugin-sdk/reply-history';
 import { readBncrSessionUpdatedAt } from '../../openclaw/inbound-session-runtime.ts';
 import {
   formatOpenClawAgentEnvelope,
@@ -125,6 +126,20 @@ export function buildBncrInboundTurnContext(args: {
   const pendingHistoryMedia = shouldDispatch
     ? collectBncrHistoryMediaFromEntries({ entries: pendingHistoryEntries })
     : [];
+  const pendingHistoryContext = shouldDispatch
+    ? pendingHistoryEntries.map((entry) => ({
+        messageId: entry.messageId,
+        sender: entry.sender,
+        senderId: entry.senderId,
+        body: entry.body,
+        media: (entry.media || []).map((item: HistoryMediaEntry) => ({
+          path: item.path,
+          contentType: item.contentType,
+          kind: item.kind,
+          messageId: item.messageId,
+        })),
+      }))
+    : [];
   const structuredContextFacts = buildBncrStructuredContextFactsFromInboundParts({
     channelId,
     parsed,
@@ -140,6 +155,7 @@ export function buildBncrInboundTurnContext(args: {
     bridgeSenderName,
     senderIsOwner,
     senderIsAuthorized,
+    pendingHistoryContext,
   });
   const promptVisibleContextFacts = buildBncrPromptVisibleContextFacts(structuredContextFacts);
   const supplementalUntrustedContext = [

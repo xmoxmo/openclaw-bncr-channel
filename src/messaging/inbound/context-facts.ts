@@ -272,7 +272,6 @@ export function buildBncrPromptVisibleContextFacts(
       return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
     });
   }
-
   if (facts.pendingMediaContext?.length) {
     result.pendingMediaContext = facts.pendingMediaContext.flatMap((entry) => {
       const media = (entry.media || []).flatMap((item) => {
@@ -359,7 +358,7 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
   bridgeSenderName?: string;
   senderIsOwner?: boolean;
   senderIsAuthorized?: boolean;
-  pendingMediaContext?: Array<{
+  pendingHistoryContext?: Array<{
     messageId?: string;
     sender?: string;
     senderId?: string;
@@ -372,11 +371,13 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
     }>;
   }>;
 };
-
 export function buildBncrStructuredContextFactsFromInboundParts(
   input: BncrStructuredContextFactsFromInboundPartsInput,
 ) {
   const mediaItems = Array.isArray(input.prepared.mediaItems) ? input.prepared.mediaItems : [];
+  const pendingHistoryContext = Array.isArray(input.pendingHistoryContext)
+    ? input.pendingHistoryContext
+    : [];
   return buildBncrStructuredContextFacts({
     channelId: input.channelId,
     accountId: input.parsed.accountId,
@@ -434,6 +435,6 @@ export function buildBncrStructuredContextFactsFromInboundParts(
       kind: item.kind || inferBncrStructuredMediaKind(item.contentType),
       messageId: input.parsed.msgId,
     })),
-    pendingMediaContext: input.pendingMediaContext,
+    pendingMediaContext: pendingHistoryContext,
   });
 }
