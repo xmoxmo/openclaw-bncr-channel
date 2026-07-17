@@ -138,10 +138,13 @@ test('resolveBncrNativeHelpCommand returns builtin bncr help text', () => {
   assert.match(helpText, /\/bncr deny \[<SceneId>\]/);
   assert.match(helpText, /\/bncr bind <agentId> \[<SceneId>\]/);
   assert.match(helpText, /\/bncr mode help/);
-  assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all> \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all\|clear> \[<SceneId>\]/);
   assert.match(helpText, /\/bncr revoke \[<SceneId>\]/);
   assert.match(helpText, /\/bncr list pending/);
   assert.match(helpText, /\/bncr list scenes/);
+  assert.match(helpText, /\/bncr download-media on\|off\|clear\|default on\|off/);
+  assert.match(helpText, /\/bncr history-limit \[<number>\|clear\] \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr history-force on\|off\|clear \[<SceneId>\]/);
   assert.doesNotMatch(helpText, /💬 Group reply modes/);
   assert.doesNotMatch(helpText, /\/status/);
   assert.doesNotMatch(helpText, /\/whoami/);
@@ -718,4 +721,238 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: false, text: 'Admin permission required.' },
   );
+});
+
+test('parseSceneAdminCommand: mode clear', () => {
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr mode clear')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'mode', sceneKey: '', mode: 'clear' },
+  });
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr mode clear tgBot:-1001')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'mode', sceneKey: 'tgBot:-1001', mode: 'clear' },
+  });
+});
+
+test('parseSceneAdminCommand: history-limit clear', () => {
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit clear')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-limit-set', sceneKey: '', limit: 'clear' },
+  });
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit clear tgBot:-1001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 'clear' },
+    },
+  );
+});
+
+test('parseSceneAdminCommand: history-force clear', () => {
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-force clear')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-force-set', sceneKey: '', enabled: 'clear' },
+  });
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-force clear tgBot:-1001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'history-force-set', sceneKey: 'tgBot:-1001', enabled: 'clear' },
+    },
+  );
+});
+
+test('parseSceneAdminCommand: download-media on/off/clear/default', () => {
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr download-media on')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'download-media-set', sceneKey: '', enabled: true },
+  });
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr download-media off tgBot:-1001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'download-media-set', sceneKey: 'tgBot:-1001', enabled: false },
+    },
+  );
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr download-media clear')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'download-media-set', sceneKey: '', enabled: undefined },
+  });
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr download-media default on')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'download-media-global-set', enabled: true },
+    },
+  );
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr download-media default')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'download-media-global-get' },
+  });
+});
+
+test('executeSceneAdminCommand: mode clear removes groupReplyMode', () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupReplyMode: 'all',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const result = executeSceneAdminCommand({
+    parsed: { isAdmin: true, userId: '1' },
+    command: { kind: 'mode', sceneKey: 'tgBot:-1001', mode: 'clear' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Cleared/);
+  const scene = sceneRegistry.get('tgBot:-1001');
+  assert.equal(scene.groupReplyMode, undefined);
+});
+
+test('executeSceneAdminCommand: history-limit clear removes historyLimit', () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        historyLimit: 100,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const result = executeSceneAdminCommand({
+    parsed: { isAdmin: true, userId: '1' },
+    command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 'clear' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Cleared/);
+  const scene = sceneRegistry.get('tgBot:-1001');
+  assert.equal(scene.historyLimit, undefined);
+});
+
+test('executeSceneAdminCommand: history-force clear removes historyForce', () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        historyForce: false,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const result = executeSceneAdminCommand({
+    parsed: { isAdmin: true, userId: '1' },
+    command: { kind: 'history-force-set', sceneKey: 'tgBot:-1001', enabled: 'clear' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Cleared/);
+  const scene = sceneRegistry.get('tgBot:-1001');
+  assert.equal(scene.historyForce, undefined);
+});
+
+test('executeSceneAdminCommand: download-media set/clear', () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  // Set on
+  let result = executeSceneAdminCommand({
+    parsed: { isAdmin: true, userId: '1' },
+    command: { kind: 'download-media-set', sceneKey: 'tgBot:-1001', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(sceneRegistry.get('tgBot:-1001').downloadMedia, true);
+
+  // Clear
+  result = executeSceneAdminCommand({
+    parsed: { isAdmin: true, userId: '1' },
+    command: { kind: 'download-media-set', sceneKey: 'tgBot:-1001', enabled: undefined },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 3,
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Cleared/);
+  assert.equal(sceneRegistry.get('tgBot:-1001').downloadMedia, undefined);
+});
+
+test('executeSceneAdminCommand: download-media global get/set', () => {
+  const sceneRegistry = new Map();
+  // Set global
+  let result = executeSceneAdminCommand({
+    parsed: { isAdmin: true, userId: '1' },
+    command: { kind: 'download-media-global-set', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 1,
+  });
+  assert.equal(result.ok, true);
+  const globalScene = sceneRegistry.get('__global__');
+  assert.equal(globalScene?.downloadMedia, true);
+
+  // Get global
+  result = executeSceneAdminCommand({
+    parsed: { isAdmin: true, userId: '1' },
+    command: { kind: 'download-media-global-get' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /on/);
 });

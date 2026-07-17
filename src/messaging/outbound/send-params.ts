@@ -1,5 +1,6 @@
 import { normalizeAccountId } from '../../core/accounts.ts';
 import { readOpenClawBooleanParam, readOpenClawStringParam } from '../../openclaw/sdk-helpers.ts';
+import { extractConsumptionFields, parseBncrMarker } from './marker-parser.ts';
 
 export type NormalizedBncrSendParams = {
   to: string;
@@ -11,6 +12,7 @@ export type NormalizedBncrSendParams = {
   asVoice: boolean;
   audioAsVoice: boolean;
   type?: string;
+  downloadMedia?: boolean;
   extra?: Record<string, unknown>;
 };
 
@@ -28,8 +30,13 @@ export function normalizeBncrSendParams(input: {
     readOpenClawStringParam(paramsObj, 'accountId') ?? input.accountId,
   );
 
-  const message = readOpenClawStringParam(paramsObj, 'message', { allowEmpty: true }) ?? '';
-  const caption = readOpenClawStringParam(paramsObj, 'caption', { allowEmpty: true }) ?? '';
+  const rawMessage = readOpenClawStringParam(paramsObj, 'message', { allowEmpty: true }) ?? '';
+  const rawCaption = readOpenClawStringParam(paramsObj, 'caption', { allowEmpty: true }) ?? '';
+  // Parse [BncrParam:...] markers from message and caption text
+  const { cleanText: parsedMessage, params: msgMarker } = parseBncrMarker(rawMessage);
+  const { cleanText: parsedCaption, params: capMarker } = parseBncrMarker(rawCaption);
+  const message = parsedMessage;
+  const caption = parsedCaption;
   const mediaUrl =
     readOpenClawStringParam(paramsObj, 'media', { trim: false }) ??
     readOpenClawStringParam(paramsObj, 'path', { trim: false }) ??
@@ -53,18 +60,43 @@ export function normalizeBncrSendParams(input: {
   const audioAsVoice = readOpenClawBooleanParam(paramsObj, 'audioAsVoice') ?? false;
   const type = readOpenClawStringParam(paramsObj, 'type') || undefined;
   const rawExtra = paramsObj.extra;
-  const extra = isPlainObject(rawExtra) ? { ...rawExtra } : undefined;
+  const paramsExtra = isPlainObject(rawExtra) ? { ...rawExtra } : {};
+  // Merge marker params into extra (marker takes priority over direct extra)
+  const mergedExtra = { ...paramsExtra, ...msgMarker, ...capMarker };
+  const extra = Object.keys(mergedExtra).length > 0 ? mergedExtra : undefined;
+
+  // Extract consumption fields from merged extra - marker-specified values override params
+  const { consumed, remaining } = extractConsumptionFields(
+    Object.keys(mergedExtra).length > 0 ? mergedExtra : undefined,
+  );
+  const effectiveAsVoice = consumed.asVoice ?? asVoice;
+  const effectiveAudioAsVoice = consumed.audioAsVoice ?? audioAsVoice;
+  const effectiveDownloadMedia = consumed.downloadMedia === true;
+  const effectiveType = consumed.type ?? type;
+  const cleanedExtra = Object.keys(remaining).length > 0 ? remaining : undefined;
 
   const hasMedia = Boolean(mediaUrl || dedupedMediaUrls?.length);
 
-  if (asVoice && !hasMedia) throw new Error('send voice requires media path');
+  if (effectiveAsVoice && !hasMedia) throw new Error('send voice requires media path');
 
   const normalizedMessage = hasMedia ? '' : message || caption || '';
   const normalizedCaption = hasMedia ? caption || message || '' : '';
 
-  if (!normalizedMessage.trim() && !normalizedCaption.trim() && !hasMedia) {
-    throw new Error('send requires message or media');
+  if (!normalizedMessage.trim() && !normalizedCaption.trim() && !hasMedia && !extra) {
+    throw new Error('send requires message, media, or extra params');
   }
+  console.log(
+    '[bncr] normalizeBncrSendParams rawMessage=' +
+      JSON.stringify(rawMessage) +
+      '|msgMarker=' +
+      JSON.stringify(msgMarker) +
+      '|consumed=' +
+      JSON.stringify(consumed) +
+      '|effectiveDownloadMedia=' +
+      effectiveDownloadMedia +
+      '|mediaUrl=' +
+      JSON.stringify(mediaUrl),
+  );
 
   return {
     to,
@@ -73,9 +105,10 @@ export function normalizeBncrSendParams(input: {
     caption: normalizedCaption,
     mediaUrl: dedupedMediaUrls?.length ? undefined : mediaUrl || undefined,
     mediaUrls: dedupedMediaUrls,
-    asVoice,
-    audioAsVoice,
-    ...(type ? { type } : {}),
-    ...(extra ? { extra } : {}),
+    asVoice: effectiveAsVoice,
+    ...(effectiveDownloadMedia ? { downloadMedia: true } : {}),
+    audioAsVoice: effectiveAudioAsVoice,
+    ...(effectiveType ? { type: effectiveType } : {}),
+    ...(cleanedExtra ? { extra: cleanedExtra } : {}),
   };
 }

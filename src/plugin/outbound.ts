@@ -24,6 +24,10 @@ type BncrOutboundSendContext = {
   asVoice?: boolean;
   audioAsVoice?: boolean;
   mediaLocalRoots?: readonly string[];
+  /** Pass-through fields from host — bncr plugin does NOT consume these. */
+  forceDocument?: boolean;
+  gifPlayback?: boolean;
+  silent?: boolean;
 };
 
 type BncrOutboundReplyActionContext = {

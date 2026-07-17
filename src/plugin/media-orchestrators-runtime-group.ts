@@ -53,6 +53,7 @@ function buildReplyMediaEntryHelpers(runtime: {
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
+    downloadMedia?: boolean;
   }) => OutboxEntry;
   rememberRecentMediaSend: (args: {
     sessionKey: string;
@@ -208,6 +209,7 @@ export function createBncrMediaOrchestratorsRuntimeGroup(runtime: {
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
+    downloadMedia?: boolean;
   }) => OutboxEntry;
   rememberRecentMediaSend: (args: {
     sessionKey: string;

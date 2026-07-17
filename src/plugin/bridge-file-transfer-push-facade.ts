@@ -19,11 +19,12 @@ export function createBncrBridgeFileTransferPushFacade(runtime: {
     route: BncrRoute;
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
+    downloadMedia?: boolean;
   }) => Promise<{
     mode: 'base64' | 'chunk';
     mimeType?: string;
     fileName?: string;
-    mediaBase64?: string;
+    base64?: string;
     path?: string;
   }>;
   buildFileTransferOutboundFrame: (params: {
@@ -88,6 +89,7 @@ export function createBncrBridgeFileTransferPushFacade(runtime: {
       mediaLocalRoots: Array.isArray(args.meta.mediaLocalRoots)
         ? args.meta.mediaLocalRoots.filter((v): v is string => typeof v === 'string')
         : undefined,
+      downloadMedia: args.meta.downloadMedia === true,
     });
     const frame = runtime.buildFileTransferOutboundFrame({
       entry: args.entry,

@@ -99,14 +99,14 @@ test('keeps standard hinted type when supported', () => {
   );
 });
 
-test('voice hinted but non-audio falls back to file', () => {
+test('voice hinted non-audio is still voice (asVoice highest priority)', () => {
   assert.equal(
     resolveBncrOutboundMessageType({
       hintedType: 'voice',
       mimeType: 'application/pdf',
       hasPayload: true,
     }),
-    'file',
+    'voice',
   );
 });
 
@@ -174,11 +174,9 @@ test('buildBncrMediaOutboundFrame preserves extra metadata as a shallow copy', (
     now: 2,
   });
 
-  assert.deepEqual(frame.message.extra, extra);
-  assert.notEqual(frame.message.extra, extra);
-
-  extra.parse_mode = 'HTML';
-  assert.equal(frame.message.extra.parse_mode, 'MarkdownV2');
+  assert.deepEqual(frame.message.parse_mode, 'MarkdownV2');
+  assert.deepEqual(frame.message.disable_preview, true);
+  assert.equal(frame.message.extra, undefined);
 });
 
 test('channelSendMedia enqueues file-transfer outbox entry with voice metadata', async () => {

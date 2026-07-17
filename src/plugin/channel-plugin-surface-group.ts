@@ -10,6 +10,7 @@ import { normalizeBncrSendParams } from '../messaging/outbound/send-params.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
 import type {
   BncrChannelConfigRoot,
+  BncrSceneRecord,
   BncrStatusRuntimeSnapshot,
   BncrVerifiedTarget,
   ChannelMessageActionAdapter,
@@ -37,6 +38,7 @@ type PluginSurfaceResult = ReturnType<typeof openClawJsonResult>;
 
 export function createBncrChannelPluginSurfaceGroup(runtime: {
   channelId: string;
+  sceneRegistry: Map<string, BncrSceneRecord>;
   getMessageSendBridge: () => {
     channelMessageSendText: (
       ctx: Record<string, unknown>,
@@ -138,6 +140,32 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
         throw new Error(`Action ${action} is not supported for provider ${runtime.channelId}.`);
       }
       const normalized = normalizeBncrSendParams({ params, accountId: accountId || '' });
+      console.log(
+        '[bncr] handleAction normalized.downloadMedia=' +
+          JSON.stringify(normalized.downloadMedia) +
+          '|mediaUrl=' +
+          JSON.stringify(normalized.mediaUrl) +
+          '|hasMedia=' +
+          Boolean(normalized.mediaUrl || normalized.mediaUrls?.length),
+      );
+
+      // Priority: marker → scene config → global default → false
+      if (normalized.downloadMedia === undefined) {
+        const parts = normalized.to.split(':');
+        if (parts.length >= 3) {
+          const sceneKey = `${parts[1]}:${parts[2]}`;
+          const scene = runtime.sceneRegistry.get(sceneKey);
+          if (scene?.downloadMedia === true) {
+            normalized.downloadMedia = true;
+          }
+          if (normalized.downloadMedia === undefined) {
+            const globalScene = runtime.sceneRegistry.get('__global__');
+            if (globalScene?.downloadMedia === true) {
+              normalized.downloadMedia = true;
+            }
+          }
+        }
+      }
 
       const toolActionBridge = runtime.getToolActionBridge();
       const result =
@@ -152,6 +180,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
               asVoice: normalized.asVoice,
               audioAsVoice: normalized.audioAsVoice,
               type: normalized.type,
+              downloadMedia: normalized.downloadMedia,
               extra: normalized.extra,
               mediaLocalRoots,
               resolveVerifiedTarget: (to, accountId) =>
@@ -166,6 +195,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
               accountId: normalized.accountId,
               to: normalized.to,
               text: normalized.message,
+              extra: normalized.extra,
               mediaLocalRoots,
               resolveVerifiedTarget: (to, accountId) =>
                 toolActionBridge.resolveVerifiedTarget(to, accountId),

@@ -48,7 +48,7 @@ export function createBncrBridgeMediaFacade(runtime: {
       mode: 'base64' | 'chunk';
       mimeType?: string;
       fileName?: string;
-      mediaBase64?: string;
+      base64?: string;
       path?: string;
     }>;
   };
@@ -161,6 +161,7 @@ export function createBncrBridgeMediaFacade(runtime: {
   const loadOutboundTransferMedia = async (params: {
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
+    downloadMedia?: boolean;
   }): Promise<{
     loaded: OpenClawLoadedMedia;
     size: number;

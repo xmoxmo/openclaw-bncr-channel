@@ -8,11 +8,6 @@ function asString(v: unknown, fallback = ''): string {
   return String(v);
 }
 
-function isAudioMimeType(mimeType?: string): boolean {
-  const mt = asString(mimeType || '').toLowerCase();
-  return mt.startsWith('audio/');
-}
-
 function isBncrOutboundMessageType(value: string): value is BncrOutboundMessageType {
   return (
     value === 'text' ||
@@ -43,11 +38,7 @@ export function resolveBncrOutboundMessageType(params: {
   const isStandard = isBncrOutboundMessageType(hinted);
 
   if (hasPayload && major === 'text' && (hinted === 'text' || !isStandard)) return 'file';
-  if (hinted === 'voice') {
-    if (isAudioMimeType(mt)) return 'voice';
-    if (isMimeMajorOutboundMessageType(major)) return major;
-    return 'file';
-  }
+  if (hinted === 'voice') return 'voice';
   if (isStandard) return hinted;
   if (isMimeMajorOutboundMessageType(major)) return major;
   return 'file';
@@ -61,7 +52,7 @@ export function buildBncrMediaOutboundFrame(params: {
     mode: 'base64' | 'chunk';
     mimeType?: string;
     fileName?: string;
-    mediaBase64?: string;
+    base64?: string;
     path?: string;
   };
   mediaUrl: string;
@@ -87,17 +78,17 @@ export function buildBncrMediaOutboundFrame(params: {
       type: resolveBncrOutboundMessageType({
         mimeType: params.media.mimeType,
         fileName: params.media.fileName,
-        hasPayload: !!(params.media.path || params.media.mediaBase64),
+        hasPayload: !!(params.media.path || params.media.base64),
         hintedType: params.hintedType,
       }),
       kind: params.kind,
       mimeType: params.media.mimeType || '',
       msg: params.mediaMsg,
       path: params.media.path || params.mediaUrl,
-      base64: params.media.mediaBase64 || '',
+      base64: params.media.base64 || '',
       fileName: params.fileName,
       transferMode: params.media.mode,
-      ...(params.extra ? { extra: { ...params.extra } } : {}),
+      ...(params.extra ? { ...params.extra } : {}),
     },
     ts: params.now,
   };

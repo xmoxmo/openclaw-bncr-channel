@@ -6,6 +6,7 @@ function normalizeReplyKind(value: unknown): 'tool' | 'block' | 'final' | undefi
 
 export async function sendBncrText(params: {
   channelId: string;
+  extra?: Record<string, unknown>;
   accountId: string;
   to: string;
   text: string;
@@ -26,6 +27,7 @@ export async function sendBncrText(params: {
       mediaUrl?: string;
       mediaUrls?: string[];
       kind?: 'tool' | 'block' | 'final';
+      extra?: Record<string, unknown>;
       replyToId?: string;
     };
     mediaLocalRoots?: readonly string[];
@@ -43,6 +45,7 @@ export async function sendBncrText(params: {
       text: params.text,
       kind: normalizeReplyKind(params.kind),
       replyToId: params.replyToId,
+      extra: params.extra,
     },
     mediaLocalRoots: params.mediaLocalRoots,
   });
@@ -64,6 +67,7 @@ export async function sendBncrMedia(params: {
   asVoice?: boolean;
   audioAsVoice?: boolean;
   type?: string;
+  downloadMedia?: boolean;
   extra?: Record<string, unknown>;
   kind?: string;
   replyToId?: string;
@@ -84,6 +88,7 @@ export async function sendBncrMedia(params: {
       asVoice?: boolean;
       audioAsVoice?: boolean;
       type?: string;
+      downloadMedia?: boolean;
       extra?: Record<string, unknown>;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
@@ -105,6 +110,7 @@ export async function sendBncrMedia(params: {
       mediaUrls: params.mediaUrls?.length ? params.mediaUrls : undefined,
       asVoice: params.asVoice === true ? true : undefined,
       audioAsVoice: params.audioAsVoice === true ? true : undefined,
+      downloadMedia: params.downloadMedia === true ? true : undefined,
       type: params.type,
       extra: params.extra,
       kind: normalizeReplyKind(params.kind),

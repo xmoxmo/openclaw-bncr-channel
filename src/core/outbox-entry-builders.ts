@@ -20,6 +20,7 @@ export function buildFileTransferOutboxEntry(args: {
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   replyTargetPolicy?: OutboundReplyTargetPolicy;
+  downloadMedia?: boolean;
 }): OutboxEntry {
   const messageId = args.createMessageId();
   const createdAt = args.now();
@@ -39,6 +40,7 @@ export function buildFileTransferOutboxEntry(args: {
         asVoice: args.asVoice === true,
         audioAsVoice: args.audioAsVoice === true,
         type: args.type,
+        downloadMedia: args.downloadMedia === true,
         ...(args.extra ? { extra: { ...args.extra } } : {}),
         finalEvent: args.pushEvent,
         replyToId:
@@ -62,12 +64,14 @@ export function buildTextOutboxEntry(args: {
   normalizeAccountId: (accountId?: string | null) => string;
   normalizeReplyToId: (value?: string | null) => string;
   accountId: string;
+  extra?: Record<string, unknown>;
   sessionKey: string;
   route: BncrRoute;
   text: string;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   replyTargetPolicy?: OutboundReplyTargetPolicy;
+  downloadMedia?: boolean;
 }): OutboxEntry {
   const messageId = args.createMessageId();
   const createdAt = args.now();
@@ -92,6 +96,9 @@ export function buildTextOutboxEntry(args: {
       path: '',
       base64: '',
       fileName: '',
+      // Extra fields from marker/pipeline spread for adapter-specific data
+      // (e.g. type="appmsg", msg="<appmsg>..." from [BncrParam:...])
+      ...(args.extra ? { ...args.extra } : {}),
     },
     ts: createdAt,
   };

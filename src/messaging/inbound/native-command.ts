@@ -50,15 +50,18 @@ const BNCR_HELP_TEXT = [
   '  • /bncr deny [<SceneId>]',
   '  • /bncr bind <agentId> [<SceneId>]',
   '  • /bncr mode help',
-  '  • /bncr mode <admin|mention|hybrid|all> [<SceneId>]',
+  '  • /bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]',
   '  • /bncr revoke [<SceneId>]',
   '  • /bncr list pending [filters...]',
   '  • /bncr list scenes [filters...]',
   '',
   '📋 Group history',
   '  • /bncr history-help',
-  '  • /bncr history-limit [<number>] [<SceneId>]',
-  '  • /bncr history-force on|off [<SceneId>]',
+  '  • /bncr history-limit [<number>|clear] [<SceneId>]',
+  '  • /bncr history-force on|off|clear [<SceneId>]',
+  '',
+  '🌐 Remote media',
+  '  • /bncr download-media on|off|clear|default on|off [<SceneId>]',
 ].join('\n');
 
 const BNCR_NATIVE_COMMANDS = new Set([
@@ -77,6 +80,7 @@ const BNCR_NATIVE_COMMANDS = new Set([
   'history-limit',
   'history-help',
   'history-force',
+  'download-media',
 ]);
 
 export const BNCR_DIRECT_ALLOWED_BARE_COMMANDS = new Set([

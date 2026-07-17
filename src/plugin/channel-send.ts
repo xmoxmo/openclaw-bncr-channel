@@ -3,6 +3,7 @@ import { normalizeAccountId } from '../core/accounts.ts';
 import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import type { BncrRoute, OutboxEntry } from '../core/types.ts';
 import { buildBncrDurableQueuedResult } from '../messaging/outbound/durable-queue-adapter.ts';
+import { extractConsumptionFields, parseBncrMarker } from '../messaging/outbound/marker-parser.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import { sendBncrMedia, sendBncrText } from '../messaging/outbound/send.ts';
 import type { BncrChannelSendContext, BncrVerifiedTarget } from './channel-runtime-types.ts';
@@ -28,6 +29,47 @@ export type BncrChannelSendRuntime = {
   listOutboxEntries: () => OutboxEntry[];
 };
 
+/**
+ * Merge all extra sources (ctx.extra, marker params, host-level fields)
+ * into a single extra bag. Strips consumption fields and returns them
+ * as independent params, remaining extra passes through the pipeline.
+ */
+function resolveUnifiedOutboundExtra(ctx: BncrChannelSendContext): {
+  cleanText: string;
+  extra: Record<string, unknown>;
+  consumed: {
+    asVoice?: boolean;
+    audioAsVoice?: boolean;
+    downloadMedia?: boolean;
+    type?: string;
+    kind?: string;
+    replyToId?: string;
+  };
+} {
+  // 1. Parse marker from text
+  const { cleanText, params: markerParams } = parseBncrMarker(
+    typeof ctx.text === 'string' ? ctx.text : '',
+  );
+
+  // 2. Merge all sources: extra from ctx + marker params + host-level fields
+  const merged: Record<string, unknown> = {
+    ...(typeof ctx.extra === 'object' && ctx.extra !== null ? ctx.extra : {}),
+    ...markerParams,
+  };
+  if (ctx.forceDocument === true) merged.forceDocument = true;
+  if (ctx.gifPlayback === true) merged.gifPlayback = true;
+  if (ctx.silent === true) merged.silent = true;
+
+  // 3. Strip consumption fields
+  const { consumed, remaining } = extractConsumptionFields(merged);
+
+  return {
+    cleanText,
+    extra: remaining,
+    consumed,
+  };
+}
+
 function resolveChannelSendReplyToId(
   asString: BncrChannelSendRuntime['asString'],
   ctx: BncrChannelSendContext,
@@ -48,6 +90,7 @@ function logChannelSendEntry(
       mediaUrls?: string[];
       asVoice?: boolean;
       audioAsVoice?: boolean;
+      downloadMedia?: boolean;
     };
   },
 ) {
@@ -61,6 +104,7 @@ function logChannelSendEntry(
       mediaUrls: args.payload.mediaUrls,
       asVoice: args.payload.asVoice,
       audioAsVoice: args.payload.audioAsVoice,
+      downloadMedia: args.payload.downloadMedia,
       sessionKey: runtime.asString(args.ctx?.sessionKey || ''),
       mirrorSessionKey: runtime.asString(args.ctx?.mirror?.sessionKey || ''),
       rawCtx: {
@@ -78,7 +122,11 @@ async function enqueueChannelMessageHandoff(
   runtime: BncrChannelSendRuntime,
   ctx: BncrChannelSendContext,
   payload: ReplyPayloadInput,
+  extra?: Record<string, unknown>,
 ) {
+  if (extra && Object.keys(extra).length > 0) {
+    payload = { ...payload, extra: { ...extra } };
+  }
   const accountId = normalizeAccountId(ctx.accountId);
   const to = runtime.asString(ctx.to || '').trim();
   const verified = runtime.resolveVerifiedTarget(to, accountId);
@@ -99,128 +147,183 @@ async function enqueueChannelMessageHandoff(
 }
 
 export function createBncrChannelSendRuntime(runtime: BncrChannelSendRuntime) {
-  return {
-    channelSendText: async (ctx: BncrChannelSendContext) => {
-      await runtime.syncDebugFlag();
-      const accountId = normalizeAccountId(ctx.accountId);
-      const to = runtime.asString(ctx.to || '').trim();
-      const replyToId = resolveChannelSendReplyToId(runtime.asString, ctx);
+  /**
+   * Single dispatch: resolves unified extra (marker + ctx + host fields),
+   * determines text vs media route, and calls the appropriate send function.
+   */
+  async function sendDispatch(ctx: BncrChannelSendContext) {
+    await runtime.syncDebugFlag();
+    const accountId = normalizeAccountId(ctx.accountId);
+    const to = runtime.asString(ctx.to || '').trim();
+    const { cleanText, extra, consumed } = resolveUnifiedOutboundExtra(ctx);
+    const replyToId = resolveChannelSendReplyToId(runtime.asString, ctx);
 
-      logChannelSendEntry(runtime, {
-        kind: 'text',
-        accountId,
-        to,
-        ctx,
-        payload: {
-          text: runtime.asString(ctx?.text || ''),
-          mediaUrl: runtime.asString(ctx?.mediaUrl || ''),
-        },
-      });
+    // Resolve effective media params: ctx.mediaUrl is the source of truth.
+    // extra.path/mediaUrl from marker only triggers media when:
+    //   - it is a local file path (starts with / or ./), OR
+    //   - consumed.type is a known media type (file/image/video/audio)
+    // Otherwise they are treated as metadata (e.g. appmsg thumbnail URL).
+    const ctxMediaUrl = runtime.asString(ctx.mediaUrl || '').trim();
+    const markerPath = runtime
+      .asString((extra.path as string) || (extra.mediaUrl as string) || '')
+      .trim();
+    const isLocalPath =
+      markerPath.startsWith('/') || markerPath.startsWith('./') || markerPath.startsWith('../');
+    const isMediaType = ['file', 'image', 'video', 'audio'].includes(consumed.type || '');
+    const effectiveMediaUrl = ctxMediaUrl || (isLocalPath || isMediaType ? markerPath : '');
+    const effectiveMediaUrls = Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined;
+    const asVoice = consumed.asVoice ?? ctx?.asVoice === true;
+    const audioAsVoice = consumed.audioAsVoice ?? ctx?.audioAsVoice === true;
+    const downloadMedia = consumed.downloadMedia ?? ctx?.downloadMedia ?? false;
+    const type = consumed.type ?? (runtime.asString(ctx?.type || '').trim() || undefined);
+    const hasMedia = !!(effectiveMediaUrl || effectiveMediaUrls?.length);
+    console.log(
+      '[bncr] send-dispatch cleanText=' +
+        JSON.stringify(cleanText) +
+        '|downloadMedia=' +
+        JSON.stringify(consumed.downloadMedia) +
+        '|hasMedia=' +
+        hasMedia +
+        '|mediaUrl=' +
+        JSON.stringify(effectiveMediaUrl),
+    );
 
-      return sendBncrText({
-        channelId: runtime.channelId,
-        accountId,
-        to,
-        text: runtime.asString(ctx.text || ''),
-        kind: normalizeReplyKind(ctx?.kind),
-        replyToId,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        resolveVerifiedTarget: (targetTo, targetAccountId) =>
-          runtime.resolveVerifiedTarget(targetTo, targetAccountId),
-        rememberSessionRoute: (sessionKey, routeAccountId, route) =>
-          runtime.rememberSessionRoute(sessionKey, routeAccountId, route),
-        enqueueFromReply: (args) => runtime.enqueueFromReply(args),
-        createMessageId: () => randomUUID(),
-      });
-    },
+    const kind: 'text' | 'media' = hasMedia ? 'media' : 'text';
+    logChannelSendEntry(runtime, {
+      kind,
+      accountId,
+      to,
+      ctx,
+      payload: {
+        text: cleanText,
+        mediaUrl: effectiveMediaUrl,
+        mediaUrls: effectiveMediaUrls,
+        asVoice,
+        audioAsVoice,
+      },
+    });
 
-    channelSendMedia: async (ctx: BncrChannelSendContext) => {
-      await runtime.syncDebugFlag();
-      const accountId = normalizeAccountId(ctx.accountId);
-      const to = runtime.asString(ctx.to || '').trim();
-      const asVoice = ctx?.asVoice === true;
-      const audioAsVoice = ctx?.audioAsVoice === true;
-      const type = runtime.asString(ctx?.type || '').trim() || undefined;
-      const replyToId = resolveChannelSendReplyToId(runtime.asString, ctx);
-
-      logChannelSendEntry(runtime, {
-        kind: 'media',
-        accountId,
-        to,
-        ctx,
-        payload: {
-          text: runtime.asString(ctx?.text || ''),
-          mediaUrl: runtime.asString(ctx?.mediaUrl || ''),
-          mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
-          asVoice,
-          audioAsVoice,
-        },
-      });
-
+    if (hasMedia) {
       return sendBncrMedia({
         channelId: runtime.channelId,
         accountId,
         to,
-        text: runtime.asString(ctx.text || ''),
-        mediaUrl: runtime.asString(ctx.mediaUrl || ''),
-        mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
+        text: cleanText,
+        mediaUrl: effectiveMediaUrl,
+        mediaUrls: effectiveMediaUrls,
         asVoice,
         audioAsVoice,
+        downloadMedia,
         type,
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
         kind: normalizeReplyKind(ctx?.kind),
         replyToId,
         mediaLocalRoots: ctx.mediaLocalRoots,
-        resolveVerifiedTarget: (targetTo, targetAccountId) =>
-          runtime.resolveVerifiedTarget(targetTo, targetAccountId),
-        rememberSessionRoute: (sessionKey, routeAccountId, route) =>
-          runtime.rememberSessionRoute(sessionKey, routeAccountId, route),
-        enqueueFromReply: (args) => runtime.enqueueFromReply(args),
+        resolveVerifiedTarget: (...a) => runtime.resolveVerifiedTarget(...a),
+        rememberSessionRoute: (...a) => runtime.rememberSessionRoute(...a),
+        enqueueFromReply: (a) => runtime.enqueueFromReply(a),
         createMessageId: () => randomUUID(),
       });
-    },
+    }
 
-    channelMessageSendText: async (ctx: BncrChannelSendContext) => {
-      const entry = await enqueueChannelMessageHandoff(runtime, ctx, {
-        text: runtime.asString(ctx.text || ''),
-        kind: normalizeReplyKind(ctx?.kind),
-        replyToId: resolveChannelSendReplyToId(runtime.asString, ctx),
-      });
-      return buildBncrDurableQueuedResult({ entry });
-    },
+    return sendBncrText({
+      channelId: runtime.channelId,
+      accountId,
+      to,
+      text: cleanText,
+      kind: normalizeReplyKind(ctx?.kind),
+      replyToId,
+      extra: Object.keys(extra).length > 0 ? extra : undefined,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+      resolveVerifiedTarget: (...a) => runtime.resolveVerifiedTarget(...a),
+      rememberSessionRoute: (...a) => runtime.rememberSessionRoute(...a),
+      enqueueFromReply: (a) => runtime.enqueueFromReply(a),
+      createMessageId: () => randomUUID(),
+    });
+  }
 
-    channelMessageSendMedia: async (ctx: BncrChannelSendContext) => {
-      const entry = await enqueueChannelMessageHandoff(runtime, ctx, {
-        text: runtime.asString(ctx.text || ''),
+  /**
+   * Durable dispatch: same logic but enqueues via channel message handoff.
+   */
+  async function messageSendDispatch(
+    ctx: BncrChannelSendContext,
+    inputOverrides?: {
+      text?: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+      asVoice?: boolean;
+      audioAsVoice?: boolean;
+      downloadMedia?: boolean;
+      type?: string;
+      kind?: ReplyPayloadInput['kind'];
+      replyToId?: string;
+    },
+  ) {
+    // Merge inputOverrides text into ctx so marker parsing sees the effective text
+    const effectiveCtx =
+      inputOverrides?.text !== undefined ? { ...ctx, text: inputOverrides.text } : ctx;
+    const { cleanText, extra, consumed } = resolveUnifiedOutboundExtra(effectiveCtx);
+    const replyToId = resolveChannelSendReplyToId(runtime.asString, ctx);
+
+    console.log(
+      '[bncr] msg-dispatch cleanText=' +
+        JSON.stringify(cleanText) +
+        '|downloadMedia=' +
+        JSON.stringify(consumed.downloadMedia) +
+        '|mediaUrl=' +
+        JSON.stringify(inputOverrides?.mediaUrl),
+    );
+
+    const payload: ReplyPayloadInput = {
+      text: cleanText,
+      mediaUrl: inputOverrides?.mediaUrl || '',
+      mediaUrls: inputOverrides?.mediaUrls,
+      asVoice: consumed.asVoice ?? inputOverrides?.asVoice ?? false,
+      audioAsVoice: consumed.audioAsVoice ?? inputOverrides?.audioAsVoice ?? false,
+      downloadMedia: consumed.downloadMedia ?? inputOverrides?.downloadMedia ?? false,
+      type: consumed.type ?? inputOverrides?.type,
+      kind: normalizeReplyKind(consumed.kind) ?? inputOverrides?.kind,
+      replyToId: inputOverrides?.replyToId || replyToId,
+      ...(Object.keys(extra).length > 0 ? { extra: { ...extra } } : {}),
+    };
+    const entry = await enqueueChannelMessageHandoff(runtime, ctx, payload, extra);
+    return buildBncrDurableQueuedResult({ entry });
+  }
+
+  return {
+    channelSendText: sendDispatch,
+    channelSendMedia: sendDispatch,
+
+    channelMessageSendText: async (ctx: BncrChannelSendContext) =>
+      messageSendDispatch(ctx, { kind: normalizeReplyKind(ctx?.kind) }),
+
+    channelMessageSendMedia: async (ctx: BncrChannelSendContext) =>
+      messageSendDispatch(ctx, {
         mediaUrl: runtime.asString(ctx.mediaUrl || ''),
         mediaUrls: Array.isArray(ctx?.mediaUrls) ? ctx.mediaUrls : undefined,
         asVoice: ctx?.asVoice === true,
         audioAsVoice: ctx?.audioAsVoice === true,
-        type: runtime.asString(ctx?.type || '').trim() || undefined,
+        type: runtime.asString(ctx.type || '').trim() || undefined,
         kind: normalizeReplyKind(ctx?.kind),
-        replyToId: resolveChannelSendReplyToId(runtime.asString, ctx),
-      });
-      return buildBncrDurableQueuedResult({ entry });
-    },
+      }),
 
     channelMessageSendPayload: async (ctx: BncrChannelSendContext) => {
-      const payload = ctx?.payload || {};
-      if (!payload || typeof payload !== 'object') {
+      const p = ctx?.payload || {};
+      if (!p || typeof p !== 'object')
         throw new Error('bncr channel.message payload must be an object');
-      }
-      const entry = await enqueueChannelMessageHandoff(runtime, ctx, {
-        text: runtime.asString(payload.text || payload.message || payload.caption || ''),
-        mediaUrl: runtime.asString(payload.mediaUrl || ''),
-        mediaUrls: Array.isArray(payload.mediaUrls) ? payload.mediaUrls : undefined,
-        asVoice: payload.asVoice === true,
-        audioAsVoice: payload.audioAsVoice === true,
-        type: runtime.asString(payload.type || '').trim() || undefined,
-        kind: normalizeReplyKind(payload.kind),
+      return messageSendDispatch(ctx, {
+        text: runtime.asString(p.text || p.message || p.caption || ''),
+        mediaUrl: runtime.asString(p.mediaUrl || ''),
+        mediaUrls: Array.isArray(p.mediaUrls) ? p.mediaUrls : undefined,
+        asVoice: p.asVoice === true,
+        audioAsVoice: p.audioAsVoice === true,
+        downloadMedia: p.downloadMedia === true,
+        type: runtime.asString(p.type || '').trim() || undefined,
+        kind: normalizeReplyKind(p.kind) ?? normalizeReplyKind(ctx?.kind),
         replyToId:
-          runtime
-            .asString(payload.replyToId || ctx?.replyToId || ctx?.replyToMessageId || '')
-            .trim() || undefined,
+          runtime.asString(p.replyToId || ctx?.replyToId || ctx?.replyToMessageId || '').trim() ||
+          undefined,
       });
-      return buildBncrDurableQueuedResult({ entry });
     },
   };
 }

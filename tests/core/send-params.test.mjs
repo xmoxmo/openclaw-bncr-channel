@@ -222,6 +222,124 @@ test('empty content without media throws', () => {
           caption: '',
         },
       }),
-    /send requires message or media/,
+    /send requires message, media, or extra params/,
   );
+});
+
+test('marker in message text is parsed and merged into extra', () => {
+  const normalized = normalizeBncrSendParams({
+    accountId: 'Primary',
+    params: {
+      to: 'target',
+      message: 'send [BncrParam:{"forceDocument":true,"customBadge":"VIP"}] this',
+    },
+  });
+
+  assert.equal(normalized.message, 'send this');
+  assert.deepEqual(normalized.extra, { forceDocument: true, customBadge: 'VIP' });
+});
+
+test('marker consumption fields override params', () => {
+  const normalized = normalizeBncrSendParams({
+    accountId: 'Primary',
+    params: {
+      to: 'target',
+      message: 'voice [BncrParam:{"asVoice":true,"type":"audio"}] clip',
+      mediaUrl: '/tmp/clip.ogg',
+    },
+  });
+
+  assert.equal(normalized.message, '');
+  assert.equal(normalized.caption, 'voice clip');
+  assert.equal(normalized.asVoice, true);
+  assert.equal(normalized.type, 'audio');
+  assert.equal(normalized.extra, undefined); // consumption fields stripped
+});
+
+test('marker asVoice:false does NOT override params asVoice:true', () => {
+  const normalized = normalizeBncrSendParams({
+    accountId: 'Primary',
+    params: {
+      to: 'target',
+      caption: 'override test',
+      mediaUrl: '/tmp/clip.ogg',
+      asVoice: true,
+      extra: { asVoice: false },
+    },
+  });
+
+  assert.equal(normalized.asVoice, false); // extra asVoice=false takes priority
+});
+
+test('marker asVoice triggers validation when no media', () => {
+  assert.throws(
+    () =>
+      normalizeBncrSendParams({
+        accountId: 'Primary',
+        params: {
+          to: 'target',
+          message: '[BncrParam:{"asVoice":true}] only marker',
+        },
+      }),
+    /send voice requires media path/,
+  );
+});
+
+test('marker-only message with extra does not throw', () => {
+  const normalized = normalizeBncrSendParams({
+    accountId: 'Primary',
+    params: {
+      to: 'target',
+      message: '[BncrParam:{"forceDocument":true}]',
+    },
+  });
+
+  assert.equal(normalized.message, '');
+  assert.deepEqual(normalized.extra, { forceDocument: true });
+});
+
+test('marker in caption also extracts params', () => {
+  const normalized = normalizeBncrSendParams({
+    accountId: 'Primary',
+    params: {
+      to: 'target',
+      caption: '[BncrParam:{"silent":true}] caption text',
+      mediaUrl: '/tmp/file.jpg',
+    },
+  });
+
+  assert.equal(normalized.message, '');
+  assert.equal(normalized.caption, 'caption text');
+  assert.deepEqual(normalized.extra, { silent: true });
+});
+
+test('marker in both message and caption merges params (caption wins)', () => {
+  const normalized = normalizeBncrSendParams({
+    accountId: 'Primary',
+    params: {
+      to: 'target',
+      message: '[BncrParam:{"forceDocument":true}] msg',
+      caption: '[BncrParam:{"gifPlayback":true}] cap',
+    },
+  });
+
+  assert.equal(normalized.message, 'msg');
+  assert.equal(normalized.caption, '');
+  assert.deepEqual(normalized.extra, { forceDocument: true, gifPlayback: true });
+});
+
+test('extra param object merges with marker params (marker wins)', () => {
+  const normalized = normalizeBncrSendParams({
+    accountId: 'Primary',
+    params: {
+      to: 'target',
+      message: 'test [BncrParam:{"priority":2,"forceDocument":true}]',
+      extra: { priority: 1, customKey: 'original' },
+    },
+  });
+
+  assert.equal(normalized.message, 'test');
+  assert.equal(normalized.extra.priority, 2); // marker wins
+  assert.equal(normalized.extra.forceDocument, true);
+  assert.equal(normalized.extra.customKey, 'original');
 });

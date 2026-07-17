@@ -288,6 +288,9 @@ class BncrBridgeRuntime {
     { accountId: string; route: BncrRoute; updatedAt: number }
   >();
   private sceneRegistry = new Map<string, BncrSceneRecord>();
+  getSceneRegistry(): Map<string, BncrSceneRecord> {
+    return this.sceneRegistry;
+  }
   private groupHistories: BncrGroupHistoryMap = new Map();
   private routeAliases = new Map<
     string,
@@ -1186,6 +1189,7 @@ class BncrBridgeRuntime {
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
+    downloadMedia?: boolean;
   }): OutboxEntry {
     return buildFileTransferOutboxEntryFromRuntime({
       createMessageId: () => randomUUID(),
@@ -1205,6 +1209,7 @@ class BncrBridgeRuntime {
       kind: params.kind,
       replyToId: asString(params.replyToId || '').trim() || undefined,
       replyTargetPolicy: params.replyTargetPolicy,
+      downloadMedia: params.downloadMedia === true ? true : undefined,
     });
   }
 
@@ -1222,6 +1227,8 @@ class BncrBridgeRuntime {
     this.mediaDedupeRuntime.rememberRecentMediaSend(params);
   }
 
+  private HTTP_URL_RE = /^https?:\/\//i;
+
   private tryBuildMediaDedupeFallback(params: {
     sessionKey: string;
     mediaUrl: string;
@@ -1229,6 +1236,8 @@ class BncrBridgeRuntime {
     replyToId: string;
     currentTime?: number;
   }): { text: string; reason: 'same-text-sent-checkmark' | 'text-changed-downgrade' } | null {
+    // Only deduplicate local file paths - HTTP URLs bypass dedup
+    if (this.HTTP_URL_RE.test(params.mediaUrl)) return null;
     return this.mediaDedupeRuntime.tryBuildMediaDedupeFallback(params);
   }
 
@@ -1246,6 +1255,17 @@ class BncrBridgeRuntime {
         ? params.meta.messageKind
         : undefined;
 
+    const hasPayload = !!(params.media.base64 || params.media.path);
+    if (hasPayload) {
+      console.log(
+        '[bncr] outbound-media download=true|media=' +
+          (params.media.path || `base64:${(params.media.base64 || '').substring(0, 12)}...`) +
+          '|url=' +
+          params.mediaUrl.split('?')[0],
+      );
+    } else {
+      console.log(`[bncr] outbound-media pass-through|url=${params.mediaUrl.split('?')[0]}`);
+    }
     return buildBncrMediaOutboundFrame({
       messageId: params.entry.messageId,
       sessionKey: params.entry.sessionKey,
@@ -1254,7 +1274,7 @@ class BncrBridgeRuntime {
         mode: params.media.path ? 'chunk' : 'base64',
         mimeType: params.media.mimeType,
         fileName: params.media.fileName,
-        mediaBase64: params.media.base64,
+        base64: params.media.base64,
         path: params.media.path,
       },
       mediaUrl: params.mediaUrl,
@@ -1281,9 +1301,11 @@ class BncrBridgeRuntime {
     sessionKey: string;
     route: BncrRoute;
     text: string;
+    extra?: Record<string, unknown>;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
+    downloadMedia?: boolean;
   }): OutboxEntry {
     return buildTextOutboxEntryFromRuntime({
       createMessageId: () => randomUUID(),
@@ -1294,9 +1316,11 @@ class BncrBridgeRuntime {
       sessionKey: params.sessionKey,
       route: params.route,
       text: params.text,
+      extra: params.extra && Object.keys(params.extra).length > 0 ? { ...params.extra } : undefined,
       kind: params.kind,
       replyToId: params.replyToId,
       replyTargetPolicy: params.replyTargetPolicy,
+      downloadMedia: params.downloadMedia === true ? true : undefined,
     });
   }
 
@@ -2722,7 +2746,7 @@ class BncrBridgeRuntime {
     mode: 'base64' | 'chunk';
     mimeType?: string;
     fileName?: string;
-    mediaBase64?: string;
+    base64?: string;
     path?: string;
   }> {
     return this.bridgeMediaFacade.transferMediaToBncrClient(params);
@@ -2985,6 +3009,22 @@ class BncrBridgeRuntime {
     await stopBncrStatusWorker(this.buildStatusWorkerRuntime(), ctx);
   };
 
+  /**
+   * Merge host-level outbound fields (forceDocument, gifPlayback, silent)
+   * into extra before dispatching to channel-send runtime.
+   */
+  private mergeHostFields(ctx: BncrChannelSendContext): BncrChannelSendContext {
+    if (!ctx.forceDocument && !ctx.gifPlayback && !ctx.silent) {
+      return ctx;
+    }
+    const extra = { ...(typeof ctx.extra === 'object' && ctx.extra !== null ? ctx.extra : {}) };
+    if (ctx.forceDocument === true) extra.forceDocument = true;
+    if (ctx.gifPlayback === true) extra.gifPlayback = true;
+    if (ctx.silent === true) extra.silent = true;
+    // Clear original fields so resolveUnifiedOutboundExtra doesn't re-add and override marker values
+    return { ...ctx, extra, forceDocument: undefined, gifPlayback: undefined, silent: undefined };
+  }
+
   // Channel send surface assembly ------------------------------------------
   // This group backs the public channel send APIs and should stay adjacent to
   // the final exposed channel* methods for quick top-down scanning.
@@ -2996,19 +3036,19 @@ class BncrBridgeRuntime {
   private readonly channelSendRuntime = this.channelSendRuntimeGroup.channelSendRuntime;
 
   channelSendText = async (ctx: BncrChannelSendContext) =>
-    this.channelSendRuntime.channelSendText(ctx);
+    this.channelSendRuntime.channelSendText(this.mergeHostFields(ctx));
 
   channelSendMedia = async (ctx: BncrChannelSendContext) =>
-    this.channelSendRuntime.channelSendMedia(ctx);
+    this.channelSendRuntime.channelSendMedia(this.mergeHostFields(ctx));
 
   channelMessageSendText = async (ctx: BncrChannelSendContext) =>
-    this.channelSendRuntime.channelMessageSendText(ctx);
+    this.channelSendRuntime.channelMessageSendText(this.mergeHostFields(ctx));
 
   channelMessageSendMedia = async (ctx: BncrChannelSendContext) =>
-    this.channelSendRuntime.channelMessageSendMedia(ctx);
+    this.channelSendRuntime.channelMessageSendMedia(this.mergeHostFields(ctx));
 
   channelMessageSendPayload = async (ctx: BncrChannelSendContext) =>
-    this.channelSendRuntime.channelMessageSendPayload(ctx);
+    this.channelSendRuntime.channelMessageSendPayload(this.mergeHostFields(ctx));
 }
 
 // Plugin surface export -----------------------------------------------------
@@ -3029,6 +3069,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
 
   return createBncrChannelPluginSurfaceGroup({
     channelId: CHANNEL_ID,
+    sceneRegistry: getBridge().getSceneRegistry(),
     getMessageSendBridge: bridgeGroup.getMessageSendBridge,
     getOutboundBridge: bridgeGroup.getOutboundBridge,
     getMessagingBridge: bridgeGroup.getMessagingBridge,

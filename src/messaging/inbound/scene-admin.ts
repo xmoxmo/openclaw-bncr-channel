@@ -13,15 +13,21 @@ export type BncrSceneAdminCommand =
   | { kind: 'bind'; sceneKey?: string; agentId: string }
   | { kind: 'mode-help' }
   | { kind: 'mode-get'; sceneKey?: string }
-  | { kind: 'mode'; sceneKey: string; mode: BncrGroupReplyMode }
+  | { kind: 'mode'; sceneKey: string; mode: string }
   | { kind: 'list'; scope: 'pending' | 'scenes'; filters?: string[] }
   | { kind: 'history-limit-get'; sceneKey?: string }
-  | { kind: 'history-limit-set'; sceneKey: string; limit: number }
+  | { kind: 'history-limit-set'; sceneKey: string; limit: number | 'clear' }
   | { kind: 'history-force-get'; sceneKey?: string }
-  | { kind: 'history-force-set'; sceneKey: string; enabled: boolean }
-  | { kind: 'history-help' };
+  | { kind: 'history-force-set'; sceneKey: string; enabled: boolean | 'clear' }
+  | { kind: 'history-help' }
+  | { kind: 'download-media-get'; sceneKey?: string }
+  | { kind: 'download-media-set'; sceneKey: string; enabled: boolean }
+  | { kind: 'download-media-global-get' }
+  | { kind: 'download-media-global-set'; enabled: boolean };
 
 const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
+
+const GLOBAL_SCENE_KEY = '__global__';
 
 const MODE_HELP_TEXT = [
   '💬 Bncr Group Reply Mode Configuration',
@@ -122,6 +128,13 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
         return { matched: true, valid: true, command: { kind: 'mode-get' } };
       }
       if (args.length === 1) {
+        if (args[0] === 'clear') {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'mode', sceneKey: '', mode: 'clear' as any },
+          };
+        }
         if (args[0] === 'help') {
           return {
             matched: true,
@@ -140,6 +153,13 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
           matched: true,
           valid: true,
           command: { kind: 'mode-get', sceneKey: args[0] },
+        };
+      }
+      if (args[0] === 'clear' && args[1]) {
+        return {
+          matched: true,
+          valid: true,
+          command: { kind: 'mode', sceneKey: args[1], mode: 'clear' as any },
         };
       }
       if (GROUP_REPLY_MODES.has(args[0] as BncrGroupReplyMode) && args[1]) {
@@ -181,6 +201,13 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
         return { matched: true, valid: true, command: { kind: 'history-limit-get' } };
       }
       if (args.length === 1) {
+        if (args[0] === 'clear') {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'history-limit-set', sceneKey: '', limit: 'clear' as any },
+          };
+        }
         const num = parseInt(args[0], 10);
         if (Number.isFinite(num)) {
           return {
@@ -196,6 +223,13 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
         };
       }
       if (args.length === 2) {
+        if (args[0] === 'clear') {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'history-limit-set', sceneKey: args[1], limit: 'clear' as any },
+          };
+        }
         const num = parseInt(args[0], 10);
         if (Number.isFinite(num)) {
           return {
@@ -213,6 +247,20 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
     case 'history-force':
       if (args.length === 0) {
         return { matched: true, valid: true, command: { kind: 'history-force-get' } };
+      }
+      if (args[0] === 'clear') {
+        if (args.length === 1) {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'history-force-set', sceneKey: '', enabled: 'clear' as any },
+          };
+        }
+        return {
+          matched: true,
+          valid: true,
+          command: { kind: 'history-force-set', sceneKey: args[1], enabled: 'clear' as any },
+        };
       }
       if (args[0] === 'on' || args[0] === 'off') {
         if (args.length === 1) {
@@ -232,6 +280,50 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
         matched: true,
         valid: true,
         command: { kind: 'history-force-get', sceneKey: args[0] },
+      };
+    case 'download-media':
+      if (args.length === 0) {
+        return { matched: true, valid: true, command: { kind: 'download-media-get' } };
+      }
+      if (args[0] === 'default') {
+        if (args[1] === 'on' || args[1] === 'off') {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'download-media-global-set', enabled: args[1] === 'on' },
+          };
+        }
+        return { matched: true, valid: true, command: { kind: 'download-media-global-get' } };
+      }
+      if (args[0] === 'clear') {
+        return {
+          matched: true,
+          valid: true,
+          command: {
+            kind: 'download-media-set',
+            sceneKey: args[1] || '',
+            enabled: undefined as any,
+          },
+        };
+      }
+      if (args[0] === 'on' || args[0] === 'off') {
+        if (args.length === 1) {
+          return {
+            matched: true,
+            valid: true,
+            command: { kind: 'download-media-set', sceneKey: '', enabled: args[0] === 'on' },
+          };
+        }
+        return {
+          matched: true,
+          valid: true,
+          command: { kind: 'download-media-set', sceneKey: args[1], enabled: args[0] === 'on' },
+        };
+      }
+      return {
+        matched: true,
+        valid: true,
+        command: { kind: 'download-media-get', sceneKey: args[0] },
       };
     case 'history-help':
       return { matched: true, valid: true, command: { kind: 'history-help' } };
@@ -399,6 +491,11 @@ export function executeSceneAdminCommand(args: {
     }
     const sExisting = sceneRegistry.get(sSceneKey);
     if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
+    if (command.limit === 'clear') {
+      const { historyLimit: _, ...rest } = sExisting;
+      sceneRegistry.set(sSceneKey, { ...rest, lastSeenAt: now() });
+      return { ok: true, text: `Cleared ${sSceneKey} history limit. Will use default (50).` };
+    }
     const rawLimit = command.limit;
     if (!Number.isFinite(rawLimit) || Number.isNaN(rawLimit)) {
       return { ok: false, text: 'Invalid number.' };
@@ -443,6 +540,11 @@ export function executeSceneAdminCommand(args: {
     }
     const sExisting = sceneRegistry.get(sSceneKey);
     if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
+    if (command.enabled === 'clear') {
+      const { historyForce: _, ...rest } = sExisting;
+      sceneRegistry.set(sSceneKey, { ...rest, lastSeenAt: now() });
+      return { ok: true, text: `Cleared ${sSceneKey} history auto flush. Will use default (on).` };
+    }
     sceneRegistry.set(sSceneKey, {
       ...sExisting,
       historyForce: command.enabled,
@@ -451,6 +553,75 @@ export function executeSceneAdminCommand(args: {
     return {
       ok: true,
       text: `Set ${sSceneKey} history auto flush to ${command.enabled ? 'on' : 'off'}.`,
+    };
+  }
+
+  if (command.kind === 'download-media-global-get') {
+    const g = sceneRegistry.get(GLOBAL_SCENE_KEY);
+    const enabled = g?.downloadMedia === true;
+    return { ok: true, text: `Global default download remote media is ${enabled ? 'on' : 'off'}.` };
+  }
+
+  if (command.kind === 'download-media-global-set') {
+    const g = sceneRegistry.get(GLOBAL_SCENE_KEY);
+    sceneRegistry.set(GLOBAL_SCENE_KEY, {
+      sceneKey: GLOBAL_SCENE_KEY,
+      kind: 'group',
+      status: 'allowed',
+      ...(g || { platform: 'bncr' }),
+      downloadMedia: command.enabled,
+      lastSeenAt: now(),
+    });
+    return {
+      ok: true,
+      text: `Global default download remote media set to ${command.enabled ? 'on' : 'off'}.`,
+    };
+  }
+
+  if (command.kind === 'download-media-get') {
+    const qSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    if (!qSceneKey) {
+      return {
+        ok: true,
+        text: `Global default download remote media is ${sceneRegistry.get(GLOBAL_SCENE_KEY)?.downloadMedia === true ? 'on' : 'off'}.`,
+      };
+    }
+    const s = sceneRegistry.get(qSceneKey);
+    if (!s) return { ok: true, text: 'Default download remote media is off.' };
+    const enabled = s.downloadMedia === true;
+    return {
+      ok: true,
+      text: `Current ${qSceneKey} download remote media is ${enabled ? 'on' : 'off'}.`,
+    };
+  }
+
+  if (command.kind === 'download-media-set') {
+    const sSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    if (!sSceneKey) {
+      return { ok: false, text: 'Current group shortcut only works inside a group chat.' };
+    }
+    const sExisting = sceneRegistry.get(sSceneKey);
+    if (command.enabled === undefined) {
+      // Clear per-group setting
+      if (sExisting) {
+        const { downloadMedia: _, ...rest } = sExisting;
+        sceneRegistry.set(sSceneKey, { ...rest, lastSeenAt: now() });
+        return {
+          ok: true,
+          text: `Cleared ${sSceneKey} download remote media. Will use global default.`,
+        };
+      }
+      return { ok: true, text: `No per-group config to clear for ${sSceneKey}.` };
+    }
+    if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
+    sceneRegistry.set(sSceneKey, {
+      ...sExisting,
+      downloadMedia: command.enabled,
+      lastSeenAt: now(),
+    });
+    return {
+      ok: true,
+      text: `Set ${sSceneKey} download remote media to ${command.enabled ? 'on' : 'off'}.`,
     };
   }
 
@@ -482,9 +653,14 @@ export function executeSceneAdminCommand(args: {
     if (existing.kind !== 'group') {
       return { ok: false, text: `Scene ${sceneKey} is not a group scene.` };
     }
+    if (command.mode === 'clear') {
+      const { groupReplyMode: _, ...rest } = existing;
+      sceneRegistry.set(sceneKey, { ...rest, lastSeenAt: now() });
+      return { ok: true, text: `Cleared ${sceneKey} reply mode. Will use default (admin).` };
+    }
     sceneRegistry.set(sceneKey, {
       ...existing,
-      groupReplyMode: command.mode,
+      groupReplyMode: command.mode as BncrGroupReplyMode,
       lastSeenAt: now(),
     });
     return { ok: true, text: `Set ${sceneKey} reply mode to ${command.mode}.` };

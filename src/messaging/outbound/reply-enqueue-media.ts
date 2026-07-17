@@ -24,6 +24,7 @@ export function enqueueReplyMediaFallbackTextEntry(
       sessionKey: string;
       route: BncrRoute;
       text: string;
+      extra?: Record<string, unknown>;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
       replyTargetPolicy?: OutboundReplyTargetPolicy;
@@ -61,6 +62,7 @@ export function enqueueReplyMediaFileTransferEntry(
       text: string;
       asVoice: boolean;
       audioAsVoice: boolean;
+      downloadMedia?: boolean;
       type?: string;
       extra?: Record<string, unknown>;
       kind?: 'tool' | 'block' | 'final';
@@ -86,6 +88,7 @@ export function enqueueReplyMediaFileTransferEntry(
       text: params.text,
       asVoice: params.asVoice,
       audioAsVoice: params.audioAsVoice,
+      downloadMedia: params.downloadMedia,
       type: params.type,
       extra: params.extra,
       kind: params.kind,
@@ -133,6 +136,7 @@ export function enqueueSingleReplyMediaEntry(
     normalizedText: params.normalizedText,
     asVoice: params.params.payload.asVoice,
     audioAsVoice: params.params.payload.audioAsVoice,
+    downloadMedia: params.params.payload.downloadMedia,
     type: params.params.payload.type,
     extra: params.params.payload.extra,
     kind: params.params.payload.kind,

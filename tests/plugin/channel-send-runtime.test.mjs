@@ -161,3 +161,65 @@ test('channel send runtime group exposes channel.message and direct send runtime
   assert.equal(typeof group.channelSendRuntime.channelMessageSendText, 'function');
   assert.equal(calls.length, 1);
 });
+
+test('sendDispatch with marker type=file routes to media even on channelSendText', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: '[BncrParam:{"type":"file","path":"/tmp/doc.pdf"}] send as file',
+    extra: { gifPlayback: true },
+  });
+
+  // Should route to media send (has path from marker)
+  assert.ok(
+    calls[0].payload.mediaUrl.includes('/tmp/doc.pdf') ||
+      calls[0].payload.text.includes('send as file'),
+  );
+  // Extra should carry through (non-consumption field like gifPlayback stays in extra)
+  assert.equal(calls[0].payload.extra?.gifPlayback, true);
+  // type consumption field should NOT be in extra (stripped)
+  assert.equal(calls[0].payload.extra?.type, undefined);
+});
+
+test('sendDispatch with marker-only text still passes extra', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: '[BncrParam:{"forceDocument":true}]',
+  });
+
+  assert.equal(calls[0].payload.text, '');
+  assert.equal(calls[0].payload.extra?.forceDocument, true);
+});
+
+test('messageSendDispatch with extra carries through', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelMessageSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: 'hello [BncrParam:{"silent":true}]',
+  });
+
+  assert.equal(calls[0].payload.text, 'hello');
+  assert.equal(calls[0].payload.extra?.silent, true);
+});
+
+test('messageSendDispatch: marker asVoice overrides payload asVoice', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelMessageSendMedia({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: 'voice [BncrParam:{"asVoice":false}]',
+    mediaUrl: '/tmp/clip.ogg',
+    asVoice: true,
+  });
+
+  // Marker value takes priority
+  assert.equal(calls[0].payload.asVoice, false);
+});

@@ -333,6 +333,7 @@ export function buildBncrMediaOrchestratorsRuntime(deps: {
     sessionKey: string;
     route: BncrRoute;
     text: string;
+    extra?: Record<string, unknown>;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
@@ -351,6 +352,7 @@ export function buildBncrMediaOrchestratorsRuntime(deps: {
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
+    downloadMedia?: boolean;
   }) => OutboxEntry;
   rememberRecentMediaSend: (args: {
     sessionKey: string;

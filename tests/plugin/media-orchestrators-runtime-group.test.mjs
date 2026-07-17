@@ -14,7 +14,7 @@ function createRuntime() {
     fileInitEvent: 'file.init',
     fileAbortEvent: 'file.abort',
     async prepareOutboundTransfer() {
-      return { mode: 'base64', mimeType: 'image/png', fileName: 'a.png', mediaBase64: 'Zm9v' };
+      return { mode: 'base64', mimeType: 'image/png', fileName: 'a.png', base64: 'Zm9v' };
     },
     sendChunk() {},
     sendComplete() {},
@@ -67,20 +67,20 @@ test('media orchestrators runtime group exposes base64 transfer and reply enqueu
     accountId: 'Primary',
     sessionKey: 'session-1',
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-    mediaUrl: 'https://example.com/a.png',
+    mediaUrl: '/tmp/a.png',
   });
   group.replyMediaOrchestrator.enqueueFromReply({
     accountId: 'Primary',
     sessionKey: 'session-1',
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-    payload: { text: 'hello', mediaUrl: 'https://example.com/a.png', replyToId: 'mid-1' },
+    payload: { text: 'hello', mediaUrl: '/tmp/a.png', replyToId: 'mid-1' },
   });
 
   assert.deepEqual(result, {
     mode: 'base64',
     mimeType: 'image/png',
     fileName: 'a.png',
-    mediaBase64: 'Zm9v',
+    base64: 'Zm9v',
   });
   assert.equal(calls.enqueueOutbound.length, 1);
   assert.equal(calls.rememberRecentMediaSend.length, 1);
@@ -95,7 +95,7 @@ test('reply media orchestrator forwards extra metadata into file-transfer entry 
     accountId: 'Primary',
     sessionKey: 'session-1',
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-    payload: { text: 'hello', mediaUrl: 'https://example.com/a.png', extra },
+    payload: { text: 'hello', mediaUrl: '/tmp/a.png', extra },
   });
 
   const [entry] = calls.enqueueOutbound;

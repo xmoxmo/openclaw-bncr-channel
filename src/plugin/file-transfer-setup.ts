@@ -116,7 +116,7 @@ export function createBncrFileTransferSetup(runtime: BncrFileTransferSetupRuntim
         mode: 'base64' as const,
         mimeType,
         fileName,
-        mediaBase64: loaded.buffer.toString('base64'),
+        base64: loaded.buffer.toString('base64'),
       };
     }
 

@@ -1,4 +1,5 @@
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
+import { extractConsumptionFields, parseBncrMarker } from './marker-parser.ts';
 import { hasReplyMediaEntries } from './reply-enqueue-media.ts';
 import type { OutboundReplyTargetPolicy } from './reply-target-policy.ts';
 import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
@@ -18,6 +19,7 @@ export type ReplyPayloadInput = {
   mediaUrls?: string[];
   asVoice?: boolean;
   audioAsVoice?: boolean;
+  downloadMedia?: boolean;
   type?: string;
   extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
@@ -31,6 +33,7 @@ export type NormalizedReplyPayload = {
   mediaList: string[];
   asVoice: boolean;
   audioAsVoice: boolean;
+  downloadMedia?: boolean;
   type?: string;
   extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
@@ -65,6 +68,7 @@ export type ReplyMediaFileTransferParams = {
   normalizedText: string;
   asVoice: boolean;
   audioAsVoice: boolean;
+  downloadMedia?: boolean;
   type?: string;
   extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
@@ -127,6 +131,7 @@ export function buildReplyTextOutboxEntry(
     kind?: 'tool' | 'block' | 'final';
     replyToId: string;
     replyTargetPolicy: OutboundReplyTargetPolicy;
+    extra?: Record<string, unknown>;
   },
   helpers: {
     buildTextOutboxEntry: (args: {
@@ -137,6 +142,7 @@ export function buildReplyTextOutboxEntry(
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
       replyTargetPolicy?: OutboundReplyTargetPolicy;
+      extra?: Record<string, unknown>;
     }) => OutboxEntry;
   },
 ): OutboxEntry {
@@ -148,6 +154,7 @@ export function buildReplyTextOutboxEntry(
     kind: params.kind,
     replyToId: params.replyToId || undefined,
     replyTargetPolicy: params.replyTargetPolicy,
+    extra: params.extra,
   });
 }
 
@@ -168,10 +175,11 @@ export function enqueueReplyTextEntry(
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
       replyTargetPolicy?: OutboundReplyTargetPolicy;
+      extra?: Record<string, unknown>;
     }) => OutboxEntry;
   },
 ): void {
-  if (!params.payload.text) return;
+  if (!params.payload.text && !params.payload.extra) return;
 
   helpers.enqueueOutbound(
     buildReplyTextOutboxEntry(
@@ -180,6 +188,7 @@ export function enqueueReplyTextEntry(
         sessionKey: params.sessionKey,
         route: params.route,
         text: params.payload.text,
+        extra: params.payload.extra,
         kind: params.payload.kind,
         replyToId: params.payload.replyToId,
         replyTargetPolicy: params.payload.replyTargetPolicy,
@@ -257,12 +266,24 @@ export function normalizeReplyPayload(
   helpers: { asString: (value: unknown, fallback?: string) => string },
   options?: { replyTargetPolicy?: OutboundReplyTargetPolicy },
 ): NormalizedReplyPayload {
-  const text = helpers.asString(payload?.text || '').trim();
+  const rawText = helpers.asString(payload?.text || '').trim();
+  // Parse [BncrParam:...] marker from reply text
+  const { cleanText, params: markerParams } = parseBncrMarker(rawText);
+  const text = cleanText;
   const mediaUrl = helpers.asString(payload?.mediaUrl || '').trim();
   const mediaUrls = Array.isArray(payload?.mediaUrls)
     ? payload.mediaUrls.map((v) => helpers.asString(v || '').trim()).filter(Boolean)
     : undefined;
   const type = helpers.asString(payload?.type || '').trim();
+  // Merge marker params with payload extra (marker wins), strip consumption fields
+  const mergedExtra: Record<string, unknown> = {
+    ...(payload?.extra ? { ...payload.extra } : {}),
+    ...markerParams,
+  };
+  const { remaining } = extractConsumptionFields(
+    Object.keys(mergedExtra).length > 0 ? mergedExtra : undefined,
+  );
+  const finalExtra = Object.keys(remaining).length > 0 ? remaining : undefined;
   return {
     text,
     mediaUrl,
@@ -270,8 +291,9 @@ export function normalizeReplyPayload(
     mediaList: mediaUrls?.length ? mediaUrls : mediaUrl ? [mediaUrl] : [],
     asVoice: payload?.asVoice === true,
     audioAsVoice: payload?.audioAsVoice === true,
+    downloadMedia: payload?.downloadMedia === true ? true : undefined,
     ...(type ? { type } : {}),
-    ...(payload?.extra ? { extra: { ...payload.extra } } : {}),
+    ...(finalExtra ? { extra: finalExtra } : {}),
     kind: payload?.kind,
     replyTargetPolicy: options?.replyTargetPolicy ?? 'agent-default',
     replyToId: normalizeOutboundReplyToId({

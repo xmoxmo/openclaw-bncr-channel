@@ -1,6 +1,7 @@
 import { buildFileTransferInitPayload } from '../core/file-transfer-payloads.ts';
 import type { BncrRoute, FileSendTransferState } from '../core/types.ts';
 import { asSanitizedString, clampFiniteNumber } from '../core/value-sanitize.ts';
+import { resolveOutboundFileName } from './channel-utils.ts';
 import type { createBncrFileAckRuntime } from './file-ack-runtime.ts';
 import {
   abortChunkTransfer,
@@ -36,13 +37,13 @@ function getCompletedTransferPath(state?: FileSendTransferState): string | null 
 function buildBase64TransferResult(prepared: {
   mimeType?: string;
   fileName?: string;
-  mediaBase64?: string;
+  base64?: string;
 }) {
   return {
     mode: 'base64' as const,
     mimeType: prepared.mimeType,
     fileName: prepared.fileName,
-    mediaBase64: prepared.mediaBase64,
+    base64: prepared.base64,
   };
 }
 
@@ -190,8 +191,96 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
 
     return buildChunkTransferResult({ mimeType, fileName, path: done.path });
   };
+  const HTTP_URL_RE = /^https?:\/\//i;
+
+  /** Try HEAD for Content-Type; fall back to Range+sniff for magic bytes when unclear. */
+  async function resolveRemoteMediaType(url: string): Promise<{ mimeType?: string }> {
+    // 1) HEAD -> Content-Type
+    let headerType = '';
+    try {
+      const head = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
+      if (head.ok) {
+        const raw = (head.headers.get('content-type') || '').trim().toLowerCase();
+        const parsed = raw.split(';')[0]?.trim() || '';
+        // Accept explicit types; reject octet-stream and generic application/*
+        if (parsed && parsed !== 'application/octet-stream') {
+          headerType = parsed;
+        }
+      }
+    } catch {
+      /* HEAD failed, fall through to Range sniff */
+    }
+
+    if (headerType) return { mimeType: headerType };
+
+    // 2) Range GET -> first 512 bytes -> magic byte sniff
+    try {
+      const range = await fetch(url, {
+        method: 'GET',
+        headers: { Range: 'bytes=0-511' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      // Only accept 206 Partial Content; 200 (no Range support) or other statuses -> fall through
+      if (range.status !== 206) return {};
+      const buf = Buffer.from(await range.arrayBuffer());
+      if (buf.length < 4) return {};
+
+      const sniffed = sniffMimeFromMagic(buf);
+      if (!sniffed) return {};
+      return { mimeType: sniffed };
+    } catch {
+      return {};
+    }
+  }
+
+  /** Minimal magic-byte MIME sniffer for the first ~512 bytes. */
+  function sniffMimeFromMagic(buf: Buffer): string | undefined {
+    const eq = (off: number, ...bytes: number[]) =>
+      bytes.every((b, idx) => off + idx < buf.length && buf[off + idx] === b);
+
+    // JPEG: FF D8 FF
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff)
+      return 'image/jpeg';
+    // PNG: 89 50 4E 47
+    if (eq(0, 0x89, 0x50, 0x4e, 0x47)) return 'image/png';
+    // GIF: 47 49 46 38
+    if (eq(0, 0x47, 0x49, 0x46, 0x38)) return 'image/gif';
+    // WEBP: RIFF .... WEBP
+    if (eq(0, 0x52, 0x49, 0x46, 0x46) && buf.length >= 12 && eq(8, 0x57, 0x45, 0x42, 0x50))
+      return 'image/webp';
+    // BMP: 42 4D
+    if (eq(0, 0x42, 0x4d)) return 'image/bmp';
+    // MP4 / MOV / M4A: ftyp box
+    if (eq(4, 0x66, 0x74, 0x79, 0x70) && buf.length >= 12) {
+      const brand = String.fromCharCode(buf[8], buf[9], buf[10], buf[11]);
+      if (brand === 'M4A ' || brand === 'mp42') return 'audio/mp4';
+      return 'video/mp4';
+    }
+    // MP3: ID3 tag
+    if (eq(0, 0x49, 0x44, 0x33)) return 'audio/mpeg';
+    // MPEG audio sync word
+    if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return 'audio/mpeg';
+    // OGG: 4F 67 67 53
+    if (eq(0, 0x4f, 0x67, 0x67, 0x53)) return 'audio/ogg';
+    // WAV: RIFF .... WAVE
+    if (eq(0, 0x52, 0x49, 0x46, 0x46) && buf.length >= 12 && eq(8, 0x57, 0x41, 0x56, 0x45))
+      return 'audio/wav';
+    // FLAC: 66 4C 61 43
+    if (eq(0, 0x66, 0x4c, 0x61, 0x43)) return 'audio/flac';
+    // PDF: 25 50 44 46
+    if (eq(0, 0x25, 0x50, 0x44, 0x46)) return 'application/pdf';
+    // WebM/Matroska: 1A 45 DF A3
+    if (eq(0, 0x1a, 0x45, 0xdf, 0xa3)) {
+      for (let i = 0; i < Math.min(buf.length, 200); i++) {
+        if (buf[i] === 0xae) return 'video/webm';
+      }
+      return 'audio/webm';
+    }
+    return undefined;
+  }
 
   const transferMediaToBncrClient = async (params: {
+    downloadMedia?: boolean;
     accountId: string;
     sessionKey: string;
     route: BncrRoute;
@@ -201,9 +290,22 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
     mode: 'base64' | 'chunk';
     mimeType?: string;
     fileName?: string;
-    mediaBase64?: string;
+    base64?: string;
     path?: string;
   }> => {
+    // HTTP URL: skip download/chunk, pass URL through to client
+    if (HTTP_URL_RE.test(params.mediaUrl) && !params.downloadMedia) {
+      const { mimeType } = await resolveRemoteMediaType(params.mediaUrl);
+      const fileName = resolveOutboundFileName({
+        mediaUrl: params.mediaUrl,
+        mimeType,
+      });
+      return {
+        mode: 'base64' as const,
+        mimeType,
+        fileName,
+      };
+    }
     const prepared = await runtime.prepareOutboundTransfer({
       accountId: params.accountId,
       sessionKey: params.sessionKey,

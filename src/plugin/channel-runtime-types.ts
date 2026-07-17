@@ -63,6 +63,7 @@ export type BncrSceneRecord = {
   groupReplyMode?: BncrGroupReplyMode;
   historyLimit?: number;
   historyForce?: boolean;
+  downloadMedia?: boolean;
   lastSeenAt: number;
 };
 
@@ -133,6 +134,13 @@ export type BncrChannelSendContext = {
   sessionKey?: string;
   mirror?: { sessionKey?: string };
   threadId?: string;
+  /** Pass-through fields from host - bncr plugin does NOT consume these. */
+  forceDocument?: boolean;
+  gifPlayback?: boolean;
+  silent?: boolean;
+  downloadMedia?: boolean;
+  /** Extra key-value pairs from marker parsing or direct pass-through. */
+  extra?: Record<string, unknown>;
 };
 
 export type BncrRegisterRuntimeSnapshot = {
