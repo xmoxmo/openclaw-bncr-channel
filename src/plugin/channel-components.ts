@@ -11,7 +11,6 @@ import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from '../messaging/outb
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import { getOpenClawRuntimeConfig } from '../openclaw/config-runtime.ts';
 import { saveOpenClawChannelMediaBuffer } from '../openclaw/media-runtime.ts';
-import { createBncrChannelSendRuntime } from './channel-send.ts';
 import { createBncrConnectionHandlers } from './connection-handlers.ts';
 import { createBncrDiagnosticsHandlers } from './diagnostics-handlers.ts';
 import { createBncrFileInboundHandlers } from './file-inbound-handlers.ts';
@@ -21,12 +20,6 @@ export function createBncrConnectionHandlersComponent(
   runtime: Parameters<typeof createBncrConnectionHandlers>[0],
 ) {
   return createBncrConnectionHandlers(runtime);
-}
-
-export function createBncrDiagnosticsHandlersComponent(
-  runtime: Parameters<typeof createBncrDiagnosticsHandlers>[0],
-) {
-  return createBncrDiagnosticsHandlers(runtime);
 }
 
 export function createBncrBridgeDiagnosticsHandlersComponent(runtime: {
@@ -310,12 +303,6 @@ export function createBncrInboundHandlersComponent(runtime: {
         },
       }),
   });
-}
-
-export function createBncrChannelSendRuntimeComponent(
-  runtime: Parameters<typeof createBncrChannelSendRuntime>[0],
-) {
-  return createBncrChannelSendRuntime(runtime);
 }
 
 export function resolveBncrChannelRoot(pluginRoot: string) {

@@ -1,4 +1,5 @@
 import type { BncrConnection, OutboxEntry } from '../../core/types.ts';
+import { finiteNumberOr } from '../../core/value-sanitize.ts';
 
 export type OutboxRouteSelection = {
   connIds: string[];
@@ -24,11 +25,6 @@ export type OutboxFileTransferRouteSelection = {
   recentInboundReachable: boolean;
   ownerConnId?: string;
 };
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 export function computeOutboxRetryWait(nextAttemptAt: number, nowMs: number): number {
   return Math.max(0, finiteNumberOr(nextAttemptAt, 0) - finiteNumberOr(nowMs, 0));

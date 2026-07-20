@@ -1,4 +1,3 @@
-import { buildChannelOutboundSessionRoute } from 'openclaw/plugin-sdk/core';
 import { resolveInboundLastRouteSessionKey } from 'openclaw/plugin-sdk/routing';
 import type { BncrChannelConfigRoot } from '../plugin/channel-runtime-types.ts';
 import type {
@@ -16,10 +15,6 @@ type OpenClawRoutingApi = {
     peer: unknown;
   }) => OpenClawResolvedAgentRoute;
 };
-
-type BuildChannelOutboundSessionRouteParams = Parameters<
-  typeof buildChannelOutboundSessionRoute
->[0];
 
 function resolveRoutingApi(api: OpenClawChannelRuntimeApiHolder): OpenClawRoutingApi {
   const routing = api?.runtime?.channel?.routing;
@@ -55,10 +50,4 @@ export function resolveOpenClawInboundLastRouteSessionKey(params: {
       sessionKey: string;
     },
   );
-}
-
-export function buildOpenClawChannelOutboundSessionRoute(
-  params: BuildChannelOutboundSessionRouteParams,
-) {
-  return buildChannelOutboundSessionRoute(params);
 }

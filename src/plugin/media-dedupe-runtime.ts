@@ -1,15 +1,10 @@
+import { asString } from '../core/value-sanitize.ts';
 import {
   buildMediaTextFallback,
   type MediaDedupeCacheEntry,
   normalizeMessageText,
   normalizeReplyToId,
 } from '../messaging/outbound/media-dedupe.ts';
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
 
 export function createBncrMediaDedupeRuntime(runtime: {
   now: () => number;

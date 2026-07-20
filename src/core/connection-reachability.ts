@@ -1,9 +1,5 @@
 import type { BncrConnection, OutboxEntry } from './types.ts';
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
+import { finiteNumberOr } from './value-sanitize.ts';
 
 export function hasRecentInboundReachability(args: {
   now: number;

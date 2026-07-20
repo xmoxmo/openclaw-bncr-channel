@@ -1,3 +1,8 @@
+/*
+ * Intentionally separate from outbox-text-push-failure.ts.
+ * File transfer failure adds retryable-state resolution logic
+ * that text push doesn't need (no chunk-level retry semantics).
+ */
 import { buildPushFailureArgs } from './outbox-push-args.ts';
 import type { OutboxEntry } from './types.ts';
 

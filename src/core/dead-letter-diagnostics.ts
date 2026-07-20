@@ -5,6 +5,7 @@ import type {
   BncrDeadLetterEntrySummary,
   OutboxEntry,
 } from './types.ts';
+import { asString } from './value-sanitize.ts';
 
 export type DeadLetterTopReason = { reason: string; count: number };
 
@@ -14,12 +15,6 @@ export type BuildDeadLetterDiagnosticsOptions = {
   sinceStart: number;
   cappedAt: number;
 };
-
-function asString(value: unknown, fallback = ''): string {
-  if (typeof value === 'string') return value;
-  if (value == null) return fallback;
-  return String(value);
-}
 
 function asPayloadMessage(payload: OutboxEntry['payload']): {
   msg?: string;
@@ -87,15 +82,14 @@ export function parseDeadLetterOlderThan(raw: unknown): number | null {
 }
 
 export function summarizeDeadLetterEntry(entry: OutboxEntry) {
-  const meta = entry.payload?._meta || {};
-  const msg = asPayloadMessage(entry.payload);
-  const text = asString(meta.text || msg.msg || '');
+  const msg = asPayloadMessage(entry.payload) || {};
+  const text = asString(msg.msg || '');
   return {
     messageId: entry.messageId,
     accountId: entry.accountId,
     sessionKey: entry.sessionKey,
     route: formatDisplayScope(entry.route),
-    kind: asString(meta.kind || msg.type || 'message'),
+    kind: asString(msg.type || 'message'),
     createdAt: Number.isFinite(Number(entry.createdAt)) ? Number(entry.createdAt) : null,
     retryCount: Number.isFinite(Number(entry.retryCount)) ? Number(entry.retryCount) : 0,
     lastError: entry.lastError || null,

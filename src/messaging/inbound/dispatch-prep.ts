@@ -95,7 +95,7 @@ const BNCR_GENERIC_MEDIA_TEXTS = new Set([
   '[文件]',
 ]);
 
-function assertResolvedAgentRoute(resolvedRoute: OpenClawResolvedAgentRoute): {
+export function assertResolvedAgentRoute(resolvedRoute: OpenClawResolvedAgentRoute): {
   sessionKey: string;
   agentId: string;
   mainSessionKey?: string;

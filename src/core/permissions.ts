@@ -1,8 +1,4 @@
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
+import { asString } from '../core/value-sanitize.ts';
 
 type BncrElevatedConfigRoot = {
   tools?: {
@@ -14,21 +10,18 @@ type BncrElevatedConfigRoot = {
     };
   };
 };
-
 export function getBncrElevatedConfig(rootCfg: BncrElevatedConfigRoot | null | undefined) {
   const elevated = rootCfg?.tools?.elevated || {};
   const allowFrom = elevated?.allowFrom || {};
   const bncrRules = Array.isArray(allowFrom?.bncr)
     ? allowFrom.bncr.map((x: unknown) => asString(x).trim()).filter(Boolean)
     : [];
-
   return {
     enabled: elevated?.enabled === true,
     bncrAllowed: bncrRules.length > 0,
     bncrRules,
   };
 }
-
 export function buildBncrPermissionSummary(rootCfg: BncrElevatedConfigRoot | null | undefined) {
   const elevated = getBncrElevatedConfig(rootCfg);
   return {
@@ -40,5 +33,4 @@ export function buildBncrPermissionSummary(rootCfg: BncrElevatedConfigRoot | nul
       : 'bncr elevated not explicitly allowed',
   };
 }
-
 export type BncrPermissionSummary = ReturnType<typeof buildBncrPermissionSummary>;

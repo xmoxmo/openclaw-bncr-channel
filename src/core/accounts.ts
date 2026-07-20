@@ -3,15 +3,10 @@ import type {
   BncrChannelConfigRoot,
   BncrChannelConfigSection,
 } from '../plugin/channel-runtime-types.ts';
+import { asString } from './value-sanitize.ts';
 
 const CHANNEL_ID = 'bncr';
 const BNCR_DEFAULT_ACCOUNT_ID = 'Primary';
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
 
 export function normalizeAccountId(accountId?: string | null): string {
   const v = asString(accountId || '').trim();

@@ -535,6 +535,7 @@ export function buildBncrChannelSendRuntime(deps: {
     replyTargetPolicy?: OutboundReplyTargetPolicy;
   }) => Promise<void>;
   listOutboxEntries: () => OutboxEntry[];
+  resolveSceneDownloadMedia?: (to: string) => boolean | undefined;
 }) {
   return { ...deps };
 }

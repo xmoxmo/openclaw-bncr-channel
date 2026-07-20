@@ -78,6 +78,11 @@ export function createBncrFileInboundChunkHandler(runtime: BncrFileInboundRuntim
     }
 
     const staleObserved = runtime.observeLease('file.chunk', params ?? {});
+    // #not-merged Intentionally duplicated across complete/chunk/abort.
+    // Each handler emits a distinct logWarn message with its own event-kind
+    // in the format string, and the surrounding logic diverges in more than
+    // just the event name.  Merging would add parameter-gluing boilerplate
+    // with no reduction in total LOC.  See also the sibling files.
     if (staleObserved.stale) {
       if (
         !runtime.matchesTransferOwner({

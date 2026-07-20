@@ -1,5 +1,6 @@
 import { normalizeAccountId } from '../core/accounts.ts';
 import type { BncrDiagnosticsSummary } from '../core/types.ts';
+import { finiteNumberOr, nonNegativeFiniteNumberOr } from '../core/value-sanitize.ts';
 
 type StatusRuntimeMeta = {
   pending?: number;
@@ -58,15 +59,6 @@ export type HealthStatusLogState = {
 
 export function createHealthStatusLogState(): HealthStatusLogState {
   return { emittedSig: null, pendingSig: null, pendingSince: 0 };
-}
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
-  return Math.max(0, finiteNumberOr(value, fallback));
 }
 
 export function updateHealthStatusLogState(args: {

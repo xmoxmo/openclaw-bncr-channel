@@ -1,23 +1,16 @@
 import type { OutboxEntry } from './types.ts';
 
-type OutboxSummaryMeta = {
-  kind?: string;
-  asVoice?: boolean;
-  audioAsVoice?: boolean;
-  type?: unknown;
-  mediaUrl?: unknown;
-  text?: unknown;
-};
-
 type OutboxSummaryMessage = {
   type?: unknown;
   msg?: unknown;
+  mediaUrl?: unknown;
+  audioAsVoice?: boolean;
+  asVoice?: boolean;
 };
 
 type OutboxSummaryPayload = {
   type?: unknown;
   message?: OutboxSummaryMessage;
-  _meta?: OutboxSummaryMeta;
 };
 
 function inferMediaTypeFromUrl(raw: string): 'image' | 'video' | 'audio' | 'file' {
@@ -47,27 +40,22 @@ function summarizeOutboxType(
 ) {
   const directType = asString(msg.type || '');
   if (directType) return directType;
-
-  const meta = payload?._meta || {};
-  if (meta.kind === 'file-transfer') {
-    if (meta.asVoice === true || meta.audioAsVoice === true) return 'voice';
-    const hintedType = asString(meta.type || '').trim();
-    if (hintedType) return hintedType;
-    return inferMediaTypeFromUrl(asString(meta.mediaUrl || ''));
+  // Infer type from mediaUrl when no direct type is set
+  const mediaUrl = asString(msg.mediaUrl || '');
+  if (mediaUrl) {
+    if (msg.audioAsVoice === true || msg.asVoice === true) return 'voice';
+    const inferred = inferMediaTypeFromUrl(mediaUrl);
+    if (inferred) return inferred;
   }
-
   return asString(payload?.type || 'unknown');
 }
 
-function summarizeOutboxText(
-  payload: OutboxSummaryPayload,
-  msg: OutboxSummaryMessage,
-  asString: (value: unknown) => string,
-) {
-  const text = asString(msg.msg || payload?._meta?.text || '').trim();
+function summarizeOutboxText(msg: OutboxSummaryMessage, asString: (value: unknown) => string) {
+  const text = asString(msg.msg || '').trim();
   if (text) return text;
-  const meta = payload?._meta || {};
-  if (meta.kind === 'file-transfer') return filenameFromUrl(asString(meta.mediaUrl || ''));
+  // Fall back to filename from mediaUrl when no caption is set
+  const mediaUrl = asString(msg.mediaUrl || '');
+  if (mediaUrl) return filenameFromUrl(mediaUrl);
   return '';
 }
 
@@ -80,7 +68,7 @@ export function summarizeOutboxEntry(args: {
   const payload = args.entry.payload as OutboxSummaryPayload;
   const msg = payload?.message || {};
   const type = summarizeOutboxType(payload, msg, args.asString);
-  const text = summarizeOutboxText(payload, msg, args.asString);
+  const text = summarizeOutboxText(msg, args.asString);
   const preview = args.summarizeTextPreview(text);
   return [type, args.formatDisplayScope(args.entry.route), preview].join('|');
 }

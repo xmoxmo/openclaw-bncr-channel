@@ -1,15 +1,11 @@
+import { asString } from '../../core/value-sanitize.ts';
+
 export type MediaDedupeCacheEntry = {
   mediaUrl: string;
   text: string;
   replyToId: string;
   createdAt: number;
 };
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
 
 export function normalizeReplyToId(value: unknown): string {
   return asString(value || '').trim();

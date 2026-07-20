@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { createDynamicChannelPlugin } from './src/bootstrap/channel-plugin-runtime.ts';
 import {
   type BncrRegistrationApi,
@@ -10,7 +9,6 @@ import {
   type ChannelModule,
   type LoadedRuntime,
   loadBncrRuntimeSync,
-  pluginRoot,
   pluginVersion as runtimePluginVersion,
 } from './src/bootstrap/runtime-loader.ts';
 import { BncrConfigSchema } from './src/core/config-schema.ts';
@@ -19,13 +17,7 @@ import { getOpenClawRuntimeConfig } from './src/openclaw/config-runtime.ts';
 
 type ChannelPlugin = ReturnType<ChannelModule['createBncrChannelPlugin']>;
 
-const readPluginVersion = (rootDir = pluginRoot) => {
-  const packageJsonPath = path.join(rootDir, 'package.json');
-  void packageJsonPath;
-  return runtimePluginVersion;
-};
-
-const pluginVersion = readPluginVersion();
+const pluginVersion = runtimePluginVersion;
 
 const registerRuntime = createBncrRegisterRuntime();
 

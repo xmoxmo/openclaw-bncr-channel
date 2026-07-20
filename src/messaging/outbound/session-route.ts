@@ -7,6 +7,7 @@ import {
   routeScopeToHex,
 } from '../../core/targets.ts';
 import type { BncrRoute } from '../../core/types.ts';
+import { asString } from '../../core/value-sanitize.ts';
 import { buildOpenClawChannelOutboundSessionRoute } from '../../openclaw/session-route-runtime.ts';
 import type { BncrChannelConfigRoot } from '../../plugin/channel-runtime-types.ts';
 
@@ -18,7 +19,7 @@ type BncrChannelRouteRefFields = {
     rawTo: string;
     chatType: 'direct' | 'group';
   };
-  thread?: { id: string };
+  thread?: { id: string | number };
 };
 
 type BncrOutboundSessionRoute = ChannelOutboundSessionRoute & BncrChannelRouteRefFields;
@@ -30,16 +31,10 @@ type ResolveBncrOutboundSessionRouteParams = {
   accountId?: string;
   target: string;
   resolvedTarget?: { to?: string } | null;
-  threadId?: string;
+  threadId?: string | number | null;
   canonicalAgentId: string;
   resolveRouteBySession?: (raw: string, accountId: string) => BncrRoute | null;
 };
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
 
 function attachBncrChannelRouteRefFields(args: {
   built: ChannelOutboundSessionRoute;
@@ -47,7 +42,7 @@ function attachBncrChannelRouteRefFields(args: {
   accountId?: string;
   to: string;
   chatType: 'direct' | 'group';
-  threadId?: string;
+  threadId?: string | number | null;
 }): BncrOutboundSessionRoute {
   const { built, channel, accountId, to, chatType, threadId } = args;
   return {
@@ -59,7 +54,7 @@ function attachBncrChannelRouteRefFields(args: {
       rawTo: to,
       chatType,
     },
-    ...(threadId !== undefined ? { thread: { id: threadId } } : {}),
+    ...(threadId != null ? { thread: { id: threadId } } : {}),
   };
 }
 
@@ -99,7 +94,7 @@ export function resolveBncrOutboundSessionRoute(params: ResolveBncrOutboundSessi
     chatType: 'direct',
     from: displayTo,
     to: displayTo,
-    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+    ...(params.threadId != null ? { threadId: params.threadId } : {}),
   });
 
   return attachBncrChannelRouteRefFields({

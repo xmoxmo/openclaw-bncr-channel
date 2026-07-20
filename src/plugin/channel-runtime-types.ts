@@ -1,4 +1,4 @@
-import type { RegisterDriftSnapshot, RegisterTraceEntry } from '../core/register-trace.ts';
+import type { RegisterDriftSnapshot } from '../core/register-trace.ts';
 import type { BncrDiagnosticsSummary, BncrRoute, OutboxEntry } from '../core/types.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
 
@@ -133,7 +133,7 @@ export type BncrChannelSendContext = {
   payload?: Record<string, unknown>;
   sessionKey?: string;
   mirror?: { sessionKey?: string };
-  threadId?: string;
+  threadId?: string | number | null;
   /** Pass-through fields from host - bncr plugin does NOT consume these. */
   forceDocument?: boolean;
   gifPlayback?: boolean;
@@ -141,28 +141,6 @@ export type BncrChannelSendContext = {
   downloadMedia?: boolean;
   /** Extra key-value pairs from marker parsing or direct pass-through. */
   extra?: Record<string, unknown>;
-};
-
-export type BncrRegisterRuntimeSnapshot = {
-  bridgeId: string;
-  gatewayPid: number;
-  pluginVersion: string | null;
-  pluginSource: string | null;
-  lastApiInstanceId: string | null;
-  lastRegistryFingerprint: string | null;
-  registerCount: number;
-  firstRegisterAt: number | null;
-  lastRegisterAt: number | null;
-  lastApiRebindAt: number | null;
-  apiGeneration: number;
-  registerTraceRecent: RegisterTraceEntry[];
-  lastDriftSnapshot: RegisterDriftSnapshot | null;
-};
-
-export type FileAckPayloadState = {
-  payload: Record<string, unknown>;
-  ok: boolean;
-  at: number;
 };
 
 export type ChannelMessageActionAdapter = {

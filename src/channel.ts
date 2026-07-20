@@ -152,10 +152,9 @@ import type {
   BncrChannelConfigRoot,
   BncrChannelSendContext,
   BncrSceneRecord,
-  FileAckPayloadState,
   PersistedState,
 } from './plugin/channel-runtime-types.ts';
-import { createBncrChannelSendRuntimeGroup } from './plugin/channel-send-runtime-group.ts';
+import { createBncrChannelSendRuntime } from './plugin/channel-send.ts';
 import {
   asString,
   backoffMs,
@@ -168,6 +167,7 @@ import {
 } from './plugin/channel-utils.ts';
 import { BNCR_CONFIG_SURFACE } from './plugin/config.ts';
 import { createBncrConnectionStateRuntimeGroup } from './plugin/connection-state-runtime-group.ts';
+import type { FileAckPayloadState } from './plugin/file-ack-runtime.ts';
 import { createBncrFileTransferRuntimeGroup } from './plugin/file-transfer-runtime-group.ts';
 import { BNCR_GATEWAY_METHODS } from './plugin/gateway-methods.ts';
 import { prepareBncrInboundAcceptance } from './plugin/inbound-acceptance.ts';
@@ -1133,7 +1133,7 @@ class BncrBridgeRuntime {
 
   private async pushFileTransferSuccessPath(args: {
     entry: OutboxEntry;
-    meta: Record<string, unknown>;
+    msg: Record<string, unknown>;
     owner: ReturnType<BncrBridgeRuntime['resolveOutboxPushOwner']>;
     connIds: Iterable<string>;
     recentInboundReachable: boolean;
@@ -1157,11 +1157,11 @@ class BncrBridgeRuntime {
 
   private async tryPushFileTransferEntry(
     entry: OutboxEntry,
-    meta: Record<string, unknown>,
+    msg: Record<string, unknown>,
   ): Promise<boolean> {
     return await runBncrFileTransferOutboxPush({
       entry,
-      meta,
+      msg,
       gatewayContext: this.gatewayContext,
       owner: this.resolveOutboxPushOwner(entry.accountId),
       resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
@@ -1195,7 +1195,6 @@ class BncrBridgeRuntime {
       createMessageId: () => randomUUID(),
       now,
       normalizeAccountId,
-      pushEvent: BNCR_PUSH_EVENT,
       accountId: params.accountId,
       sessionKey: params.sessionKey,
       route: params.route,
@@ -1209,7 +1208,7 @@ class BncrBridgeRuntime {
       kind: params.kind,
       replyToId: asString(params.replyToId || '').trim() || undefined,
       replyTargetPolicy: params.replyTargetPolicy,
-      downloadMedia: params.downloadMedia === true ? true : undefined,
+      downloadMedia: params.downloadMedia,
     });
   }
 
@@ -1243,29 +1242,55 @@ class BncrBridgeRuntime {
 
   private buildFileTransferOutboundFrame(params: {
     entry: OutboxEntry;
-    meta: Record<string, unknown>;
+    msg: Record<string, unknown>;
     media: { fileName?: string; mimeType?: string; path?: string; base64?: string; type?: string };
     mediaUrl: string;
   }) {
-    const wantsVoice = params.meta.asVoice === true || params.meta.audioAsVoice === true;
-    const messageKind =
-      params.meta.messageKind === 'tool' ||
-      params.meta.messageKind === 'block' ||
-      params.meta.messageKind === 'final'
-        ? params.meta.messageKind
+    const wantsVoice = params.msg.asVoice === true || params.msg.audioAsVoice === true;
+    const rawKind = params.msg.kind ?? (params.msg as Record<string, unknown>).messageKind;
+    const messageKind: 'tool' | 'block' | 'final' | undefined =
+      rawKind === 'tool' || rawKind === 'block' || rawKind === 'final'
+        ? (rawKind as 'tool' | 'block' | 'final')
         : undefined;
 
     const hasPayload = !!(params.media.base64 || params.media.path);
-    if (hasPayload) {
-      console.log(
-        '[bncr] outbound-media download=true|media=' +
-          (params.media.path || `base64:${(params.media.base64 || '').substring(0, 12)}...`) +
-          '|url=' +
-          params.mediaUrl.split('?')[0],
-      );
-    } else {
-      console.log(`[bncr] outbound-media pass-through|url=${params.mediaUrl.split('?')[0]}`);
+    this.logInfoJson(
+      'outbound',
+      'media-frame',
+      {
+        mid: params.entry.messageId,
+        mode: hasPayload ? (params.media.path ? 'chunk' : 'base64') : 'pass-through',
+        type: wantsVoice ? 'voice' : asString(params.msg.type || '') || undefined,
+        url: params.mediaUrl.split('?')[0],
+        ...(params.media.path ? { path: params.media.path } : {}),
+        ...(params.media.base64 ? { base64: true } : {}),
+      },
+      { debugOnly: true },
+    );
+    // Collect non-control fields from msg for passthrough into message.*
+    const MSG_PASSTHROUGH_KEYS = new Set([
+      'platform',
+      'groupId',
+      'userId',
+      'mediaUrl',
+      'mediaLocalRoots',
+      'asVoice',
+      'audioAsVoice',
+      'downloadMedia',
+      'transferMode',
+      'path',
+      'base64',
+      'fileName',
+      'kind',
+      'replyToId',
+    ]);
+    const passthroughExtra: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(params.msg)) {
+      if (!MSG_PASSTHROUGH_KEYS.has(key) && value !== undefined) {
+        passthroughExtra[key] = value;
+      }
     }
+
     return buildBncrMediaOutboundFrame({
       messageId: params.entry.messageId,
       sessionKey: params.entry.sessionKey,
@@ -1278,16 +1303,16 @@ class BncrBridgeRuntime {
         path: params.media.path,
       },
       mediaUrl: params.mediaUrl,
-      mediaMsg: asString(params.meta.text || ''),
+      mediaMsg: asString(params.msg.msg ?? ''),
       fileName: resolveOutboundFileName({
         mediaUrl: params.mediaUrl,
         fileName: params.media.fileName,
         mimeType: params.media.mimeType,
       }),
-      hintedType: wantsVoice ? 'voice' : asString(params.meta.type || '') || undefined,
-      extra: params.meta.extra as Record<string, unknown> | undefined,
+      hintedType: wantsVoice ? 'voice' : asString(params.msg.type || '') || undefined,
+      extra: Object.keys(passthroughExtra).length > 0 ? passthroughExtra : undefined,
       kind: messageKind,
-      replyToId: normalizeReplyToId(params.meta.replyToId) || undefined,
+      replyToId: normalizeReplyToId(asString(params.msg.replyToId || '')) || undefined,
       now: now(),
     });
   }
@@ -1305,13 +1330,11 @@ class BncrBridgeRuntime {
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
-    downloadMedia?: boolean;
   }): OutboxEntry {
     return buildTextOutboxEntryFromRuntime({
       createMessageId: () => randomUUID(),
       now,
       normalizeAccountId,
-      normalizeReplyToId,
       accountId: params.accountId,
       sessionKey: params.sessionKey,
       route: params.route,
@@ -1320,16 +1343,18 @@ class BncrBridgeRuntime {
       kind: params.kind,
       replyToId: params.replyToId,
       replyTargetPolicy: params.replyTargetPolicy,
-      downloadMedia: params.downloadMedia === true ? true : undefined,
     });
   }
 
   private async tryPushEntry(entry: OutboxEntry): Promise<boolean> {
-    const meta = isPlainObject(entry.payload?._meta) ? entry.payload._meta : null;
-    if (meta?.kind === 'file-transfer') {
-      return this.tryPushFileTransferEntry(entry, meta);
+    const msg =
+      isPlainObject(entry.payload) &&
+      isPlainObject((entry.payload as Record<string, unknown>).message)
+        ? ((entry.payload as Record<string, unknown>).message as Record<string, unknown>)
+        : null;
+    if (msg?.transferMode === 'media') {
+      return this.tryPushFileTransferEntry(entry, msg);
     }
-
     return this.tryPushTextEntry(entry);
   }
 
@@ -1753,8 +1778,12 @@ class BncrBridgeRuntime {
       clampFiniteNumber(value, fallback, min ?? fallback, max ?? fallback),
     normalizeAccountId,
     formatDisplayScope,
-    isFileTransferEntry: (entry) =>
-      isPlainObject(entry.payload?._meta) && entry.payload?._meta?.kind === 'file-transfer',
+    isFileTransferEntry: (entry) => {
+      const msg = isPlainObject(entry.payload)
+        ? (entry.payload as Record<string, unknown>).message
+        : null;
+      return isPlainObject(msg) && (msg as Record<string, unknown>).transferMode === 'media';
+    },
     recommendedAckTimeoutMaxMs: RECOMMENDED_ACK_TIMEOUT_MAX_MS,
     adaptiveAckTimeoutEnabled: ADAPTIVE_ACK_TIMEOUT_DEFAULT_ENABLED,
     defaultAckTimeoutMs: PUSH_ACK_TIMEOUT_MS,
@@ -2937,6 +2966,18 @@ class BncrBridgeRuntime {
       logInfo: (scope, message, options) => this.logInfo(scope, message, options),
       ...targetRuntime,
       listOutboxEntries: () => Array.from(this.outbox.values()),
+      resolveSceneDownloadMedia: (to: string) => {
+        const parts = to.split(':');
+        if (parts.length >= 3) {
+          const key = `${parts[1]}:${parts[2]}`;
+          const sc = this.sceneRegistry.get(key);
+          // Scene boolean wins (including explicit false); else fall to global.
+          if (typeof sc?.downloadMedia === 'boolean') return sc.downloadMedia;
+          const g = this.sceneRegistry.get('__global__');
+          if (typeof g?.downloadMedia === 'boolean') return g.downloadMedia;
+        }
+        return undefined;
+      },
     });
   }
 
@@ -3021,19 +3062,14 @@ class BncrBridgeRuntime {
     if (ctx.forceDocument === true) extra.forceDocument = true;
     if (ctx.gifPlayback === true) extra.gifPlayback = true;
     if (ctx.silent === true) extra.silent = true;
-    // Clear original fields so resolveUnifiedOutboundExtra doesn't re-add and override marker values
+    // Promote host flags into extra so marker params can override them via mergeMarkerAndHostFields
     return { ...ctx, extra, forceDocument: undefined, gifPlayback: undefined, silent: undefined };
   }
 
   // Channel send surface assembly ------------------------------------------
-  // This group backs the public channel send APIs and should stay adjacent to
-  // the final exposed channel* methods for quick top-down scanning.
-
-  private readonly channelSendRuntimeGroup = createBncrChannelSendRuntimeGroup(
+  private readonly channelSendRuntime = createBncrChannelSendRuntime(
     this.buildChannelSendRuntime(),
   );
-
-  private readonly channelSendRuntime = this.channelSendRuntimeGroup.channelSendRuntime;
 
   channelSendText = async (ctx: BncrChannelSendContext) =>
     this.channelSendRuntime.channelSendText(this.mergeHostFields(ctx));

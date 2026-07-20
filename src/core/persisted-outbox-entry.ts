@@ -1,21 +1,11 @@
 import { normalizeAccountId } from './accounts.ts';
 import { normalizeStoredSessionKey, parseRouteLike } from './targets.ts';
 import type { OutboxEntry } from './types.ts';
+import { asString, finiteNumberOr } from './value-sanitize.ts';
 
 type PersistedOutboxEntryInput = Partial<OutboxEntry> & {
   payload?: Record<string, unknown>;
 };
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 function optionalFiniteNumber(value: unknown): number | undefined {
   if (value == null || value === '') return undefined;
@@ -42,6 +32,59 @@ export function normalizePersistedOutboxEntry(args: {
   payload.platform = route.platform;
   payload.groupId = route.groupId;
   payload.userId = route.userId;
+
+  // Migrate old _meta format entries to the new message format.
+  // Old entries persisted before the _meta→message refactor carry media
+  // metadata in payload._meta.  New code reads from payload.message.
+  const oldMeta = payload._meta as Record<string, unknown> | undefined;
+  if (oldMeta && !payload.message) {
+    const oldKind = asString(oldMeta.kind);
+    if (oldKind === 'file-transfer') {
+      // Move replyToId from _meta to payload top level
+      const replyToId = asString(oldMeta.replyToId || '').trim() || undefined;
+      if (replyToId) payload.replyToId = replyToId;
+
+      // Build new message object from old _meta fields
+      const msg: Record<string, unknown> = {
+        type: (oldMeta.type as string) || 'file',
+        msg: oldMeta.text || '',
+        mediaUrl: oldMeta.mediaUrl,
+        mediaLocalRoots: oldMeta.mediaLocalRoots,
+        asVoice: oldMeta.asVoice === true,
+        audioAsVoice: oldMeta.audioAsVoice === true,
+        downloadMedia: oldMeta.downloadMedia === true,
+        kind: oldMeta.messageKind,
+        transferMode: 'media',
+        path: '',
+        base64: '',
+        fileName: '',
+      };
+      // Strip consumed _meta keys, pass through remaining as extra
+      const consumed = new Set([
+        'kind',
+        'mediaUrl',
+        'mediaLocalRoots',
+        'text',
+        'asVoice',
+        'audioAsVoice',
+        'replyToId',
+        'finalEvent',
+        'type',
+        'downloadMedia',
+        'messageKind',
+        'retryCount',
+        'nextAttemptAt',
+      ]);
+      for (const [key, value] of Object.entries(oldMeta)) {
+        if (!consumed.has(key)) {
+          msg[key] = value;
+        }
+      }
+      payload.message = msg;
+    }
+    // Remove old _meta after migration
+    delete payload._meta;
+  }
 
   return {
     ...entry,

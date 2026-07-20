@@ -21,7 +21,7 @@ export type BncrSceneAdminCommand =
   | { kind: 'history-force-set'; sceneKey: string; enabled: boolean | 'clear' }
   | { kind: 'history-help' }
   | { kind: 'download-media-get'; sceneKey?: string }
-  | { kind: 'download-media-set'; sceneKey: string; enabled: boolean }
+  | { kind: 'download-media-set'; sceneKey: string; enabled: boolean | undefined }
   | { kind: 'download-media-global-get' }
   | { kind: 'download-media-global-set'; enabled: boolean };
 
@@ -132,7 +132,7 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
           return {
             matched: true,
             valid: true,
-            command: { kind: 'mode', sceneKey: '', mode: 'clear' as any },
+            command: { kind: 'mode', sceneKey: '', mode: 'clear' },
           };
         }
         if (args[0] === 'help') {
@@ -159,7 +159,7 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
         return {
           matched: true,
           valid: true,
-          command: { kind: 'mode', sceneKey: args[1], mode: 'clear' as any },
+          command: { kind: 'mode', sceneKey: args[1], mode: 'clear' },
         };
       }
       if (GROUP_REPLY_MODES.has(args[0] as BncrGroupReplyMode) && args[1]) {
@@ -205,7 +205,7 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
           return {
             matched: true,
             valid: true,
-            command: { kind: 'history-limit-set', sceneKey: '', limit: 'clear' as any },
+            command: { kind: 'history-limit-set', sceneKey: '', limit: 'clear' },
           };
         }
         const num = parseInt(args[0], 10);
@@ -227,7 +227,7 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
           return {
             matched: true,
             valid: true,
-            command: { kind: 'history-limit-set', sceneKey: args[1], limit: 'clear' as any },
+            command: { kind: 'history-limit-set', sceneKey: args[1], limit: 'clear' },
           };
         }
         const num = parseInt(args[0], 10);
@@ -253,13 +253,13 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
           return {
             matched: true,
             valid: true,
-            command: { kind: 'history-force-set', sceneKey: '', enabled: 'clear' as any },
+            command: { kind: 'history-force-set', sceneKey: '', enabled: 'clear' },
           };
         }
         return {
           matched: true,
           valid: true,
-          command: { kind: 'history-force-set', sceneKey: args[1], enabled: 'clear' as any },
+          command: { kind: 'history-force-set', sceneKey: args[1], enabled: 'clear' },
         };
       }
       if (args[0] === 'on' || args[0] === 'off') {
@@ -302,7 +302,7 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
           command: {
             kind: 'download-media-set',
             sceneKey: args[1] || '',
-            enabled: undefined as any,
+            enabled: undefined,
           },
         };
       }

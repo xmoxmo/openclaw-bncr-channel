@@ -4,13 +4,11 @@ import test from 'node:test';
 
 const REQUIRED_OPENCLAW_RANGE = '>=2026.5.27';
 const CHANNEL_SDK_HELPER_IMPORTS = [
-  'openclaw/plugin-sdk/boolean-param',
   'openclaw/plugin-sdk/json-store',
   'openclaw/plugin-sdk/param-readers',
   'openclaw/plugin-sdk/status-helpers',
   'openclaw/plugin-sdk/tool-send',
 ];
-const INGRESS_RUNTIME_IMPORT = 'openclaw/plugin-sdk/channel-ingress-runtime';
 
 test('bncr package and README require the OpenClaw 2026.5.27 runtime baseline', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
@@ -71,26 +69,4 @@ test('bncr channel routes OpenClaw SDK helper imports through the local adapter'
   for (const specifier of CHANNEL_SDK_HELPER_IMPORTS) {
     assert.equal(channelSource.includes(`from '${specifier}'`), false, specifier);
   }
-});
-
-test('bncr gate routes OpenClaw ingress runtime through the local adapter', () => {
-  const ingressRuntimeSource = fs.readFileSync(
-    new URL('../../src/openclaw/ingress-runtime.ts', import.meta.url),
-    'utf8',
-  );
-
-  assert.match(ingressRuntimeSource, /from 'openclaw\/plugin-sdk\/channel-ingress-runtime'/);
-
-  const inboundAcceptanceSource = fs.readFileSync(
-    new URL('../../src/plugin/inbound-acceptance.ts', import.meta.url),
-    'utf8',
-  );
-  assert.equal(inboundAcceptanceSource.includes(`from '${INGRESS_RUNTIME_IMPORT}'`), false);
-  assert.equal(inboundAcceptanceSource.includes('../openclaw/ingress-runtime.ts'), false);
-
-  const gateSource = fs.readFileSync(
-    new URL('../../src/messaging/inbound/gate.ts', import.meta.url),
-    'utf8',
-  );
-  assert.equal(gateSource.includes(`from '${INGRESS_RUNTIME_IMPORT}'`), false);
 });

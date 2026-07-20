@@ -4,18 +4,13 @@ import {
   parseStrictBncrSessionKey,
 } from '../../core/targets.ts';
 import type { BncrRoute } from '../../core/types.ts';
+import { asString } from '../../core/value-sanitize.ts';
 
 type ResolveBncrOutboundTargetParams = {
   target: string;
   accountId?: string | null;
   resolveRouteBySession?: (raw: string, accountId: string) => BncrRoute | null;
 };
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
 
 export function looksLikeBncrExplicitTarget(input: string): boolean {
   const raw = asString(input).trim();

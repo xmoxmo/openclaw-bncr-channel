@@ -29,7 +29,7 @@ export function createBncrBridgeFileTransferPushFacade(runtime: {
   }>;
   buildFileTransferOutboundFrame: (params: {
     entry: OutboxEntry;
-    meta: Record<string, unknown>;
+    msg: Record<string, unknown>;
     media: { fileName?: string; mimeType?: string; path?: string; base64?: string; type?: string };
     mediaUrl: string;
   }) => Record<string, unknown>;
@@ -74,7 +74,7 @@ export function createBncrBridgeFileTransferPushFacade(runtime: {
 }) {
   const pushFileTransferSuccessPath = async (args: {
     entry: OutboxEntry;
-    meta: Record<string, unknown>;
+    msg: Record<string, unknown>;
     owner: BncrConnection | null;
     connIds: Iterable<string>;
     recentInboundReachable: boolean;
@@ -86,14 +86,14 @@ export function createBncrBridgeFileTransferPushFacade(runtime: {
       sessionKey: args.entry.sessionKey,
       route: args.entry.route,
       mediaUrl: args.mediaUrl,
-      mediaLocalRoots: Array.isArray(args.meta.mediaLocalRoots)
-        ? args.meta.mediaLocalRoots.filter((v): v is string => typeof v === 'string')
+      mediaLocalRoots: Array.isArray(args.msg.mediaLocalRoots)
+        ? args.msg.mediaLocalRoots.filter((v): v is string => typeof v === 'string')
         : undefined,
-      downloadMedia: args.meta.downloadMedia === true,
+      downloadMedia: args.msg.downloadMedia as boolean | undefined,
     });
     const frame = runtime.buildFileTransferOutboundFrame({
       entry: args.entry,
-      meta: args.meta,
+      msg: args.msg,
       media,
       mediaUrl: args.mediaUrl,
     });

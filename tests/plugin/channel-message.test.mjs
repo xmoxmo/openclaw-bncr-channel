@@ -52,12 +52,12 @@ test('channel.message media sends enqueue file-transfer entries and return queue
     assert.equal(bridge.outbox.size, 1);
     const [entry] = bridge.outbox.values();
     assert.equal(entry.payload.type, 'message.outbound');
-    assert.equal(entry.payload._meta.kind, 'file-transfer');
-    assert.equal(entry.payload._meta.mediaUrl, '/tmp/channel-message.png');
-    assert.equal(entry.payload._meta.text, 'media caption');
-    assert.equal(entry.payload._meta.type, 'image');
-    assert.equal(entry.payload._meta.audioAsVoice, true);
-    assert.equal(entry.payload._meta.replyToId, 'source-channel-message-media');
+    assert.equal(entry.payload.message.transferMode, 'media');
+    assert.equal(entry.payload.message.mediaUrl, '/tmp/channel-message.png');
+    assert.equal(entry.payload.message.msg, 'media caption');
+    assert.equal(entry.payload.message.type, 'image');
+    assert.equal(entry.payload.message.audioAsVoice, true);
+    assert.equal(entry.payload.replyToId, 'source-channel-message-media');
     assert.equal(result.results[0].messageId, entry.messageId);
     assert.equal(result.receipt.primaryPlatformMessageId, entry.messageId);
     assert.equal(result.receipt.parts[0].kind, 'voice');
@@ -90,14 +90,14 @@ test('channel.message media sends with mediaUrls and text split text before atta
     assert.equal(newEntries[0].payload.type, 'message.outbound');
     assert.equal(newEntries[0].payload.message.msg, 'album caption');
     assert.equal(newEntries[0].payload.replyToId, 'source-channel-message-media-album');
-    assert.equal(newEntries[1].payload._meta?.kind, 'file-transfer');
-    assert.equal(newEntries[1].payload._meta?.mediaUrl, '/tmp/channel-message-1.png');
-    assert.equal(newEntries[1].payload._meta?.text, '');
-    assert.equal(newEntries[1].payload._meta?.replyToId, 'source-channel-message-media-album');
-    assert.equal(newEntries[2].payload._meta?.kind, 'file-transfer');
-    assert.equal(newEntries[2].payload._meta?.mediaUrl, '/tmp/channel-message-2.png');
-    assert.equal(newEntries[2].payload._meta?.text, '');
-    assert.equal(newEntries[2].payload._meta?.replyToId, 'source-channel-message-media-album');
+    assert.equal(newEntries[1].payload.message?.transferMode, 'media');
+    assert.equal(newEntries[1].payload.message?.mediaUrl, '/tmp/channel-message-1.png');
+    assert.equal(newEntries[1].payload.message?.msg, '');
+    assert.equal(newEntries[1].payload.replyToId, 'source-channel-message-media-album');
+    assert.equal(newEntries[2].payload.message?.transferMode, 'media');
+    assert.equal(newEntries[2].payload.message?.mediaUrl, '/tmp/channel-message-2.png');
+    assert.equal(newEntries[2].payload.message?.msg, '');
+    assert.equal(newEntries[2].payload.replyToId, 'source-channel-message-media-album');
 
     const lastNewEntry = newEntries[2];
     assert.equal(result.results.length, 1);
@@ -126,15 +126,15 @@ test('channel.message media sends with mediaUrls and no text enqueue attachment 
     assert.equal(bridge.outbox.size, 2);
     const entries = Array.from(bridge.outbox.values());
     assert.deepEqual(
-      entries.map((entry) => entry.payload._meta?.mediaUrl),
+      entries.map((entry) => entry.payload.message?.mediaUrl),
       ['/tmp/channel-message-no-text-1.png', '/tmp/channel-message-no-text-2.png'],
     );
     assert.deepEqual(
-      entries.map((entry) => entry.payload._meta?.text),
+      entries.map((entry) => entry.payload.message?.msg),
       ['', ''],
     );
     assert.deepEqual(
-      entries.map((entry) => entry.payload._meta?.replyToId),
+      entries.map((entry) => entry.payload.replyToId),
       ['source-channel-message-media-no-text', 'source-channel-message-media-no-text'],
     );
 
@@ -164,10 +164,10 @@ test('channel.message media sends with mediaUrls and asVoice keep queued voice r
 
     assert.equal(entries[0].payload.type, 'message.outbound');
     assert.equal(entries[0].payload.message.msg, 'voice album');
-    assert.equal(entries[1].payload._meta?.mediaUrl, '/tmp/channel-message-voice-1.ogg');
-    assert.equal(entries[1].payload._meta?.asVoice, true);
-    assert.equal(entries[2].payload._meta?.mediaUrl, '/tmp/channel-message-voice-2.ogg');
-    assert.equal(entries[2].payload._meta?.asVoice, true);
+    assert.equal(entries[1].payload.message?.mediaUrl, '/tmp/channel-message-voice-1.ogg');
+    assert.equal(entries[1].payload.message?.asVoice, true);
+    assert.equal(entries[2].payload.message?.mediaUrl, '/tmp/channel-message-voice-2.ogg');
+    assert.equal(entries[2].payload.message?.asVoice, true);
 
     assert.equal(result.receipt.parts.length, 1);
     assert.equal(result.receipt.parts[0].kind, 'voice');
@@ -190,10 +190,10 @@ test('channel.message media keeps short text as single attachment caption', asyn
 
     assert.equal(bridge.outbox.size, 1);
     const [entry] = bridge.outbox.values();
-    assert.equal(entry.payload._meta?.kind, 'file-transfer');
-    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/channel-message-short-caption.png');
-    assert.equal(entry.payload._meta?.text, 'short caption');
-    assert.equal(entry.payload._meta?.replyToId, 'source-channel-message-media-short-caption');
+    assert.equal(entry.payload.message?.transferMode, 'media');
+    assert.equal(entry.payload.message?.mediaUrl, '/tmp/channel-message-short-caption.png');
+    assert.equal(entry.payload.message?.msg, 'short caption');
+    assert.equal(entry.payload.replyToId, 'source-channel-message-media-short-caption');
   } finally {
     cleanupBridge(bridge);
   }
@@ -217,10 +217,10 @@ test('channel.message media splits text before a single attachment when text exc
     assert.equal(entries[0].payload.type, 'message.outbound');
     assert.equal(entries[0].payload.message.msg, longText);
     assert.equal(entries[0].payload.replyToId, 'source-channel-message-media-long-caption');
-    assert.equal(entries[1].payload._meta?.kind, 'file-transfer');
-    assert.equal(entries[1].payload._meta?.mediaUrl, '/tmp/channel-message-long-caption.png');
-    assert.equal(entries[1].payload._meta?.text, '');
-    assert.equal(entries[1].payload._meta?.replyToId, 'source-channel-message-media-long-caption');
+    assert.equal(entries[1].payload.message?.transferMode, 'media');
+    assert.equal(entries[1].payload.message?.mediaUrl, '/tmp/channel-message-long-caption.png');
+    assert.equal(entries[1].payload.message?.msg, '');
+    assert.equal(entries[1].payload.replyToId, 'source-channel-message-media-long-caption');
 
     assert.equal(result.results[0].messageId, entries[1].messageId);
     assert.equal(result.receipt.parts[0].kind, 'media');
@@ -244,8 +244,8 @@ test('channel.message media keeps a 1020 character text as attachment caption', 
 
     assert.equal(bridge.outbox.size, 1);
     const [entry] = bridge.outbox.values();
-    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/channel-message-boundary-caption.png');
-    assert.equal(entry.payload._meta?.text, boundaryText);
+    assert.equal(entry.payload.message?.mediaUrl, '/tmp/channel-message-boundary-caption.png');
+    assert.equal(entry.payload.message?.msg, boundaryText);
   } finally {
     cleanupBridge(bridge);
   }
@@ -344,7 +344,7 @@ test('channel.message payload sends with mediaUrls and text split text before at
     assert.equal(entries[0].payload.message.msg, 'payload album caption');
     assert.equal(entries[0].payload.replyToId, 'source-channel-message-payload-album');
     assert.deepEqual(
-      entries.slice(1).map((entry) => entry.payload._meta?.mediaUrl),
+      entries.slice(1).map((entry) => entry.payload.message?.mediaUrl),
       [
         '/tmp/channel-message-payload-1.png',
         '/tmp/channel-message-payload-2.png',
@@ -352,11 +352,11 @@ test('channel.message payload sends with mediaUrls and text split text before at
       ],
     );
     assert.deepEqual(
-      entries.slice(1).map((entry) => entry.payload._meta?.text),
+      entries.slice(1).map((entry) => entry.payload.message?.msg),
       ['', '', ''],
     );
     assert.deepEqual(
-      entries.slice(1).map((entry) => entry.payload._meta?.replyToId),
+      entries.slice(1).map((entry) => entry.payload.replyToId),
       [
         'source-channel-message-payload-album',
         'source-channel-message-payload-album',
@@ -398,10 +398,10 @@ test('channel.message payload sends with mediaUrls and asVoice keep queued voice
     assert.equal(bridge.outbox.size, 3);
     const entries = Array.from(bridge.outbox.values());
     assert.equal(entries[0].payload.message.msg, 'payload voice album');
-    assert.equal(entries[1].payload._meta?.mediaUrl, '/tmp/channel-message-payload-voice-1.ogg');
-    assert.equal(entries[1].payload._meta?.asVoice, true);
-    assert.equal(entries[2].payload._meta?.mediaUrl, '/tmp/channel-message-payload-voice-2.ogg');
-    assert.equal(entries[2].payload._meta?.asVoice, true);
+    assert.equal(entries[1].payload.message?.mediaUrl, '/tmp/channel-message-payload-voice-1.ogg');
+    assert.equal(entries[1].payload.message?.asVoice, true);
+    assert.equal(entries[2].payload.message?.mediaUrl, '/tmp/channel-message-payload-voice-2.ogg');
+    assert.equal(entries[2].payload.message?.asVoice, true);
     assert.equal(result.receipt.parts[0].kind, 'voice');
   } finally {
     cleanupBridge(bridge);

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildRuntimeStatusMetaDisplay } from './status-meta.ts';
 import type { BncrDiagnosticsSummary, BncrRuntimeLastSession, PendingAdmission } from './types.ts';
+import { finiteNumberOr, nonNegativeFiniteNumberOr, now } from './value-sanitize.ts';
 
 type RuntimeStatusInput = {
   accountId: string;
@@ -26,19 +27,6 @@ type RuntimeStatusInput = {
   lastError?: string | null;
   channelRoot?: string;
 };
-
-function now() {
-  return Date.now();
-}
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function nonNegativeFiniteNumberOr(value: unknown, fallback: number): number {
-  return Math.max(0, finiteNumberOr(value, fallback));
-}
 
 export function buildIntegratedDiagnostics(input: RuntimeStatusInput): BncrDiagnosticsSummary {
   const root = input.channelRoot || path.join(process.cwd(), 'plugins', 'bncr');
@@ -228,13 +216,5 @@ export function buildAccountStatusSnapshot(input: {
     lastOutboundAt,
     lastOutboundAgo,
     diagnostics,
-  };
-}
-
-export function buildChannelSummaryFromRuntime(input: RuntimeStatusInput) {
-  const headline = buildStatusHeadlineFromRuntime(input);
-  return {
-    linked: input.connected,
-    self: { e164: headline },
   };
 }

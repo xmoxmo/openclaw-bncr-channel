@@ -161,7 +161,6 @@ export function createBncrBridgeMediaFacade(runtime: {
   const loadOutboundTransferMedia = async (params: {
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
-    downloadMedia?: boolean;
   }): Promise<{
     loaded: OpenClawLoadedMedia;
     size: number;

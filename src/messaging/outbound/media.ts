@@ -1,12 +1,7 @@
+import { asString } from '../../core/value-sanitize.ts';
 import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
 
 type BncrOutboundMessageType = 'text' | 'image' | 'video' | 'voice' | 'audio' | 'file';
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
 
 function isBncrOutboundMessageType(value: string): value is BncrOutboundMessageType {
   return (

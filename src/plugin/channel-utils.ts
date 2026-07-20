@@ -1,38 +1,17 @@
 import path from 'node:path';
+import {
+  asString,
+  clampFiniteNumber,
+  finiteNumberOr,
+  isPlainObject,
+  now,
+} from '../core/value-sanitize.ts';
 
-export function now() {
-  return Date.now();
-}
-
-export function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
-
-export function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
+export { asString, clampFiniteNumber, finiteNumberOr, isPlainObject, now };
 
 export function finiteNonNegativeNumberOrNull(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-export function clampFiniteNumber(
-  value: unknown,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const n = Number(value);
-  const finite = Number.isFinite(n) ? n : fallback;
-  return Math.max(min, Math.min(finite, max));
-}
-
-export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function backoffMs(retryCount: number): number {

@@ -1,9 +1,6 @@
-const DEFAULT_REGISTER_WARMUP_WINDOW_MS = 30_000;
+import { finiteNumberOr } from './value-sanitize.ts';
 
-function finiteNumberOr(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
+const DEFAULT_REGISTER_WARMUP_WINDOW_MS = 30_000;
 
 export type RegisterTraceEntry = {
   ts: number;

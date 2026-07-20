@@ -1,5 +1,6 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import { CHANNEL_ID } from '../core/accounts.ts';
+import { matchesTransferOwner } from '../core/lease-state.ts';
 import type { FileSendTransferState } from '../core/types.ts';
 import {
   applyFileAckState,
@@ -16,7 +17,6 @@ import {
   hasTerminalFileAckState,
   isBncrFileAckStage,
   type LeaseEventPayload,
-  matchesTransferOwner,
   type PreparedAckHandling,
   resolveFileAckLeaseEventKind,
 } from './connection-handlers-helpers.ts';
@@ -363,20 +363,21 @@ export function createBncrConnectionHandlers(runtime: BncrConnectionHandlersRunt
       let resolvedState = activeTransfer?.status ?? 'late';
 
       if (staleObserved.stale) {
-        const { sameConn, sameClient } = matchesTransferOwner({
-          transfer: activeTransfer,
+        const sameOwner = matchesTransferOwner({
+          ownerConnId: transferOwnerConnId,
+          ownerClientId: transferOwnerClientId,
           connId,
           clientId,
         });
         const adopted =
-          !(sameConn || sameClient) &&
+          !sameOwner &&
           runtime.tryAdoptTransferOwner({
             accountId,
             transfer: activeTransfer,
             connId,
             clientId,
           });
-        if (!(sameConn || sameClient || adopted)) {
+        if (!sameOwner && !adopted) {
           runtime.logWarn(
             'stale',
             `ignore kind=file.ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} stage=${stage} reason=owner-mismatch ownerConnId=${transferOwnerConnId || '-'} ownerClientId=${transferOwnerClientId || '-'}`,

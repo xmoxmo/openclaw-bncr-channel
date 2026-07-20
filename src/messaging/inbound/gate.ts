@@ -6,36 +6,7 @@ export type BncrGateResult = { allowed: true } | { allowed: false; reason: strin
 const REQUIRED_PROTOCOL_VERSION = 'scene-routing-v1';
 const REQUIRED_CAPABILITY = 'scene-routing-v1';
 
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
-
-function asBoolean(v: unknown, fallback = false): boolean {
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'number') return v !== 0;
-  if (typeof v === 'string') {
-    const raw = v.trim().toLowerCase();
-    if (!raw) return fallback;
-    if (['true', '1', 'yes', 'y', 'on'].includes(raw)) return true;
-    if (['false', '0', 'no', 'n', 'off'].includes(raw)) return false;
-  }
-  return fallback;
-}
-
-function asCapabilities(v: unknown): string[] {
-  if (Array.isArray(v)) {
-    return v.map((item) => asString(item).trim()).filter(Boolean);
-  }
-  if (typeof v === 'string') {
-    return v
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
+import { asBoolean, asString, asStringArray } from '../../core/value-sanitize.ts';
 
 export async function checkBncrMessageGate(params: {
   parsed: BncrInboundParamsInput & {
@@ -57,7 +28,7 @@ export async function checkBncrMessageGate(params: {
   }
 
   const protocolVersion = asString(parsed?.protocolVersion || '').trim();
-  const capabilities = asCapabilities(parsed?.capabilities);
+  const capabilities = asStringArray(parsed?.capabilities);
   if (
     protocolVersion !== REQUIRED_PROTOCOL_VERSION ||
     !capabilities.includes(REQUIRED_CAPABILITY)

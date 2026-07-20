@@ -1,4 +1,3 @@
-import path from 'node:path';
 import {
   createChannelHistoryWindow,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -245,80 +244,6 @@ export function collectBncrHistoryMediaFromEntries(args: {
 }): HistoryMediaEntry[] {
   return args.entries.flatMap((entry) => (Array.isArray(entry.media) ? entry.media : []));
 }
-
-function toBncrPromptMediaPath(value: string | undefined): string | undefined {
-  const normalized = String(value || '').trim();
-  if (!normalized) return undefined;
-  const slashNormalized = normalized.replace(/\\/g, '/');
-  if (!slashNormalized.includes('/media/inbound/')) return undefined;
-  const base = path.posix.basename(slashNormalized);
-  if (!base || base === '.' || base === '..') return undefined;
-  return `media://inbound/${encodeURIComponent(base)}`;
-}
-
-function buildHistoryWindowMediaSummary(
-  media: HistoryMediaEntry[] | undefined,
-): string | undefined {
-  if (!Array.isArray(media) || media.length === 0) return undefined;
-  const kinds = media
-    .map((item) =>
-      String(item?.kind || '')
-        .trim()
-        .toLowerCase(),
-    )
-    .filter(Boolean);
-  const uniformKind = kinds[0] && kinds.every((item) => item === kinds[0]) ? kinds[0] : 'document';
-  const count = media.length;
-  if (uniformKind === 'image')
-    return count === 1 ? '<media:image>' : `<media:image> (${count} images)`;
-  if (uniformKind === 'video')
-    return count === 1 ? '<media:video>' : `<media:video> (${count} videos)`;
-  if (uniformKind === 'audio') {
-    return count === 1 ? '<media:audio>' : `<media:audio> (${count} audio attachments)`;
-  }
-  return count === 1 ? '<media:document>' : `<media:document> (${count} attachments)`;
-}
-
-function buildHistoryWindowMedias(media: HistoryMediaEntry[] | undefined) {
-  if (!Array.isArray(media) || media.length === 0) return [];
-  return media.flatMap((item) => {
-    const promptPath = toBncrPromptMediaPath(item?.path);
-    const payload = {
-      ...(promptPath ? { path: promptPath } : {}),
-      ...(item?.contentType ? { contentType: item.contentType } : {}),
-      ...(item?.kind ? { kind: item.kind } : {}),
-      ...(item?.messageId ? { messageId: item.messageId } : {}),
-    };
-    return Object.keys(payload).length > 0 ? [payload] : [];
-  });
-}
-
-export function buildBncrHistoryWindowContextFromEntries(args: {
-  entries: readonly BncrHistoryEntry[];
-  channelId: string;
-}) {
-  if (args.entries.length === 0) return undefined;
-  const messages = args.entries.map((entry) => ({
-    ...(entry.messageId ? { messageId: entry.messageId } : {}),
-    sender: entry.sender,
-    senderId: entry.senderId,
-    ...(typeof entry.timestamp === 'number' ? { timestampMs: entry.timestamp } : {}),
-    body: entry.body,
-    mediaSummary: buildHistoryWindowMediaSummary(entry.media),
-    medias: buildHistoryWindowMedias(entry.media),
-  }));
-  return {
-    label: 'Bncr history window',
-    source: args.channelId,
-    type: 'bncr.history_window',
-    payload: {
-      relation: 'before_current_message',
-      order: 'chronological',
-      messages,
-    },
-  };
-}
-
 export function clearBncrPendingGroupHistory(args: {
   historyMap: BncrGroupHistoryMap;
   parsed: ParsedInbound;

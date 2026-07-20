@@ -51,7 +51,7 @@ test('bridge file-transfer push facade preserves success broadcast and failure d
 
   await facade.pushFileTransferSuccessPath({
     entry,
-    meta: { mediaUrl: 'https://example.com/a.bin' },
+    msg: { mediaUrl: 'https://example.com/a.bin' },
     owner: { connId: 'conn-1', clientId: 'client-1', accountId: 'Primary' },
     connIds: ['conn-1'],
     recentInboundReachable: true,

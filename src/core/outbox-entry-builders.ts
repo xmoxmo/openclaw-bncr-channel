@@ -2,11 +2,20 @@ import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-targ
 import { normalizeOutboundReplyToId } from '../messaging/outbound/reply-target-policy.ts';
 import type { BncrRoute, OutboxEntry } from './types.ts';
 
+/** Strip empty/falsy values from extra so they don't override existing message defaults. */
+function sanitizeExtraSpread(extra: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === '' || value === null || value === undefined) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 export function buildFileTransferOutboxEntry(args: {
   createMessageId: () => string;
   now: () => number;
   normalizeAccountId: (accountId?: string | null) => string;
-  pushEvent: string;
   accountId: string;
   sessionKey: string;
   route: BncrRoute;
@@ -31,25 +40,34 @@ export function buildFileTransferOutboxEntry(args: {
     route: args.route,
     payload: {
       type: 'message.outbound',
+      messageId,
+      idempotencyKey: messageId,
       sessionKey: args.sessionKey,
-      _meta: {
-        kind: 'file-transfer',
+      replyToId:
+        normalizeOutboundReplyToId({
+          kind: args.kind,
+          replyToId: args.replyToId,
+          replyTargetPolicy: args.replyTargetPolicy,
+        }) || undefined,
+      message: {
+        platform: args.route.platform,
+        groupId: args.route.groupId,
+        userId: args.route.userId,
+        type: args.type,
+        // No fallback: when type is not provided the downstream adapter
+        // (tgBot / GewePlus) infers from mediaUrl extension.
+        kind: args.kind,
+        msg: args.text,
         mediaUrl: args.mediaUrl,
         mediaLocalRoots: args.mediaLocalRoots ? Array.from(args.mediaLocalRoots) : undefined,
-        text: args.text,
         asVoice: args.asVoice === true,
         audioAsVoice: args.audioAsVoice === true,
-        type: args.type,
-        downloadMedia: args.downloadMedia === true,
-        ...(args.extra ? { extra: { ...args.extra } } : {}),
-        finalEvent: args.pushEvent,
-        replyToId:
-          normalizeOutboundReplyToId({
-            kind: args.kind,
-            replyToId: args.replyToId,
-            replyTargetPolicy: args.replyTargetPolicy,
-          }) || undefined,
-        messageKind: args.kind,
+        downloadMedia: args.downloadMedia,
+        transferMode: 'media',
+        path: '',
+        base64: '',
+        fileName: '',
+        ...(args.extra ? sanitizeExtraSpread(args.extra) : {}),
       },
     },
     createdAt,
@@ -62,7 +80,6 @@ export function buildTextOutboxEntry(args: {
   createMessageId: () => string;
   now: () => number;
   normalizeAccountId: (accountId?: string | null) => string;
-  normalizeReplyToId: (value?: string | null) => string;
   accountId: string;
   extra?: Record<string, unknown>;
   sessionKey: string;
@@ -71,7 +88,6 @@ export function buildTextOutboxEntry(args: {
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   replyTargetPolicy?: OutboundReplyTargetPolicy;
-  downloadMedia?: boolean;
 }): OutboxEntry {
   const messageId = args.createMessageId();
   const createdAt = args.now();
@@ -98,7 +114,7 @@ export function buildTextOutboxEntry(args: {
       fileName: '',
       // Extra fields from marker/pipeline spread for adapter-specific data
       // (e.g. type="appmsg", msg="<appmsg>..." from [BncrParam:...])
-      ...(args.extra ? { ...args.extra } : {}),
+      ...(args.extra ? sanitizeExtraSpread(args.extra) : {}),
     },
     ts: createdAt,
   };

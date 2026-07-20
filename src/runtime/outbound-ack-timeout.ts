@@ -1,4 +1,5 @@
 import type { BncrAckObservability, BncrAckStrategy } from '../core/types.ts';
+import { asString, finiteNumberOr } from '../core/value-sanitize.ts';
 
 type ComputeBncrRecommendedAckTimeoutArgs = {
   lateAckOkCount: number;
@@ -74,14 +75,6 @@ export function resolveBncrRuntimeAckTimeoutDecision(args: ComputeBncrRecommende
     recommendedAckTimeoutMs: timeoutMs,
   });
   return { timeoutMs, reason };
-}
-
-function finiteNumberOr(value: unknown, fallback: number) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function asString(value: unknown, fallback = '') {
-  return typeof value === 'string' ? value : fallback;
 }
 
 export function buildBncrRuntimeAckStrategy(args: {

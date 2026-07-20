@@ -23,6 +23,21 @@ function summary(entry) {
 }
 
 function fileTransferEntry(mediaUrl, text = '', meta = {}) {
+  const { type: metaType, audioAsVoice, asVoice, ...restMeta } = meta;
+  // Determine type from mediaUrl extension or meta
+  let type = metaType || '';
+  if (!type) {
+    const cleanUrl = String(mediaUrl).split(/[?#]/, 1)[0] || '';
+    const ext = cleanUrl.includes('.')
+      ? cleanUrl.slice(cleanUrl.lastIndexOf('.') + 1).toLowerCase()
+      : '';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif'].includes(ext)) type = 'image';
+    else if (['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'].includes(ext)) type = 'video';
+    else if (['mp3', 'wav', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'flac'].includes(ext))
+      type = 'audio';
+    else type = 'file';
+  }
+  if (audioAsVoice === true || asVoice === true) type = 'voice';
   return {
     messageId: 'mid-1',
     accountId: 'Primary',
@@ -31,11 +46,14 @@ function fileTransferEntry(mediaUrl, text = '', meta = {}) {
     payload: {
       type: 'message.outbound',
       sessionKey: 'agent:orion:bncr:direct:test',
-      _meta: {
-        kind: 'file-transfer',
+      message: {
+        type,
+        msg: text,
         mediaUrl,
-        text,
-        ...meta,
+        transferMode: 'media',
+        ...(audioAsVoice !== undefined ? { audioAsVoice } : {}),
+        ...(asVoice !== undefined ? { asVoice } : {}),
+        ...restMeta,
       },
     },
     createdAt: 0,

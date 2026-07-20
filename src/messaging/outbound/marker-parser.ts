@@ -6,29 +6,30 @@
  *
  * Format: [BncrParam:{"key":"val","asVoice":true}]
  *
- * Incomplete markers (missing closing ]) are left in text unchanged.
- * Invalid JSON within a complete marker - marker is removed but no params.
+ * - Complete marker whose JSON parses successfully → stripped, params merged.
+ * - Complete marker whose JSON fails to parse → left in text (not stripped)
+ *   so the user can see and fix the bad payload.
+ * - Incomplete marker (no closing ]) → left in text, does NOT block later
+ *   complete markers.
+ * - Multiple valid markers → all stripped, params merge (later same-key wins).
  */
 
 const PREFIX = '[BncrParam:';
 
-export function parseBncrMarker(text: string): {
-  cleanText: string;
-  params: Record<string, unknown>;
-} {
-  const idx = text.indexOf(PREFIX);
-  if (idx === -1) return { cleanText: text, params: {} };
-
-  const start = idx + PREFIX.length;
-  if (start >= text.length) return { cleanText: text, params: {} };
+/**
+ * Locate the closing `]` of a complete marker starting at `prefixIdx`.
+ * Returns the index of the closing `]`, or -1 if incomplete.
+ */
+function findMarkerEnd(text: string, prefixIdx: number): number {
+  const start = prefixIdx + PREFIX.length;
+  if (start >= text.length) return -1;
 
   // Scan character-by-character tracking brace/bracket depth so that
-  // ] inside JSON values (e.g. CDATA content) is not mistaken for
+  // ] inside JSON values (e.g. CDATA / lyric tags) is not mistaken for
   // the closing marker bracket.
   let depth = 0;
   let inString = false;
   let esc = false;
-  let end = -1;
   let started = false;
 
   for (let i = start; i < text.length; i++) {
@@ -63,29 +64,62 @@ export function parseBncrMarker(text: string): {
         if (depth === 0) {
           // JSON content complete - expect ] to close the marker
           if (i + 1 < text.length && text[i + 1] === ']') {
-            end = i + 1;
+            return i + 1;
           }
-          break;
+          return -1;
         }
       }
     }
   }
 
-  if (end === -1) return { cleanText: text, params: {} };
+  return -1;
+}
 
-  const rawJson = text.slice(start, end);
-  let params: Record<string, unknown> = {};
+export function parseBncrMarker(text: string): {
+  cleanText: string;
+  params: Record<string, unknown>;
+} {
+  const params: Record<string, unknown> = {};
+  let result = text;
+  let searchFrom = 0;
 
-  try {
-    const parsed = JSON.parse(rawJson);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      params = parsed as Record<string, unknown>;
+  while (true) {
+    const idx = result.indexOf(PREFIX, searchFrom);
+    if (idx === -1) break;
+
+    const end = findMarkerEnd(result, idx);
+    if (end === -1) {
+      // Incomplete marker (missing ]): leave in place,
+      // keep looking after this PREFIX so later valid markers are not blocked.
+      searchFrom = idx + PREFIX.length;
+      continue;
     }
-  } catch {
-    // Invalid JSON — remove marker but don't apply params
+
+    const rawJson = result.slice(idx + PREFIX.length, end);
+    let parsedOk = false;
+    try {
+      const parsed = JSON.parse(rawJson);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        Object.assign(params, parsed as Record<string, unknown>);
+        parsedOk = true;
+      }
+    } catch {
+      // JSON parse failed — do NOT strip marker so the user can debug it
+    }
+
+    if (parsedOk) {
+      // Strip the complete valid marker
+      result = result.slice(0, idx) + result.slice(end + 1);
+      searchFrom = idx;
+    } else {
+      // Leave the invalid marker in place, continue after it
+      searchFrom = end + 1;
+    }
   }
 
-  const cleanText = (text.slice(0, idx) + text.slice(end + 1)).replace(/ {2,}/g, ' ').trim();
+  // Only trim whitespace when markers were actually stripped (result changed).
+  // Without markers the original text is returned as-is for maximum fidelity.
+  const cleanText = result !== text ? result.replace(/ {2,}/g, ' ').trim() : result;
   return { cleanText, params };
 }
 
@@ -103,14 +137,13 @@ const MEDIA_CONSUMPTION_TYPES = new Set(['file', 'image', 'video', 'audio', 'voi
  * based on whether its value is a recognized media type.
  */
 const CONSUMPTION_FIELDS_NO_TYPE = new Set([
+  'ismedia',
   'asVoice',
   'audioAsVoice',
   'kind',
   'replyToId',
   'downloadMedia',
 ]);
-
-const CONSUMPTION_FIELDS = new Set([...CONSUMPTION_FIELDS_NO_TYPE]);
 
 export function extractConsumptionFields(extra: Record<string, unknown> | undefined): {
   consumed: Partial<{
@@ -120,6 +153,7 @@ export function extractConsumptionFields(extra: Record<string, unknown> | undefi
     kind: string;
     replyToId: string;
     downloadMedia: boolean;
+    ismedia: boolean;
   }>;
   remaining: Record<string, unknown>;
 } {
@@ -140,7 +174,7 @@ export function extractConsumptionFields(extra: Record<string, unknown> | undefi
       }
       continue;
     }
-    if (CONSUMPTION_FIELDS.has(key)) {
+    if (CONSUMPTION_FIELDS_NO_TYPE.has(key)) {
       consumed[key] = value;
     } else {
       remaining[key] = value;

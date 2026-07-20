@@ -160,6 +160,30 @@ test('buildBncrMediaOutboundFrame writes resolved type and path', () => {
   assert.equal(frame.message.fileName, 'a.mp3');
 });
 
+test('buildBncrMediaOutboundFrame lets extra type/msg override resolved media fields (appmsg card)', () => {
+  const frame = buildBncrMediaOutboundFrame({
+    messageId: 'm-appmsg',
+    sessionKey: 'agent:main:bncr:group:demo',
+    route: { platform: 'GewePlus', groupId: 'g1', userId: '0' },
+    media: { mode: 'base64', mimeType: 'image/jpeg' },
+    mediaUrl: 'http://thumb.example/cover.jpg',
+    mediaMsg: 'caption-should-lose',
+    fileName: 'cover.jpg',
+    hintedType: 'appmsg',
+    extra: {
+      type: 'appmsg',
+      msg: '<appmsg><title>song</title></appmsg>',
+      path: 'http://thumb.example/cover.jpg',
+    },
+    now: 3,
+  });
+
+  assert.equal(frame.message.type, 'appmsg');
+  assert.equal(frame.message.msg, '<appmsg><title>song</title></appmsg>');
+  assert.equal(frame.message.path, 'http://thumb.example/cover.jpg');
+  assert.equal(frame.message.extra, undefined);
+});
+
 test('buildBncrMediaOutboundFrame preserves extra metadata as a shallow copy', () => {
   const extra = { parse_mode: 'MarkdownV2', disable_preview: true };
   const frame = buildBncrMediaOutboundFrame({
@@ -204,11 +228,11 @@ test('channelSendMedia enqueues file-transfer outbox entry with voice metadata',
     const [entry] = bridge.outbox.values();
     assert.equal(entry.accountId, 'Primary');
     assert.equal(entry.route.platform, 'tgBot');
-    assert.equal(entry.payload._meta?.kind, 'file-transfer');
-    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/voice.ogg');
-    assert.equal(entry.payload._meta?.text, 'voice test');
-    assert.equal(entry.payload._meta?.asVoice, true);
-    assert.equal(entry.payload._meta?.finalEvent, 'plugin.bncr.push');
+    assert.equal(entry.payload.message?.transferMode, 'media');
+    assert.equal(entry.payload.message?.mediaUrl, '/tmp/voice.ogg');
+    assert.equal(entry.payload.message?.msg, 'voice test');
+    assert.equal(entry.payload.message?.asVoice, true);
+    // finalEvent no longer stored in new message format
   } finally {
     cleanupBridge(bridge);
   }
@@ -236,11 +260,11 @@ test('channelSendMedia stores replyToId on file-transfer metadata', async () => 
     });
 
     const [entry] = bridge.outbox.values();
-    assert.equal(entry.payload._meta?.replyToId, 'reply-123');
-    assert.equal(entry.payload._meta?.kind, 'file-transfer');
-    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/a.png');
-    assert.equal(entry.payload._meta?.text, 'image reply');
-    assert.equal(entry.payload._meta?.type, 'image');
+    assert.equal(entry.payload.replyToId, 'reply-123');
+    assert.equal(entry.payload.message?.transferMode, 'media');
+    assert.equal(entry.payload.message?.mediaUrl, '/tmp/a.png');
+    assert.equal(entry.payload.message?.msg, 'image reply');
+    assert.equal(entry.payload.message?.type, 'image');
   } finally {
     cleanupBridge(bridge);
   }
@@ -268,9 +292,9 @@ test('channelSendMedia strips replyToId for tool file-transfer metadata', async 
     });
 
     const [entry] = bridge.outbox.values();
-    assert.equal(entry.payload._meta?.replyToId, undefined);
-    assert.equal(entry.payload._meta?.messageKind, 'tool');
-    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/tool.png');
+    assert.equal(entry.payload.replyToId, undefined);
+    assert.equal(entry.payload.message?.kind, 'tool');
+    assert.equal(entry.payload.message?.mediaUrl, '/tmp/tool.png');
   } finally {
     cleanupBridge(bridge);
   }
@@ -313,10 +337,11 @@ test('file-transfer waits until final push is emitted before waiting for message
     payload: {
       type: 'message.outbound',
       sessionKey: 'agent:orion:bncr:direct:demo',
-      _meta: {
-        kind: 'file-transfer',
+      message: {
+        type: 'file',
+        msg: 'hello',
         mediaUrl: '/tmp/delayed.png',
-        text: 'hello',
+        transferMode: 'media',
       },
     },
     createdAt: Date.now(),
@@ -361,10 +386,11 @@ test('file-transfer failure does not start message ack wait or rewrite error to 
     payload: {
       type: 'message.outbound',
       sessionKey: 'agent:orion:bncr:direct:demo',
-      _meta: {
-        kind: 'file-transfer',
+      message: {
+        type: 'file',
+        msg: 'hello',
         mediaUrl: '/tmp/fail.png',
-        text: 'hello',
+        transferMode: 'media',
       },
     },
     createdAt: Date.now(),

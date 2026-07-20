@@ -203,21 +203,6 @@ export function hasTerminalFileAckState(state: FileAckState | undefined): state 
   return state?.status === 'completed' || state?.status === 'aborted';
 }
 
-export function matchesTransferOwner(args: {
-  transfer: FileAckState | undefined;
-  connId: string;
-  clientId?: string;
-}) {
-  const { transfer, connId, clientId } = args;
-  const sameConn = !!transfer?.ownerConnId && transfer.ownerConnId === connId;
-  const sameClient =
-    !transfer?.ownerConnId &&
-    !!transfer?.ownerClientId &&
-    !!clientId &&
-    transfer.ownerClientId === clientId;
-  return { sameConn, sameClient };
-}
-
 export function applyFileAckState(args: {
   transfer: FileSendTransferState;
   stage: BncrFileAckStage;

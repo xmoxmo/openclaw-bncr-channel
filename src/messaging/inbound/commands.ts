@@ -7,10 +7,7 @@ import {
   resolveBncrPinnedMainDmOwnerFromAllowlist,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
-import {
-  type OpenClawResolvedAgentRoute,
-  resolveOpenClawAgentRoute,
-} from '../../openclaw/routing-runtime.ts';
+import { resolveOpenClawAgentRoute } from '../../openclaw/routing-runtime.ts';
 import type {
   BncrEnqueueFromReply,
   BncrInboundApi,
@@ -18,7 +15,7 @@ import type {
   BncrInboundLogger,
   BncrRememberSessionRoute,
 } from './contracts.ts';
-import type { ParsedInbound } from './dispatch-prep.ts';
+import { assertResolvedAgentRoute, type ParsedInbound } from './dispatch-prep.ts';
 import { buildBncrInboundRecordUpdateLastRoute } from './last-route.ts';
 import {
   parseBncrNativeCommand,
@@ -49,25 +46,6 @@ import {
   wrapBncrInboundRecordSessionLabelCorrection,
 } from './session-label.ts';
 import { createBncrSessionMetaTaskBarrier } from './session-meta-task.ts';
-
-function assertResolvedAgentRoute(resolvedRoute: OpenClawResolvedAgentRoute): {
-  sessionKey: string;
-  agentId: string;
-  mainSessionKey?: string;
-} {
-  const sessionKey =
-    typeof resolvedRoute.sessionKey === 'string' ? resolvedRoute.sessionKey.trim() : '';
-  const agentId = typeof resolvedRoute.agentId === 'string' ? resolvedRoute.agentId.trim() : '';
-  if (!sessionKey) throw new Error('OpenClaw resolveAgentRoute returned empty sessionKey');
-  if (!agentId) throw new Error('OpenClaw resolveAgentRoute returned empty agentId');
-  return {
-    sessionKey,
-    agentId,
-    ...(typeof resolvedRoute.mainSessionKey === 'string' && resolvedRoute.mainSessionKey.trim()
-      ? { mainSessionKey: resolvedRoute.mainSessionKey }
-      : {}),
-  };
-}
 
 function buildBncrNativeCommandResolvedRoute(args: {
   api: BncrInboundApi;

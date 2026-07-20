@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBncrChannelSendRuntime } from '../../src/plugin/channel-send.ts';
-import { createBncrChannelSendRuntimeGroup } from '../../src/plugin/channel-send-runtime-group.ts';
 
 function createRuntimeHarness() {
   const calls = [];
@@ -57,7 +56,7 @@ test('createBncrChannelSendRuntime preserves supported reply kinds for text and 
   assert.equal(calls[1].payload.kind, 'block');
 });
 
-test('createBncrChannelSendRuntime drops unsupported reply kind values', async () => {
+test('channel-send passes kind through; normalisation downstream', async () => {
   const { runtime, calls } = createRuntimeHarness();
 
   await runtime.channelMessageSendText({
@@ -68,10 +67,11 @@ test('createBncrChannelSendRuntime drops unsupported reply kind values', async (
     payload: { kind: 'still-bad' },
   });
 
-  assert.equal(calls[0].payload.kind, undefined);
+  // Raw kind passes through (ctx.kind = 'unexpected', no override)
+  assert.equal(calls[0].payload.kind, 'unexpected');
 });
 
-test('createBncrChannelSendRuntime normalizes payload kind before enqueue', async () => {
+test('payload kind passes through raw; normalisation downstream', async () => {
   const { runtime, calls } = createRuntimeHarness();
 
   await runtime.channelMessageSendPayload({
@@ -85,8 +85,9 @@ test('createBncrChannelSendRuntime normalizes payload kind before enqueue', asyn
     payload: { text: 'hi', kind: 'invalid' },
   });
 
+  // Kind passes through raw (normalisation happens in orchestrator downstream)
   assert.equal(calls[0].payload.kind, 'final');
-  assert.equal(calls[1].payload.kind, undefined);
+  assert.equal(calls[1].payload.kind, 'invalid');
 });
 
 test('createBncrChannelSendRuntime preserves mediaUrls and asVoice for media and payload sends', async () => {
@@ -121,9 +122,9 @@ test('createBncrChannelSendRuntime preserves mediaUrls and asVoice for media and
   assert.equal(calls[1].payload.asVoice, true);
 });
 
-test('channel send runtime group exposes channel.message and direct send runtime together', async () => {
+test('channel send runtime exposes channel.message and direct send runtime together', async () => {
   const { calls } = createRuntimeHarness();
-  const group = createBncrChannelSendRuntimeGroup({
+  const runtime = createBncrChannelSendRuntime({
     channelId: 'bncr',
     asString: (value, fallback = '') =>
       typeof value === 'string' ? value : value == null ? fallback : String(value),
@@ -152,17 +153,17 @@ test('channel send runtime group exposes channel.message and direct send runtime
     ],
   });
 
-  await group.channelSendRuntime.channelSendText({
+  await runtime.channelSendText({
     accountId: 'Primary',
     to: 'Bncr:tgBot:0:10001',
     text: 'hello',
   });
 
-  assert.equal(typeof group.channelSendRuntime.channelMessageSendText, 'function');
+  assert.equal(typeof runtime.channelMessageSendText, 'function');
   assert.equal(calls.length, 1);
 });
 
-test('sendDispatch with marker type=file routes to media even on channelSendText', async () => {
+test('sendDispatch passes raw marker text to bridge; normalisation downstream', async () => {
   const { runtime, calls } = createRuntimeHarness();
 
   await runtime.channelSendText({
@@ -172,18 +173,18 @@ test('sendDispatch with marker type=file routes to media even on channelSendText
     extra: { gifPlayback: true },
   });
 
-  // Should route to media send (has path from marker)
-  assert.ok(
-    calls[0].payload.mediaUrl.includes('/tmp/doc.pdf') ||
-      calls[0].payload.text.includes('send as file'),
-  );
-  // Extra should carry through (non-consumption field like gifPlayback stays in extra)
+  // sendDispatch no longer normalises markers — raw text passes through
+  assert.ok(calls[0].payload.text.includes('send as file'));
+  assert.ok(calls[0].payload.text.includes('[BncrParam'));
+  // mediaUrl stays empty (marker path not resolved; happens downstream)
+  assert.equal(calls[0].payload.mediaUrl, undefined);
+  // Host-level extra (gifPlayback) survives; marker-only fields absent
   assert.equal(calls[0].payload.extra?.gifPlayback, true);
-  // type consumption field should NOT be in extra (stripped)
   assert.equal(calls[0].payload.extra?.type, undefined);
+  assert.equal(calls[0].payload.extra?.path, undefined);
 });
 
-test('sendDispatch with marker-only text still passes extra', async () => {
+test('sendDispatch passes raw marker-only text; extra unchanged', async () => {
   const { runtime, calls } = createRuntimeHarness();
 
   await runtime.channelSendText({
@@ -192,11 +193,14 @@ test('sendDispatch with marker-only text still passes extra', async () => {
     text: '[BncrParam:{"forceDocument":true}]',
   });
 
-  assert.equal(calls[0].payload.text, '');
-  assert.equal(calls[0].payload.extra?.forceDocument, true);
+  // Raw text passes through (normalisation happens downstream)
+  assert.equal(calls[0].payload.text, '[BncrParam:{"forceDocument":true}]');
+  // forceDocument is NOT in extra — it was not in ctx.extra (mergeHostFields adds it,
+  // but for this test ctx has no extra). Downstream normalisation handles it.
+  assert.equal(calls[0].payload.extra, undefined);
 });
 
-test('messageSendDispatch with extra carries through', async () => {
+test('messageSendDispatch passes raw text; extra from ctx', async () => {
   const { runtime, calls } = createRuntimeHarness();
 
   await runtime.channelMessageSendText({
@@ -205,11 +209,14 @@ test('messageSendDispatch with extra carries through', async () => {
     text: 'hello [BncrParam:{"silent":true}]',
   });
 
-  assert.equal(calls[0].payload.text, 'hello');
-  assert.equal(calls[0].payload.extra?.silent, true);
+  // Raw text with marker passes through
+  assert.ok(calls[0].payload.text.includes('hello'));
+  assert.ok(calls[0].payload.text.includes('BncrParam'));
+  // silent not in extra unless mergeHostFields promoted it
+  assert.equal(calls[0].payload.extra, undefined);
 });
 
-test('messageSendDispatch: marker asVoice overrides payload asVoice', async () => {
+test('messageSendDispatch passes raw asVoice through; marker not resolved at this layer', async () => {
   const { runtime, calls } = createRuntimeHarness();
 
   await runtime.channelMessageSendMedia({
@@ -220,6 +227,8 @@ test('messageSendDispatch: marker asVoice overrides payload asVoice', async () =
     asVoice: true,
   });
 
-  // Marker value takes priority
-  assert.equal(calls[0].payload.asVoice, false);
+  // Dispatch layer passes raw asVoice from overrides without resolving markers.
+  // Marker resolution happens in normalizeOutboundSend one layer deeper.
+  assert.equal(calls[0].payload.asVoice, true);
+  assert.equal(calls[0].payload.text, 'voice [BncrParam:{"asVoice":false}]');
 });

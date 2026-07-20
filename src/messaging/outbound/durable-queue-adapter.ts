@@ -8,7 +8,7 @@ export type BncrDurableQueuedReceipt = {
     platformMessageId: string;
     kind: 'text' | 'media' | 'voice' | 'unknown';
     index: number;
-    threadId?: string;
+    threadId?: string | number | null;
     replyToId?: string;
     raw: {
       channel: 'bncr';
@@ -20,7 +20,7 @@ export type BncrDurableQueuedReceipt = {
       meta: BncrDurableQueuedReceiptMeta;
     };
   }>;
-  threadId?: string;
+  threadId?: string | number | null;
   replyToId?: string;
   sentAt: number;
   raw: Array<{
@@ -66,8 +66,12 @@ export type BncrDurableQueuedResult = {
 };
 
 type OutboxPayload = OutboxEntry['payload'];
-type OutboxMeta = NonNullable<OutboxPayload['_meta']>;
-type OutboxMessagePayload = { type?: unknown };
+type OutboxMessagePayload = {
+  type?: unknown;
+  transferMode?: string;
+  asVoice?: boolean;
+  audioAsVoice?: boolean;
+};
 
 function getOutboxPayload(entry: OutboxEntry): OutboxPayload {
   return entry.payload;
@@ -76,7 +80,7 @@ function getOutboxPayload(entry: OutboxEntry): OutboxPayload {
 export function buildBncrDurableQueuedResult(args: {
   entry: OutboxEntry;
   index?: number;
-  threadId?: string;
+  threadId?: string | number | null;
   replyToId?: string;
   sentAt?: number;
 }): BncrDurableQueuedResult {
@@ -145,20 +149,22 @@ function extractPayloadType(entry: OutboxEntry): string | undefined {
 
 function extractReplyToId(entry: OutboxEntry): string | undefined {
   const payload = getOutboxPayload(entry);
-  const metaReply = (payload?._meta as OutboxMeta | undefined)?.replyToId;
-  const replyToId = payload?.replyToId ?? metaReply;
+  const message =
+    payload?.message && typeof payload.message === 'object' && !Array.isArray(payload.message)
+      ? (payload.message as Record<string, unknown>)
+      : null;
+  const replyToId = payload?.replyToId ?? (message?.replyToId as string | undefined);
   return typeof replyToId === 'string' ? replyToId : undefined;
 }
 
 function inferReceiptKind(entry: OutboxEntry): 'text' | 'media' | 'voice' | 'unknown' {
   const payload = getOutboxPayload(entry);
-  const meta = payload?._meta as OutboxMeta | undefined;
   const message =
-    payload.message && typeof payload.message === 'object'
+    payload?.message && typeof payload.message === 'object'
       ? (payload.message as OutboxMessagePayload)
       : null;
-  if (meta?.kind === 'file-transfer') {
-    if (meta.asVoice === true || meta.audioAsVoice === true) return 'voice';
+  if (message?.transferMode === 'media') {
+    if (message?.asVoice === true || message?.audioAsVoice === true) return 'voice';
     return 'media';
   }
   if (message?.type === 'text') return 'text';

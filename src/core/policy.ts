@@ -1,8 +1,4 @@
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
+import { asBoolean, asString } from './value-sanitize.ts';
 
 export type BncrChannelPolicyConfig = {
   enabled?: boolean;
@@ -19,12 +15,6 @@ export type BncrGroupPolicy = 'open' | 'allowlist' | 'disabled';
 function asList(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.map((x) => asString(x).trim()).filter(Boolean);
-}
-
-function asBoolean(v: unknown, fallback = false): boolean {
-  if (typeof v === 'boolean') return v;
-  if (v == null) return fallback;
-  return String(v).trim().toLowerCase() === 'true';
 }
 
 function normalizeDmPolicy(value: unknown): BncrDmPolicy {

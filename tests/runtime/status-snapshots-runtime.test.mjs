@@ -119,7 +119,7 @@ test('buildAccountRuntimeSnapshot preserves zero timestamp fields', () => {
   assert.equal(snapshot.meta.lastOutboundAt, 0);
 });
 
-test('status snapshots clamp negative diagnostic counters to zero', () => {
+test('account runtime/status snapshots clamp negative counters to zero', () => {
   const runtimeInput = {
     accountId: 'Primary',
     connected: true,

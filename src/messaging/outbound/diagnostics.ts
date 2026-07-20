@@ -5,6 +5,7 @@ import type {
   BncrOutboxQueueDiagnostics,
   OutboxEntry,
 } from '../../core/types.ts';
+import { finiteNumberOrNull } from '../../core/value-sanitize.ts';
 
 export {
   buildFlushDebugInfo,
@@ -41,12 +42,6 @@ type OutboxIncidentSummaryInput = {
   adaptiveAckTimeoutReason?: string | null;
   nowMs?: number;
 };
-
-function finiteNumberOrNull(value: unknown): number | null {
-  if (value == null) return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
 
 function positiveAgeMs(nowMs: number, at: unknown): number | null {
   const n = finiteNumberOrNull(at);

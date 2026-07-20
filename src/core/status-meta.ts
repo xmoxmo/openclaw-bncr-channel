@@ -1,4 +1,5 @@
 import type { PendingAdmission } from './types.ts';
+import { finiteNumberOrNull, now } from './value-sanitize.ts';
 
 type RuntimeStatusMetaDisplayInput = {
   pendingAdmissions?: PendingAdmission[];
@@ -7,15 +8,6 @@ type RuntimeStatusMetaDisplayInput = {
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
 };
-
-function now() {
-  return Date.now();
-}
-
-function finiteNumberOrNull(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
 
 function formatPendingAdmissionScope(route: unknown): string | null {
   if (!route || typeof route !== 'object') return null;

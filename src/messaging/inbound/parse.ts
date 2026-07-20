@@ -2,38 +2,8 @@ import { createHash } from 'node:crypto';
 import { normalizeAccountId } from '../../core/accounts.ts';
 import { extractInlineTaskKey } from '../../core/targets.ts';
 import type { BncrRoute } from '../../core/types.ts';
+import { asBoolean, asString, asStringArray } from '../../core/value-sanitize.ts';
 import type { BncrInboundMediaItem, BncrInboundParamsInput } from './contracts.ts';
-
-function asString(v: unknown, fallback = ''): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return fallback;
-  return String(v);
-}
-
-function asBoolean(v: unknown, fallback = false): boolean {
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'number') return v !== 0;
-  if (typeof v === 'string') {
-    const raw = v.trim().toLowerCase();
-    if (!raw) return fallback;
-    if (['true', '1', 'yes', 'y', 'on'].includes(raw)) return true;
-    if (['false', '0', 'no', 'n', 'off'].includes(raw)) return false;
-  }
-  return fallback;
-}
-
-function asStringArray(v: unknown): string[] {
-  if (Array.isArray(v)) {
-    return v.map((item) => asString(item).trim()).filter(Boolean);
-  }
-  if (typeof v === 'string') {
-    return v
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
 
 function asInboundMediaItems(params: BncrInboundParamsInput): BncrInboundMediaItem[] {
   const normalized: BncrInboundMediaItem[] = [];

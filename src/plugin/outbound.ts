@@ -1,34 +1,14 @@
 import { normalizeAccountId } from '../core/accounts.ts';
+import { asString } from '../core/value-sanitize.ts';
 import {
   deleteBncrMessageAction,
   editBncrMessageAction,
   reactBncrMessageAction,
   sendBncrReplyAction,
 } from '../messaging/outbound/actions.ts';
-
-function asString(v: unknown, fallback = ''): string {
-  return typeof v === 'string' ? v : v == null ? fallback : String(v);
-}
+import type { BncrChannelSendContext } from './channel-runtime-types.ts';
 
 type BncrOutboundDeliveryResult = { channel: string; messageId: string; chatId: string };
-
-type BncrOutboundSendContext = {
-  accountId?: string | null;
-  to?: string;
-  text?: string;
-  mediaUrl?: string;
-  type?: string;
-  kind?: string;
-  replyToId?: string | null;
-  replyToMessageId?: string | null;
-  asVoice?: boolean;
-  audioAsVoice?: boolean;
-  mediaLocalRoots?: readonly string[];
-  /** Pass-through fields from host — bncr plugin does NOT consume these. */
-  forceDocument?: boolean;
-  gifPlayback?: boolean;
-  silent?: boolean;
-};
 
 type BncrOutboundReplyActionContext = {
   accountId?: string | null;
@@ -54,18 +34,18 @@ type BncrOutboundEditActionContext = BncrOutboundTargetActionContext & {
 
 export type BncrOutboundBridge = {
   channelSendText: (
-    ctx: BncrOutboundSendContext,
+    ctx: BncrChannelSendContext,
   ) => BncrOutboundDeliveryResult | Promise<BncrOutboundDeliveryResult>;
   channelSendMedia: (
-    ctx: BncrOutboundSendContext,
+    ctx: BncrChannelSendContext,
   ) => BncrOutboundDeliveryResult | Promise<BncrOutboundDeliveryResult>;
 };
 
 export function createBncrOutboundRuntime(getBridge: () => BncrOutboundBridge) {
   return {
     deliveryMode: 'gateway' as const,
-    sendText: async (ctx: BncrOutboundSendContext) => getBridge().channelSendText(ctx),
-    sendMedia: async (ctx: BncrOutboundSendContext) => getBridge().channelSendMedia(ctx),
+    sendText: async (ctx: BncrChannelSendContext) => getBridge().channelSendText(ctx),
+    sendMedia: async (ctx: BncrChannelSendContext) => getBridge().channelSendMedia(ctx),
     replyAction: async (ctx: BncrOutboundReplyActionContext) =>
       sendBncrReplyAction({
         accountId: normalizeAccountId(ctx?.accountId),

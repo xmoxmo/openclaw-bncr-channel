@@ -45,7 +45,7 @@ function createRuntime() {
         retryCount: 0,
         nextAttemptAt: 1,
         createdAt: 1,
-        payload: { _meta: { kind: 'file-transfer' }, mediaUrl: args.mediaUrl, text: args.text },
+        payload: { message: { mediaUrl: args.mediaUrl, msg: args.text, transferMode: 'media' } },
         ...args,
       };
     },

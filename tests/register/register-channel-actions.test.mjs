@@ -62,9 +62,9 @@ test('bncr channel actions handleAction sends media through the generic send pat
     assert.equal(bridge.outbox.size, 1);
     const [entry] = bridge.outbox.values();
     assert.equal(entry.payload.type, 'message.outbound');
-    assert.equal(entry.payload._meta?.kind, 'file-transfer');
-    assert.equal(entry.payload._meta?.mediaUrl, '/tmp/generic-send.png');
-    assert.equal(entry.payload._meta?.text, 'generic media caption');
+    assert.equal(entry.payload.message?.transferMode, 'media');
+    assert.equal(entry.payload.message?.mediaUrl, '/tmp/generic-send.png');
+    assert.equal(entry.payload.message?.msg, 'generic media caption');
     assert.match(JSON.stringify(result), /"ok":true/);
   } finally {
     globalThis.__bncrBridge?.stopService?.();
@@ -103,12 +103,12 @@ test('bncr channel actions handleAction sends mediaUrls through the generic medi
     assert.equal(entries[0].payload.message.msg, 'generic album caption');
 
     assert.equal(entries[1].payload.type, 'message.outbound');
-    assert.equal(entries[1].payload._meta?.kind, 'file-transfer');
-    assert.equal(entries[1].payload._meta?.mediaUrl, '/tmp/generic-send-1.png');
+    assert.equal(entries[1].payload.message?.transferMode, 'media');
+    assert.equal(entries[1].payload.message?.mediaUrl, '/tmp/generic-send-1.png');
 
     assert.equal(entries[2].payload.type, 'message.outbound');
-    assert.equal(entries[2].payload._meta?.kind, 'file-transfer');
-    assert.equal(entries[2].payload._meta?.mediaUrl, '/tmp/generic-send-2.png');
+    assert.equal(entries[2].payload.message?.transferMode, 'media');
+    assert.equal(entries[2].payload.message?.mediaUrl, '/tmp/generic-send-2.png');
     assert.match(JSON.stringify(result), /"ok":true/);
   } finally {
     globalThis.__bncrBridge?.stopService?.();

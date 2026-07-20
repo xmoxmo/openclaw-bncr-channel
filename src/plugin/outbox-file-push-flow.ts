@@ -1,11 +1,11 @@
 import { resolveFileTransferGuard } from '../core/outbox-file-transfer-guards.ts';
-import { prepareFileTransferRouteSelection } from '../core/outbox-file-transfer-prep.ts';
+import { prepareRouteSelection } from '../core/outbox-file-transfer-prep.ts';
 import type { BncrConnection, OutboxEntry } from '../core/types.ts';
 import { selectOutboxFileTransferRouteCandidates } from '../messaging/outbound/queue-selectors.ts';
 
 export async function runBncrFileTransferOutboxPush(args: {
   entry: OutboxEntry;
-  meta: Record<string, unknown>;
+  msg: Record<string, unknown>;
   gatewayContext: unknown;
   owner: BncrConnection | null;
   resolvePushConnIds: (accountId: string) => Set<string>;
@@ -18,7 +18,7 @@ export async function runBncrFileTransferOutboxPush(args: {
   }) => void;
   pushFileTransferSuccessPath: (args: {
     entry: OutboxEntry;
-    meta: Record<string, unknown>;
+    msg: Record<string, unknown>;
     owner: BncrConnection | null;
     connIds: Iterable<string>;
     recentInboundReachable: boolean;
@@ -27,21 +27,21 @@ export async function runBncrFileTransferOutboxPush(args: {
   }) => Promise<void>;
   handleFileTransferPushFailure: (args: { entry: OutboxEntry; error: unknown }) => void;
 }) {
-  const selection = prepareFileTransferRouteSelection({
+  const selection = prepareRouteSelection({
     entry: args.entry,
     owner: args.owner,
     resolvePushConnIds: args.resolvePushConnIds,
     resolveRecentInboundConnIds: args.resolveRecentInboundConnIds,
     hasRecentInboundReachability: args.hasRecentInboundReachability,
     isRevalidatedAttemptedConn: args.isRevalidatedAttemptedConn,
-    selectOutboxFileTransferRouteCandidates,
+    selectRouteCandidates: selectOutboxFileTransferRouteCandidates,
   });
   const guard = resolveFileTransferGuard({
     gatewayContext: args.gatewayContext,
     entry: args.entry,
     owner: args.owner,
     routeSelection: selection,
-    mediaUrl: String(args.meta.mediaUrl || '').trim(),
+    mediaUrl: String(args.msg.mediaUrl || '').trim(),
   });
   if (!guard.ok) {
     args.handleFileTransferPushGuardFailure({
@@ -54,7 +54,7 @@ export async function runBncrFileTransferOutboxPush(args: {
   try {
     await args.pushFileTransferSuccessPath({
       entry: args.entry,
-      meta: args.meta,
+      msg: args.msg,
       owner: args.owner,
       connIds: guard.connIds,
       recentInboundReachable: guard.recentInboundReachable,

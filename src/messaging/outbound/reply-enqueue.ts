@@ -1,5 +1,5 @@
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
-import { extractConsumptionFields, parseBncrMarker } from './marker-parser.ts';
+import { buildNormalizedSends, normalizeOutboundSend } from './normalize-outbound-send.ts';
 import { hasReplyMediaEntries } from './reply-enqueue-media.ts';
 import type { OutboundReplyTargetPolicy } from './reply-target-policy.ts';
 import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
@@ -21,6 +21,7 @@ export type ReplyPayloadInput = {
   audioAsVoice?: boolean;
   downloadMedia?: boolean;
   type?: string;
+  markerHasMsg?: boolean;
   extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
@@ -35,6 +36,7 @@ export type NormalizedReplyPayload = {
   audioAsVoice: boolean;
   downloadMedia?: boolean;
   type?: string;
+  markerHasMsg?: boolean;
   extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId: string;
@@ -70,6 +72,7 @@ export type ReplyMediaFileTransferParams = {
   audioAsVoice: boolean;
   downloadMedia?: boolean;
   type?: string;
+  markerHasMsg?: boolean;
   extra?: Record<string, unknown>;
   kind?: 'tool' | 'block' | 'final';
   replyToId: string;
@@ -97,7 +100,7 @@ export type ReplyMediaFallbackTextEntryParams = {
   fallback: { text: string; reason: string };
 };
 
-export function shouldSplitReplyMediaText(payload: NormalizedReplyPayload) {
+function shouldSplitReplyMediaText(payload: NormalizedReplyPayload) {
   if (!payload.text) return false;
   if (payload.mediaList.length > 1) return true;
   return payload.text.length > MEDIA_TEXT_SPLIT_THRESHOLD;
@@ -115,14 +118,14 @@ export function buildReplyEnqueuePlan(payload: NormalizedReplyPayload): ReplyEnq
   return { kind: 'media-only', clearText: false };
 }
 
-export function withoutReplyMediaText(payload: NormalizedReplyPayload): NormalizedReplyPayload {
+function withoutReplyMediaText(payload: NormalizedReplyPayload): NormalizedReplyPayload {
   return {
     ...payload,
     text: '',
   };
 }
 
-export function buildReplyTextOutboxEntry(
+function buildReplyTextOutboxEntry(
   params: {
     accountId: string;
     sessionKey: string;
@@ -131,6 +134,7 @@ export function buildReplyTextOutboxEntry(
     kind?: 'tool' | 'block' | 'final';
     replyToId: string;
     replyTargetPolicy: OutboundReplyTargetPolicy;
+    markerHasMsg?: boolean;
     extra?: Record<string, unknown>;
   },
   helpers: {
@@ -142,6 +146,7 @@ export function buildReplyTextOutboxEntry(
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
       replyTargetPolicy?: OutboundReplyTargetPolicy;
+      markerHasMsg?: boolean;
       extra?: Record<string, unknown>;
     }) => OutboxEntry;
   },
@@ -175,6 +180,7 @@ export function enqueueReplyTextEntry(
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
       replyTargetPolicy?: OutboundReplyTargetPolicy;
+      markerHasMsg?: boolean;
       extra?: Record<string, unknown>;
     }) => OutboxEntry;
   },
@@ -198,6 +204,81 @@ export function enqueueReplyTextEntry(
   );
 }
 
+/**
+ * Dispatch all entries from the normalisation plan through a unified path.
+ *
+ * `buildNormalizedSends` returns one or more sends (pre-send text-only +
+ * main payload).  Every entry goes through `buildReplyEnqueuePlan` → the same
+ * text/media dispatch.  There is no separate pre-send or main-send branch.
+ */
+function dispatchNormalizedSends(
+  params: EnqueueNormalizedReplyPayloadParams,
+  helpers: {
+    enqueueReplyMediaEntries: (params: ReplyMediaEntriesParams) => void;
+    enqueueReplyTextEntry: (params: {
+      accountId: string;
+      sessionKey: string;
+      route: BncrRoute;
+      payload: NormalizedReplyPayload;
+    }) => void;
+  },
+): void {
+  for (const entry of buildNormalizedSends(params.payload)) {
+    // Build a NormalizedReplyPayload from the plan entry.
+    const sendPayload: NormalizedReplyPayload = {
+      text: entry.text,
+      mediaUrl: entry.mediaUrl || '',
+      mediaUrls: entry.mediaUrls,
+      mediaList: entry.mediaUrl ? [entry.mediaUrl] : entry.mediaUrls?.length ? entry.mediaUrls : [],
+      asVoice: entry.asVoice,
+      audioAsVoice: entry.audioAsVoice,
+      downloadMedia: entry.downloadMedia,
+      type: entry.type,
+      extra: entry.extra,
+      kind: entry.kind,
+      replyToId: entry.replyToId ?? '',
+      replyTargetPolicy: params.payload.replyTargetPolicy,
+    };
+
+    const plan = buildReplyEnqueuePlan(sendPayload);
+
+    if (plan.kind === 'text-and-media') {
+      helpers.enqueueReplyTextEntry({
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+        route: params.route,
+        payload: sendPayload,
+      });
+      helpers.enqueueReplyMediaEntries({
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+        route: params.route,
+        payload: withoutReplyMediaText(sendPayload),
+        mediaLocalRoots: params.mediaLocalRoots,
+      });
+      continue;
+    }
+
+    if (plan.kind !== 'text-only') {
+      helpers.enqueueReplyMediaEntries({
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+        route: params.route,
+        payload: sendPayload,
+        mediaLocalRoots: params.mediaLocalRoots,
+      });
+      continue;
+    }
+
+    helpers.enqueueReplyTextEntry({
+      accountId: params.accountId,
+      sessionKey: params.sessionKey,
+      route: params.route,
+      payload: sendPayload,
+    });
+  }
+}
+
 export function enqueueNormalizedReplyPayload(
   params: EnqueueNormalizedReplyPayloadParams,
   helpers: {
@@ -216,6 +297,7 @@ export function enqueueNormalizedReplyPayload(
     }) => void;
   },
 ): void {
+  // Log only the main (last) send entry for traceability.
   helpers.logEnqueueFromReply({
     accountId: params.accountId,
     sessionKey: params.sessionKey,
@@ -223,42 +305,8 @@ export function enqueueNormalizedReplyPayload(
     payload: params.payload,
   });
 
-  const plan = buildReplyEnqueuePlan(params.payload);
-
-  if (plan.kind === 'text-and-media') {
-    helpers.enqueueReplyTextEntry({
-      accountId: params.accountId,
-      sessionKey: params.sessionKey,
-      route: params.route,
-      payload: params.payload,
-    });
-    helpers.enqueueReplyMediaEntries({
-      accountId: params.accountId,
-      sessionKey: params.sessionKey,
-      route: params.route,
-      payload: withoutReplyMediaText(params.payload),
-      mediaLocalRoots: params.mediaLocalRoots,
-    });
-    return;
-  }
-
-  if (plan.kind !== 'text-only') {
-    helpers.enqueueReplyMediaEntries({
-      accountId: params.accountId,
-      sessionKey: params.sessionKey,
-      route: params.route,
-      payload: params.payload,
-      mediaLocalRoots: params.mediaLocalRoots,
-    });
-    return;
-  }
-
-  helpers.enqueueReplyTextEntry({
-    accountId: params.accountId,
-    sessionKey: params.sessionKey,
-    route: params.route,
-    payload: params.payload,
-  });
+  // Dispatch ALL entries (pre-send + main) through the same path.
+  dispatchNormalizedSends(params, helpers);
 }
 
 export function normalizeReplyPayload(
@@ -266,40 +314,43 @@ export function normalizeReplyPayload(
   helpers: { asString: (value: unknown, fallback?: string) => string },
   options?: { replyTargetPolicy?: OutboundReplyTargetPolicy },
 ): NormalizedReplyPayload {
-  const rawText = helpers.asString(payload?.text || '').trim();
-  // Parse [BncrParam:...] marker from reply text
-  const { cleanText, params: markerParams } = parseBncrMarker(rawText);
-  const text = cleanText;
-  const mediaUrl = helpers.asString(payload?.mediaUrl || '').trim();
-  const mediaUrls = Array.isArray(payload?.mediaUrls)
-    ? payload.mediaUrls.map((v) => helpers.asString(v || '').trim()).filter(Boolean)
-    : undefined;
-  const type = helpers.asString(payload?.type || '').trim();
-  // Merge marker params with payload extra (marker wins), strip consumption fields
-  const mergedExtra: Record<string, unknown> = {
-    ...(payload?.extra ? { ...payload.extra } : {}),
-    ...markerParams,
-  };
-  const { remaining } = extractConsumptionFields(
-    Object.keys(mergedExtra).length > 0 ? mergedExtra : undefined,
-  );
-  const finalExtra = Object.keys(remaining).length > 0 ? remaining : undefined;
-  return {
-    text,
-    mediaUrl,
-    mediaUrls,
-    mediaList: mediaUrls?.length ? mediaUrls : mediaUrl ? [mediaUrl] : [],
+  const normalized = normalizeOutboundSend({
+    text: helpers.asString(payload?.text || ''),
+    mediaUrl: helpers.asString(payload?.mediaUrl || ''),
+    mediaUrls: payload?.mediaUrls,
     asVoice: payload?.asVoice === true,
     audioAsVoice: payload?.audioAsVoice === true,
-    downloadMedia: payload?.downloadMedia === true ? true : undefined,
-    ...(type ? { type } : {}),
-    ...(finalExtra ? { extra: finalExtra } : {}),
+    downloadMedia: payload?.downloadMedia,
+    type: helpers.asString(payload?.type || '').trim() || undefined,
     kind: payload?.kind,
-    replyTargetPolicy: options?.replyTargetPolicy ?? 'agent-default',
+    replyToId: payload?.replyToId,
+    extra: payload?.extra,
+  });
+
+  const markerHasMsg = normalized.markerHasMsg === true;
+  const mediaUrl = helpers.asString(normalized.mediaUrl || '');
+  const mediaUrls = normalized.mediaUrls;
+  const mediaList = mediaUrls?.length ? mediaUrls : mediaUrl ? [mediaUrl] : [];
+  const kind = normalized.kind;
+  const replyTargetPolicy = options?.replyTargetPolicy ?? 'agent-default';
+
+  return {
+    text: normalized.text,
+    mediaUrl,
+    mediaUrls,
+    mediaList,
+    asVoice: normalized.asVoice,
+    audioAsVoice: normalized.audioAsVoice,
+    downloadMedia: normalized.downloadMedia,
+    ...(normalized.type ? { type: normalized.type } : {}),
+    ...(normalized.extra ? { extra: normalized.extra } : {}),
+    markerHasMsg,
+    kind,
+    replyTargetPolicy,
     replyToId: normalizeOutboundReplyToId({
-      kind: payload?.kind,
-      replyToId: payload?.replyToId,
-      replyTargetPolicy: options?.replyTargetPolicy,
+      kind,
+      replyToId: normalized.replyToId ?? payload?.replyToId,
+      replyTargetPolicy,
     }),
   };
 }

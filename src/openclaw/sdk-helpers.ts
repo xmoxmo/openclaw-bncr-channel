@@ -1,4 +1,3 @@
-import { readBooleanParam as sdkReadBooleanParam } from 'openclaw/plugin-sdk/boolean-param';
 import {
   applyAccountNameToChannelSection as sdkApplyAccountNameToChannelSection,
   jsonResult as sdkJsonResult,
@@ -15,7 +14,6 @@ import { extractToolSend as sdkExtractToolSend } from 'openclaw/plugin-sdk/tool-
 
 export type OpenClawChannelToolSend = ChannelToolSend;
 
-export const readOpenClawBooleanParam = sdkReadBooleanParam;
 export const readOpenClawStringParam = sdkReadStringParam;
 export const readOpenClawJsonFileWithFallback = sdkReadJsonFileWithFallback;
 export const writeOpenClawJsonFileAtomically = sdkWriteJsonFileAtomically;

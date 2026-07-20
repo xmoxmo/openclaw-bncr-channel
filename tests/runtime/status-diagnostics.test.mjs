@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  buildChannelSummaryFromRuntime,
-  buildIntegratedDiagnostics,
-} from '../../src/core/status.ts';
+import { buildIntegratedDiagnostics } from '../../src/core/status.ts';
 
 test('buildIntegratedDiagnostics keeps uptime finite for invalid startedAt', () => {
   const diagnostics = buildIntegratedDiagnostics({
@@ -57,7 +54,7 @@ test('buildIntegratedDiagnostics normalizes invalid counters at diagnostics boun
   assert.equal(diagnostics.regression.ok, true);
 });
 
-test('status snapshots clamp negative diagnostic counters to zero', () => {
+test('buildIntegratedDiagnostics clamps negative diagnostic counters to zero', () => {
   const runtimeInput = {
     accountId: 'Primary',
     connected: true,
@@ -85,50 +82,4 @@ test('status snapshots clamp negative diagnostic counters to zero', () => {
   assert.equal(diagnostics.regression.totalKnownRoutes, 0);
   assert.equal(diagnostics.regression.invalidOutboxSessionKeys, 0);
   assert.equal(diagnostics.regression.legacyAccountResidue, 0);
-});
-
-test('buildChannelSummaryFromRuntime uses normalized counters in headline', () => {
-  const summary = buildChannelSummaryFromRuntime({
-    accountId: 'Primary',
-    connected: true,
-    pending: 'not-a-number',
-    deadLetter: Number.NaN,
-    activeConnections: Number.POSITIVE_INFINITY,
-    connectEvents: 1,
-    inboundEvents: 1,
-    activityEvents: 1,
-    ackEvents: 1,
-    startedAt: Date.now(),
-    sessionRoutesCount: 1,
-    invalidOutboxSessionKeys: 0,
-    legacyAccountResidue: 0,
-  });
-
-  assert.equal(summary.linked, true);
-  assert.equal(summary.self.e164, 'linked p:0 d:0 c:0');
-});
-
-test('integrated diagnostics and channel summary stay consistent on normalized queue state', () => {
-  const runtimeInput = {
-    accountId: 'Primary',
-    connected: false,
-    pending: 'bad-pending',
-    deadLetter: Number.NaN,
-    activeConnections: Number.POSITIVE_INFINITY,
-    connectEvents: 1,
-    inboundEvents: 1,
-    activityEvents: 1,
-    ackEvents: 1,
-    startedAt: Date.now(),
-    sessionRoutesCount: 2,
-    invalidOutboxSessionKeys: 0,
-    legacyAccountResidue: 0,
-  };
-
-  const diagnostics = buildIntegratedDiagnostics(runtimeInput);
-  const summary = buildChannelSummaryFromRuntime(runtimeInput);
-
-  assert.equal(diagnostics.health.pending, 0);
-  assert.equal(diagnostics.health.deadLetter, 0);
-  assert.equal(summary.self.e164, 'status p:0 d:0 c:0');
 });

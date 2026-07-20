@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildFallbackSessionKey,
+  buildCanonicalBncrSessionKey,
   formatDisplayScope,
   formatTargetDisplay,
   normalizeInboundSessionKey,
@@ -109,7 +109,7 @@ test('normalizeStoredSessionKey migrates legacy hex-only keys to canonical agent
   const legacy = `bncr:${Buffer.from('tgBot:0:10001', 'utf8').toString('hex')}:0`;
   const normalized = normalizeStoredSessionKey(legacy, canonicalAgentId);
   assert.ok(normalized);
-  assert.equal(normalized.sessionKey, buildFallbackSessionKey(route, canonicalAgentId));
+  assert.equal(normalized.sessionKey, buildCanonicalBncrSessionKey(route, canonicalAgentId));
   assert.deepEqual(normalized.route, route);
 });
 
@@ -119,7 +119,7 @@ test('normalizeStoredSessionKey keeps strict and legacy sessionKey compatibility
     canonicalAgentId,
   );
   assert.ok(strict);
-  assert.equal(strict.sessionKey, buildFallbackSessionKey(route, canonicalAgentId));
+  assert.equal(strict.sessionKey, buildCanonicalBncrSessionKey(route, canonicalAgentId));
   assert.deepEqual(strict.route, route);
 
   const directLegacy = normalizeStoredSessionKey(
@@ -127,7 +127,7 @@ test('normalizeStoredSessionKey keeps strict and legacy sessionKey compatibility
     canonicalAgentId,
   );
   assert.ok(directLegacy);
-  assert.equal(directLegacy.sessionKey, buildFallbackSessionKey(route, canonicalAgentId));
+  assert.equal(directLegacy.sessionKey, buildCanonicalBncrSessionKey(route, canonicalAgentId));
   assert.deepEqual(directLegacy.route, route);
 });
 
@@ -137,11 +137,11 @@ test('normalizeInboundSessionKey rewrites inbound strict main key to canonical a
     route,
     canonicalAgentId,
   );
-  assert.equal(normalized, buildFallbackSessionKey(route, canonicalAgentId));
+  assert.equal(normalized, buildCanonicalBncrSessionKey(route, canonicalAgentId));
 });
 
 test('withTaskSessionKey appends task suffix once', () => {
-  const base = buildFallbackSessionKey(route, canonicalAgentId);
+  const base = buildCanonicalBncrSessionKey(route, canonicalAgentId);
   assert.equal(withTaskSessionKey(base, 'review-1'), `${base}:task:review-1`);
   assert.equal(withTaskSessionKey(`${base}:task:review-1`, 'review-2'), `${base}:task:review-1`);
 });
@@ -156,7 +156,7 @@ test('parseExplicitTarget parses direct display target and keeps chatType locked
   assert.equal(parsed.userId, '10001');
   assert.equal(parsed.groupId, undefined);
   assert.equal(parsed.displayScope, 'Bncr:tgBot:0:10001');
-  assert.equal(parsed.canonicalSessionKey, buildFallbackSessionKey(route, canonicalAgentId));
+  assert.equal(parsed.canonicalSessionKey, buildCanonicalBncrSessionKey(route, canonicalAgentId));
 
   const aliasParsed = parseExplicitTarget('Bncr:tgBot:User:10001', { canonicalAgentId });
   assert.ok(aliasParsed);
@@ -177,7 +177,10 @@ test('parseExplicitTarget parses group display target but keeps chatType locked 
   assert.equal(parsed.displayScope, 'Bncr:tgBot:-1001:0');
   assert.equal(
     parsed.canonicalSessionKey,
-    buildFallbackSessionKey({ platform: 'tgBot', groupId: '-1001', userId: '0' }, canonicalAgentId),
+    buildCanonicalBncrSessionKey(
+      { platform: 'tgBot', groupId: '-1001', userId: '0' },
+      canonicalAgentId,
+    ),
   );
 
   const aliasParsed = parseExplicitTarget('Bncr:tgBot:Group:-1001', {

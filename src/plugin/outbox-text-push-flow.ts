@@ -43,7 +43,7 @@ export async function runBncrTextOutboxPush(args: {
     resolveRecentInboundConnIds: args.resolveRecentInboundConnIds,
     hasRecentInboundReachability: args.hasRecentInboundReachability,
     isRevalidatedAttemptedConn: args.isRevalidatedAttemptedConn,
-    selectOutboxRouteCandidates,
+    selectRouteCandidates: selectOutboxRouteCandidates,
   });
   const guard = resolveTextPushGuard({
     gatewayContext: args.gatewayContext,

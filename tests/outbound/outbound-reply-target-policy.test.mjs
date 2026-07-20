@@ -105,8 +105,9 @@ test('tool file-transfer metadata strips replyToId while final keeps it', () => 
     replyToId: 'inbound-msg-1',
   });
 
-  assert.equal(toolEntry.payload._meta.replyToId, undefined);
-  assert.equal(toolEntry.payload._meta.messageKind, 'tool');
-  assert.equal(finalEntry.payload._meta.replyToId, 'inbound-msg-1');
-  assert.equal(finalEntry.payload._meta.messageKind, 'final');
+  assert.equal(toolEntry.payload.message.replyToId, undefined);
+  assert.equal(toolEntry.payload.replyToId, undefined);
+  assert.equal(toolEntry.payload.message.kind, 'tool');
+  assert.equal(finalEntry.payload.replyToId, 'inbound-msg-1');
+  assert.equal(finalEntry.payload.message.kind, 'final');
 });

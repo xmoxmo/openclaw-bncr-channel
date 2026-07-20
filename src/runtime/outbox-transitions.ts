@@ -1,4 +1,5 @@
 import type { OutboxEntry } from '../core/types.ts';
+import { finiteNumberOr } from '../core/value-sanitize.ts';
 import type {
   PushFailureDecision,
   RetryRerouteDecision,
@@ -81,10 +82,6 @@ export function buildBncrOutboxPushSuccessEntryPatch(args: {
     routeAttemptConnIds,
     lastError: args.clearLastError ? undefined : args.entry.lastError,
   };
-}
-
-function finiteNumberOr(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 export function buildBncrAckOkTelemetryPatch(args: {

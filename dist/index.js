@@ -1,6 +1,3 @@
-// index.ts
-import path3 from "node:path";
-
 // src/bootstrap/channel-plugin-runtime.ts
 function createDynamicChannelPlugin(args) {
   const { loaded, getCurrentBridge: getCurrentBridge2 } = args;
@@ -786,12 +783,7 @@ var BncrConfigSchema = {
 };
 
 // index.ts
-var readPluginVersion2 = (rootDir = pluginRoot) => {
-  const packageJsonPath = path3.join(rootDir, "package.json");
-  void packageJsonPath;
-  return pluginVersion;
-};
-var pluginVersion2 = readPluginVersion2();
+var pluginVersion2 = pluginVersion;
 var registerRuntime = createBncrRegisterRuntime();
 var {
   ensureGatewayMethodRegistered,

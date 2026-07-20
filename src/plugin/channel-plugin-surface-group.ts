@@ -1,15 +1,14 @@
-import { randomUUID } from 'node:crypto';
 import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-message';
-import { listAccountIds, resolveAccount } from '../core/accounts.ts';
+import { listAccountIds, normalizeAccountId, resolveAccount } from '../core/accounts.ts';
 import { BncrConfigSchema } from '../core/config-schema.ts';
 import { resolveBncrChannelPolicy } from '../core/policy.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
-import { sendBncrMedia, sendBncrText } from '../messaging/outbound/send.ts';
-import { normalizeBncrSendParams } from '../messaging/outbound/send-params.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
+import { readOpenClawStringParam } from '../openclaw/sdk-helpers.ts';
 import type {
   BncrChannelConfigRoot,
+  BncrChannelSendContext,
   BncrSceneRecord,
   BncrStatusRuntimeSnapshot,
   BncrVerifiedTarget,
@@ -139,71 +138,59 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
       if (action !== 'send') {
         throw new Error(`Action ${action} is not supported for provider ${runtime.channelId}.`);
       }
-      const normalized = normalizeBncrSendParams({ params, accountId: accountId || '' });
-      console.log(
-        '[bncr] handleAction normalized.downloadMedia=' +
-          JSON.stringify(normalized.downloadMedia) +
-          '|mediaUrl=' +
-          JSON.stringify(normalized.mediaUrl) +
-          '|hasMedia=' +
-          Boolean(normalized.mediaUrl || normalized.mediaUrls?.length),
-      );
 
-      // Priority: marker → scene config → global default → false
-      if (normalized.downloadMedia === undefined) {
-        const parts = normalized.to.split(':');
-        if (parts.length >= 3) {
-          const sceneKey = `${parts[1]}:${parts[2]}`;
-          const scene = runtime.sceneRegistry.get(sceneKey);
-          if (scene?.downloadMedia === true) {
-            normalized.downloadMedia = true;
-          }
-          if (normalized.downloadMedia === undefined) {
-            const globalScene = runtime.sceneRegistry.get('__global__');
-            if (globalScene?.downloadMedia === true) {
-              normalized.downloadMedia = true;
-            }
-          }
-        }
+      /* -- extract raw params (no normalization) ----------------------- */
+      const paramsObj = (params && typeof params === 'object' ? params : {}) as Record<
+        string,
+        unknown
+      >;
+      const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
+      const resolvedAccountId = normalizeAccountId(
+        (readOpenClawStringParam(paramsObj, 'accountId') ?? accountId) || '',
+      );
+      const toolMediaUrl =
+        (typeof paramsObj.mediaUrl === 'string' ? paramsObj.mediaUrl : '') ||
+        (typeof paramsObj.media === 'string' ? paramsObj.media : '') ||
+        (typeof paramsObj.path === 'string' ? paramsObj.path : '') ||
+        (typeof paramsObj.filePath === 'string' ? paramsObj.filePath : '');
+      const rawExtra = paramsObj.extra;
+      const extra =
+        rawExtra && typeof rawExtra === 'object' && !Array.isArray(rawExtra)
+          ? (rawExtra as Record<string, unknown>)
+          : undefined;
+      const rawMediaUrls = paramsObj.mediaUrls;
+      const mediaUrls = Array.isArray(rawMediaUrls)
+        ? rawMediaUrls.filter((u): u is string => typeof u === 'string')
+        : undefined;
+
+      const toolMessage = readOpenClawStringParam(paramsObj, 'message', { allowEmpty: true }) ?? '';
+      const toolCaption = readOpenClawStringParam(paramsObj, 'caption', { allowEmpty: true }) ?? '';
+      const text = toolCaption || toolMessage || '';
+      const ctx: BncrChannelSendContext = {
+        to,
+        accountId: resolvedAccountId,
+        text,
+        mediaUrl: toolMediaUrl || undefined,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        asVoice: paramsObj.asVoice === true,
+        audioAsVoice: paramsObj.audioAsVoice === true,
+        downloadMedia: paramsObj.downloadMedia as boolean | undefined,
+        type: typeof paramsObj.type === 'string' ? paramsObj.type : undefined,
+        extra,
+        forceDocument: paramsObj.forceDocument === true,
+        gifPlayback: paramsObj.gifPlayback === true,
+        silent: paramsObj.silent === true,
+        mediaLocalRoots,
+      };
+
+      const hasContent = Boolean(text?.trim() || toolMediaUrl || mediaUrls?.length || extra);
+      if (!hasContent) {
+        throw new Error('send requires message, media, or extra params');
       }
 
-      const toolActionBridge = runtime.getToolActionBridge();
-      const result =
-        normalized.mediaUrl || normalized.mediaUrls?.length
-          ? await sendBncrMedia({
-              channelId: runtime.channelId,
-              accountId: normalized.accountId,
-              to: normalized.to,
-              text: normalized.caption,
-              mediaUrl: normalized.mediaUrl,
-              mediaUrls: normalized.mediaUrls,
-              asVoice: normalized.asVoice,
-              audioAsVoice: normalized.audioAsVoice,
-              type: normalized.type,
-              downloadMedia: normalized.downloadMedia,
-              extra: normalized.extra,
-              mediaLocalRoots,
-              resolveVerifiedTarget: (to, accountId) =>
-                toolActionBridge.resolveVerifiedTarget(to, accountId),
-              rememberSessionRoute: (sessionKey, accountId, route) =>
-                toolActionBridge.rememberSessionRoute(sessionKey, accountId, route),
-              enqueueFromReply: (args) => toolActionBridge.enqueueFromReply(args),
-              createMessageId: () => randomUUID(),
-            })
-          : await sendBncrText({
-              channelId: runtime.channelId,
-              accountId: normalized.accountId,
-              to: normalized.to,
-              text: normalized.message,
-              extra: normalized.extra,
-              mediaLocalRoots,
-              resolveVerifiedTarget: (to, accountId) =>
-                toolActionBridge.resolveVerifiedTarget(to, accountId),
-              rememberSessionRoute: (sessionKey, accountId, route) =>
-                toolActionBridge.rememberSessionRoute(sessionKey, accountId, route),
-              enqueueFromReply: (args) => toolActionBridge.enqueueFromReply(args),
-              createMessageId: () => randomUUID(),
-            });
+      /* -- bridge to sendDispatch (normalization + routing inside) ----- */
+      const outboundBridge = runtime.getOutboundBridge();
+      const result = await outboundBridge.channelSendText(ctx);
 
       return runtime.openClawJsonResult({ ok: true, ...result });
     },

@@ -295,8 +295,8 @@ export function createBncrOutboxDrainLoop(
     try {
       pushed = await runtime.tryPushEntry(entry);
     } catch (error) {
-      const meta = runtime.isPlainObject(entry.payload?._meta) ? entry.payload._meta : null;
-      if (meta?.kind === 'file-transfer') {
+      const msg = runtime.isPlainObject(entry.payload?.message) ? entry.payload.message : null;
+      if (msg?.transferMode === 'media') {
         runtime.handleFileTransferPushFailure({ entry, error });
       } else {
         runtime.handleTextPushFailure({ entry, error });

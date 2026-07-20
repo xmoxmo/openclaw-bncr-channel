@@ -1,3 +1,9 @@
+/*
+ * Intentionally separate from outbox-text-push-guards.ts.
+ * File transfer guard has distinct output type (includes owner/mediaUrl)
+ * and extra mediaUrl validation that text push doesn't need.
+ * Merging would add unnecessary conditional branches.
+ */
 import type { BncrConnection, OutboxEntry } from './types.ts';
 
 export type FileTransferGuardResult =

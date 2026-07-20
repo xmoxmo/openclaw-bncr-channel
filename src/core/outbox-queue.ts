@@ -50,13 +50,7 @@ export function collectDueOutboxEntries(args: {
       nextAttemptAt: args.now + args.backoffMs(nextAttempt),
     };
     updatedEntries.push(updatedEntry);
-    duePayloads.push({
-      ...updatedEntry.payload,
-      _meta: {
-        retryCount: updatedEntry.retryCount,
-        nextAttemptAt: updatedEntry.nextAttemptAt,
-      },
-    });
+    duePayloads.push(updatedEntry.payload);
 
     if (duePayloads.length >= args.maxBatch) break;
   }

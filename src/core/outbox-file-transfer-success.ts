@@ -1,3 +1,8 @@
+/*
+ * Intentionally separate from outbox-text-push-success.ts.
+ * File transfer success uses kind:'file-transfer' tag and different
+ * argument shapes (owner vs connId). Separate callers, separate files.
+ */
 import { buildPushBroadcastPayload, buildPushRouteSelectArgs } from './outbox-push-args.ts';
 import type { BncrConnection, OutboxEntry } from './types.ts';
 

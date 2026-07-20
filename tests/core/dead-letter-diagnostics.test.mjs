@@ -120,7 +120,7 @@ test('summarizeDeadLetterEntry formats stable inspect output without mutating en
     sessionKey: 'agent:main:bncr:direct:74673a313a32',
     route: { platform: 'tg', groupId: '1', userId: '2' },
     payload: {
-      _meta: { kind: 'message', text: ' hello\nworld this text is intentionally long ' },
+      message: { type: 'message', msg: ' hello\nworld this text is intentionally long ' },
     },
     createdAt: 'bad-created-at',
     retryCount: 'bad-retry-count',
@@ -139,7 +139,7 @@ test('summarizeDeadLetterEntry formats stable inspect output without mutating en
     lastError: 'push-ack-timeout',
     textPreview: 'hello world this text is…',
   });
-  assert.equal(entry.payload._meta.text.includes('\n'), true);
+  assert.equal(entry.payload.message.msg.includes('\n'), true);
 });
 
 test('filterDeadLetterEntries filters by normalized account, reason, and olderThan', () => {
