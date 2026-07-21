@@ -48,7 +48,7 @@ export function isOpenClawRemoteHttpMediaUrl(mediaUrl: string): boolean {
  * Returns the first absolute path that exists on disk, or the original
  * relative path if nothing is found (the host will then emit its own error).
  */
-export function resolveRelativeMediaPath(mediaUrl: string, localRoots?: readonly string[]): string {
+function resolveRelativeMediaPath(mediaUrl: string, localRoots?: readonly string[]): string {
   if (!mediaUrl || !localRoots?.length) return mediaUrl;
   if (path.isAbsolute(mediaUrl)) return mediaUrl;
   // HTTP / file:// / data: / ~ paths are handled elsewhere

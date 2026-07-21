@@ -126,7 +126,6 @@ export function createBncrBridgeOutboxFacade(runtime: {
       ),
       { debugOnly: true },
     );
-    runtime.logOutboundSummary(entry);
     const accountId = runtime.normalizeAccountId(entry.accountId);
     runtime.incrementCounter(runtime.outboundEnqueueCountByAccount, accountId);
     runtime.lastOutboundEnqueueAtByAccount.set(accountId, runtime.now());

@@ -2,7 +2,6 @@ import type { BncrRoute, FileSendTransferState } from '../core/types.ts';
 import type {
   NormalizedReplyPayload,
   OutboundReplyTargetPolicy,
-  ReplyMediaEntriesParams,
   ReplyPayloadInput,
 } from '../messaging/outbound/reply-enqueue.ts';
 import type { OpenClawLoadedMedia } from '../openclaw/media-runtime.ts';
@@ -61,7 +60,6 @@ export function createBncrBridgeMediaFacade(runtime: {
       mediaLocalRoots?: readonly string[];
       replyTargetPolicy?: OutboundReplyTargetPolicy;
     }) => void;
-    enqueueReplyMediaEntries: (params: ReplyMediaEntriesParams) => void;
   };
   logInfoJson: (
     scope: string | undefined,
@@ -210,7 +208,6 @@ export function createBncrBridgeMediaFacade(runtime: {
     waitCompleteAck: runtime.fileTransferOrchestrator.waitCompleteAck,
     transferMediaToBncrClient: runtime.fileTransferOrchestrator.transferMediaToBncrClient,
     enqueueFromReply: runtime.replyMediaOrchestrator.enqueueFromReply,
-    enqueueReplyMediaEntries: runtime.replyMediaOrchestrator.enqueueReplyMediaEntries,
     logEnqueueFromReply,
     logFileChunkDiag: runtime.fileTransferLogs.logFileChunkDiag,
     logFileTransferStart: runtime.fileTransferLogs.logFileTransferStart,

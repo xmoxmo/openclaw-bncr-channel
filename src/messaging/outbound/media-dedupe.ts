@@ -15,10 +15,7 @@ export function normalizeMessageText(value: unknown): string {
   return asString(value || '').trim();
 }
 
-export function shouldTreatReplyToAsSame(
-  currentReplyToId: string,
-  previousReplyToId: string,
-): boolean {
+function shouldTreatReplyToAsSame(currentReplyToId: string, previousReplyToId: string): boolean {
   if (!currentReplyToId || !previousReplyToId) return true;
   return currentReplyToId === previousReplyToId;
 }

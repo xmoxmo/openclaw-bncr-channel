@@ -12,7 +12,7 @@
  */
 
 import { asString, isPlainObject } from '../../core/value-sanitize.ts';
-import { extractConsumptionFields, parseBncrMarker } from './marker-parser.ts';
+import { extractConsumptionFields, resolveMarkerStripDecision } from './marker-parser.ts';
 
 const MEDIA_SOURCE_EXTRA_KEYS = ['path', 'paths', 'mediaUrl', 'mediaUrls'] as const;
 
@@ -104,13 +104,13 @@ function buildBranchExtra(args: {
  * Parse markers from one or more text fields and merge extras.
  * Marker params always override host/params extra and host control flags.
  */
-export function mergeMarkerAndHostFields(args: {
+export async function mergeMarkerAndHostFields(args: {
   texts: string[];
   hostExtra?: Record<string, unknown>;
   forceDocument?: boolean;
   gifPlayback?: boolean;
   silent?: boolean;
-}): {
+}): Promise<{
   cleanTexts: string[];
   markerParams: Record<string, unknown>;
   consumed: Partial<{
@@ -124,12 +124,12 @@ export function mergeMarkerAndHostFields(args: {
   }>;
   remaining: Record<string, unknown>;
   markerHasMsg: boolean;
-} {
+}> {
   const markerParams: Record<string, unknown> = {};
   const cleanTexts: string[] = [];
 
   for (const raw of args.texts) {
-    const { cleanText, params } = parseBncrMarker(raw);
+    const { cleanText, params } = await resolveMarkerStripDecision(raw);
     cleanTexts.push(cleanText);
     Object.assign(markerParams, params);
   }
@@ -222,13 +222,15 @@ function resolveDispatchMediaSources(args: {
  * Normalize any outbound send input into a single dispatch shape.
  * Callers only need to branch on `hasMedia` after this.
  */
-export function normalizeOutboundSend(input: UnifiedOutboundSendInput): NormalizedOutboundSend {
+export async function normalizeOutboundSend(
+  input: UnifiedOutboundSendInput,
+): Promise<NormalizedOutboundSend> {
   const rawText = asString(input.text ?? input.message ?? '', '');
   const rawCaption = asString(input.caption ?? '', '');
   // Prefer text/message; also parse caption so marker in either field works.
   const textsToParse = rawCaption && rawCaption !== rawText ? [rawText, rawCaption] : [rawText];
 
-  const { cleanTexts, consumed, remaining, markerHasMsg } = mergeMarkerAndHostFields({
+  const { cleanTexts, consumed, remaining, markerHasMsg } = await mergeMarkerAndHostFields({
     texts: textsToParse,
     hostExtra: isPlainObject(input.extra) ? input.extra : undefined,
     forceDocument: input.forceDocument,

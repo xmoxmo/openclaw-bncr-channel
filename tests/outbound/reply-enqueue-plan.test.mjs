@@ -8,17 +8,17 @@ import {
 
 const helpers = { asString: String };
 
-test('buildReplyEnqueuePlan returns text-only when payload has no media', () => {
-  const payload = normalizeReplyPayload({ text: 'hello' }, helpers);
+test('buildReplyEnqueuePlan returns text-only when payload has no media', async () => {
+  const payload = await normalizeReplyPayload({ text: 'hello' }, helpers);
 
   assert.deepEqual(buildReplyEnqueuePlan(payload), { kind: 'text-only' });
 });
 
-test('buildReplyEnqueuePlan keeps short single-media payload as media-only', () => {
-  const payload = normalizeReplyPayload(
+test('buildReplyEnqueuePlan keeps short single-media payload as media-only', async () => {
+  const payload = await normalizeReplyPayload(
     {
       text: 'caption',
-      mediaUrl: '/tmp/demo.png',
+      mediaUrl: 'tests/media/demo.png',
     },
     helpers,
   );
@@ -26,18 +26,18 @@ test('buildReplyEnqueuePlan keeps short single-media payload as media-only', () 
   assert.deepEqual(buildReplyEnqueuePlan(payload), { kind: 'media-only', clearText: false });
 });
 
-test('buildReplyEnqueuePlan splits long single-media text and multi-media payloads', () => {
-  const longSingleMedia = normalizeReplyPayload(
+test('buildReplyEnqueuePlan splits long single-media text and multi-media payloads', async () => {
+  const longSingleMedia = await normalizeReplyPayload(
     {
       text: 'x'.repeat(1021),
-      mediaUrl: '/tmp/demo.png',
+      mediaUrl: 'tests/media/demo.png',
     },
     helpers,
   );
-  const multiMedia = normalizeReplyPayload(
+  const multiMedia = await normalizeReplyPayload(
     {
       text: 'caption',
-      mediaUrls: ['/tmp/one.png', '/tmp/two.png'],
+      mediaUrls: ['tests/media/one.png', 'tests/media/two.png'],
     },
     helpers,
   );
@@ -52,12 +52,12 @@ test('buildReplyEnqueuePlan splits long single-media text and multi-media payloa
   });
 });
 
-test('normalizeReplyPayload preserves extra as a shallow copy', () => {
+test('normalizeReplyPayload preserves extra as a shallow copy', async () => {
   const extra = { parse_mode: 'Markdown', silent: true };
-  const payload = normalizeReplyPayload(
+  const payload = await normalizeReplyPayload(
     {
       text: 'hello',
-      mediaUrl: '/tmp/demo.png',
+      mediaUrl: 'tests/media/demo.png',
       extra,
     },
     helpers,

@@ -17,22 +17,22 @@ import { normalizeOutboundSend } from '../../src/messaging/outbound/normalize-ou
  *   replyToId?: string
  */
 
-test('normalizes text send', () => {
-  const r = normalizeOutboundSend({ message: ' hello ' });
+test('normalizes text send', async () => {
+  const r = await normalizeOutboundSend({ message: ' hello ' });
   assert.equal(r.text, ' hello ');
   assert.equal(r.hasMedia, false);
   assert.equal(r.asVoice, false);
   assert.equal(r.audioAsVoice, false);
 });
 
-test('falls back from caption to message when media is absent', () => {
-  const r = normalizeOutboundSend({ caption: 'caption only' });
+test('falls back from caption to message when media is absent', async () => {
+  const r = await normalizeOutboundSend({ caption: 'caption only' });
   assert.equal(r.text, 'caption only');
   assert.equal(r.hasMedia, false);
 });
 
-test('media field takes priority over path, filePath, and mediaUrl', () => {
-  const r = normalizeOutboundSend({
+test('media field takes priority over path, filePath, and mediaUrl', async () => {
+  const r = await normalizeOutboundSend({
     message: 'media caption',
     media: ' /tmp/media.png ',
     path: '/tmp/path.png',
@@ -44,8 +44,8 @@ test('media field takes priority over path, filePath, and mediaUrl', () => {
   assert.equal(r.mediaUrl, '/tmp/media.png');
 });
 
-test('path is used when media is absent', () => {
-  const r = normalizeOutboundSend({
+test('path is used when media is absent', async () => {
+  const r = await normalizeOutboundSend({
     caption: 'path caption',
     path: '/tmp/path.png',
     filePath: '/tmp/file-path.png',
@@ -56,8 +56,8 @@ test('path is used when media is absent', () => {
   assert.equal(r.mediaUrl, '/tmp/path.png');
 });
 
-test('filePath is used when media and path are absent', () => {
-  const r = normalizeOutboundSend({
+test('filePath is used when media and path are absent', async () => {
+  const r = await normalizeOutboundSend({
     message: 'filePath caption',
     filePath: '/tmp/file-path.png',
     mediaUrl: '/tmp/media-url.png',
@@ -67,8 +67,8 @@ test('filePath is used when media and path are absent', () => {
   assert.equal(r.mediaUrl, '/tmp/file-path.png');
 });
 
-test('mediaUrl is used when media, path, and filePath are absent', () => {
-  const r = normalizeOutboundSend({
+test('mediaUrl is used when media, path, and filePath are absent', async () => {
+  const r = await normalizeOutboundSend({
     message: 'mediaUrl caption',
     mediaUrl: '/tmp/media-url.png',
     audioAsVoice: true,
@@ -79,9 +79,9 @@ test('mediaUrl is used when media, path, and filePath are absent', () => {
   assert.equal(r.audioAsVoice, true);
 });
 
-test('extra object is preserved as a shallow copy', () => {
+test('extra object is preserved as a shallow copy', async () => {
   const extra = { replyMarkup: { inline_keyboard: [] }, priority: 1 };
-  const r = normalizeOutboundSend({ message: 'hello', extra });
+  const r = await normalizeOutboundSend({ message: 'hello', extra });
 
   assert.deepEqual(r.extra, extra);
   assert.notEqual(r.extra, extra);
@@ -90,13 +90,13 @@ test('extra object is preserved as a shallow copy', () => {
   assert.equal(r.extra.priority, 1);
 });
 
-test('non-object extra is ignored', () => {
-  const r = normalizeOutboundSend({ message: 'hello', extra: ['bad'] });
+test('non-object extra is ignored', async () => {
+  const r = await normalizeOutboundSend({ message: 'hello', extra: ['bad'] });
   assert.equal(r.extra, undefined);
 });
 
-test('mediaUrls are normalized when single mediaUrl is absent', () => {
-  const r = normalizeOutboundSend({
+test('mediaUrls are normalized when single mediaUrl is absent', async () => {
+  const r = await normalizeOutboundSend({
     message: 'album caption',
     mediaUrls: [' /tmp/one.png ', '', '/tmp/two.png', 123],
   });
@@ -106,8 +106,8 @@ test('mediaUrls are normalized when single mediaUrl is absent', () => {
   assert.deepEqual(r.mediaUrls, ['/tmp/one.png', '/tmp/two.png']);
 });
 
-test('mediaUrl is merged into mediaUrls without duplication', () => {
-  const r = normalizeOutboundSend({
+test('mediaUrl is merged into mediaUrls without duplication', async () => {
+  const r = await normalizeOutboundSend({
     caption: 'merged media',
     mediaUrl: '/tmp/one.png',
     mediaUrls: [' /tmp/two.png ', '/tmp/one.png', ''],
@@ -118,15 +118,15 @@ test('mediaUrl is merged into mediaUrls without duplication', () => {
   assert.deepEqual(r.mediaUrls, ['/tmp/two.png', '/tmp/one.png']);
 });
 
-test('asVoice without media returns hasMedia=false', () => {
-  const r = normalizeOutboundSend({ message: 'voice text', asVoice: true });
+test('asVoice without media returns hasMedia=false', async () => {
+  const r = await normalizeOutboundSend({ message: 'voice text', asVoice: true });
   assert.equal(r.asVoice, true);
   assert.equal(r.hasMedia, false);
   assert.equal(r.text, 'voice text');
 });
 
-test('asVoice allows mediaUrls without single mediaUrl', () => {
-  const r = normalizeOutboundSend({
+test('asVoice allows mediaUrls without single mediaUrl', async () => {
+  const r = await normalizeOutboundSend({
     caption: 'voice album',
     mediaUrls: ['/tmp/voice-1.ogg', '/tmp/voice-2.ogg'],
     asVoice: true,
@@ -137,22 +137,22 @@ test('asVoice allows mediaUrls without single mediaUrl', () => {
   assert.equal(r.asVoice, true);
 });
 
-test('empty content without media returns empty text', () => {
-  const r = normalizeOutboundSend({ message: '   ', caption: '' });
+test('empty content without media returns empty text', async () => {
+  const r = await normalizeOutboundSend({ message: '   ', caption: '' });
   assert.equal(r.text, '   ');
   assert.equal(r.hasMedia, false);
 });
 
-test('marker in message text is parsed and merged into extra', () => {
-  const r = normalizeOutboundSend({
+test('marker in message text is parsed and merged into extra', async () => {
+  const r = await normalizeOutboundSend({
     message: 'send [BncrParam:{"forceDocument":true,"customBadge":"VIP"}] this',
   });
   assert.equal(r.text, 'send this');
   assert.deepEqual(r.extra, { forceDocument: true, customBadge: 'VIP' });
 });
 
-test('marker consumption fields override params', () => {
-  const r = normalizeOutboundSend({
+test('marker consumption fields override params', async () => {
+  const r = await normalizeOutboundSend({
     message: 'voice [BncrParam:{"asVoice":true,"type":"audio"}] clip',
     mediaUrl: '/tmp/clip.ogg',
   });
@@ -163,8 +163,8 @@ test('marker consumption fields override params', () => {
   assert.equal(r.extra, undefined);
 });
 
-test('marker asVoice:false overrides host asVoice:true', () => {
-  const r = normalizeOutboundSend({
+test('marker asVoice:false overrides host asVoice:true', async () => {
+  const r = await normalizeOutboundSend({
     text: 'x [BncrParam:{"asVoice":false}]',
     asVoice: true,
     mediaUrl: '/tmp/clip.ogg',
@@ -172,21 +172,21 @@ test('marker asVoice:false overrides host asVoice:true', () => {
   assert.equal(r.asVoice, false);
 });
 
-test('marker asVoice without media returns hasMedia=false', () => {
-  const r = normalizeOutboundSend({ text: '[BncrParam:{"asVoice":true}] only marker' });
+test('marker asVoice without media returns hasMedia=false', async () => {
+  const r = await normalizeOutboundSend({ text: '[BncrParam:{"asVoice":true}] only marker' });
   assert.equal(r.text, 'only marker');
   assert.equal(r.asVoice, true);
   assert.equal(r.hasMedia, false);
 });
 
-test('marker-only message with extra does not throw', () => {
-  const r = normalizeOutboundSend({ text: '[BncrParam:{"forceDocument":true}]' });
+test('marker-only message with extra does not throw', async () => {
+  const r = await normalizeOutboundSend({ text: '[BncrParam:{"forceDocument":true}]' });
   assert.equal(r.text, '');
   assert.deepEqual(r.extra, { forceDocument: true });
 });
 
-test('marker in caption also extracts params', () => {
-  const r = normalizeOutboundSend({
+test('marker in caption also extracts params', async () => {
+  const r = await normalizeOutboundSend({
     caption: '[BncrParam:{"silent":true}] caption text',
     mediaUrl: '/tmp/file.jpg',
   });
@@ -195,8 +195,8 @@ test('marker in caption also extracts params', () => {
   assert.deepEqual(r.extra, { silent: true });
 });
 
-test('marker in both message and caption merges params (caption wins)', () => {
-  const r = normalizeOutboundSend({
+test('marker in both message and caption merges params (caption wins)', async () => {
+  const r = await normalizeOutboundSend({
     message: '[BncrParam:{"forceDocument":true}] msg',
     caption: '[BncrParam:{"gifPlayback":true}] cap',
   });
@@ -204,8 +204,8 @@ test('marker in both message and caption merges params (caption wins)', () => {
   assert.deepEqual(r.extra, { forceDocument: true, gifPlayback: true });
 });
 
-test('extra param object merges with marker params (marker wins)', () => {
-  const r = normalizeOutboundSend({
+test('extra param object merges with marker params (marker wins)', async () => {
+  const r = await normalizeOutboundSend({
     message: 'test [BncrParam:{"priority":2,"forceDocument":true}]',
     extra: { priority: 1, customKey: 'original' },
   });

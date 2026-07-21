@@ -117,7 +117,7 @@ function sanitizeDebugValue(key: string, value: unknown): unknown {
   return value;
 }
 
-export function sanitizeBncrDebugPayload(payload: Record<string, unknown>) {
+function sanitizeBncrDebugPayload(payload: Record<string, unknown>) {
   return sanitizeDebugPayload(payload);
 }
 

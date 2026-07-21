@@ -12,27 +12,67 @@ function sanitizeExtraSpread(extra: Record<string, unknown>): Record<string, unk
   return out;
 }
 
-export function buildFileTransferOutboxEntry(args: {
+export type BuildOutboxEntryParams = {
   createMessageId: () => string;
   now: () => number;
   normalizeAccountId: (accountId?: string | null) => string;
   accountId: string;
   sessionKey: string;
   route: BncrRoute;
-  mediaUrl: string;
-  mediaLocalRoots?: readonly string[];
-  text: string;
-  asVoice?: boolean;
-  audioAsVoice?: boolean;
+  /** For text sends this is 'text'; for media it may be undefined (inferred downstream). */
   type?: string;
-  extra?: Record<string, unknown>;
+  /** Message body (text content for text sends, caption for media sends). */
+  msg: string;
   kind?: 'tool' | 'block' | 'final';
   replyToId?: string;
   replyTargetPolicy?: OutboundReplyTargetPolicy;
+  extra?: Record<string, unknown>;
+  /** Media-only fields. When transferMode === 'media' these shape the frame. */
+  transferMode?: 'text' | 'media';
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  asVoice?: boolean;
+  audioAsVoice?: boolean;
   downloadMedia?: boolean;
-}): OutboxEntry {
+};
+
+/**
+ * Unified outbox entry builder.
+ *
+ * Text and media sends share the same outbox lifecycle (queue, drain, retry).
+ * The only structural difference is that media entries carry extra media fields
+ * and set `transferMode: 'media'` so the push layer knows to process media.
+ *
+ * - **Text**: `{ type: 'text', transferMode: undefined, no media fields }`
+ * - **Media**: `{ type: args.type || undefined, transferMode: 'media', ...media fields }`
+ */
+export function buildOutboxEntry(args: BuildOutboxEntryParams): OutboxEntry {
   const messageId = args.createMessageId();
   const createdAt = args.now();
+  const isMedia = args.transferMode === 'media';
+
+  const message: Record<string, unknown> = {
+    platform: args.route.platform,
+    groupId: args.route.groupId,
+    userId: args.route.userId,
+    type: isMedia ? args.type : 'text',
+    kind: args.kind,
+    msg: args.msg,
+    path: '',
+    base64: '',
+    fileName: '',
+    ...(args.extra ? sanitizeExtraSpread(args.extra) : {}),
+  };
+
+  if (isMedia) {
+    message.mediaUrl = args.mediaUrl || '';
+    if (args.mediaLocalRoots) message.mediaLocalRoots = Array.from(args.mediaLocalRoots);
+    message.asVoice = args.asVoice === true;
+    message.audioAsVoice = args.audioAsVoice === true;
+    message.downloadMedia = args.downloadMedia;
+    message.transferMode = 'media';
+  }
+
   return {
     messageId,
     accountId: args.normalizeAccountId(args.accountId),
@@ -49,82 +89,20 @@ export function buildFileTransferOutboxEntry(args: {
           replyToId: args.replyToId,
           replyTargetPolicy: args.replyTargetPolicy,
         }) || undefined,
-      message: {
-        platform: args.route.platform,
-        groupId: args.route.groupId,
-        userId: args.route.userId,
-        type: args.type,
-        // No fallback: when type is not provided the downstream adapter
-        // (tgBot / GewePlus) infers from mediaUrl extension.
-        kind: args.kind,
-        msg: args.text,
-        mediaUrl: args.mediaUrl,
-        mediaLocalRoots: args.mediaLocalRoots ? Array.from(args.mediaLocalRoots) : undefined,
-        asVoice: args.asVoice === true,
-        audioAsVoice: args.audioAsVoice === true,
-        downloadMedia: args.downloadMedia,
-        transferMode: 'media',
-        path: '',
-        base64: '',
-        fileName: '',
-        ...(args.extra ? sanitizeExtraSpread(args.extra) : {}),
+      message: message as {
+        platform: string;
+        groupId: string;
+        userId: string;
+        type?: string;
+        kind?: 'tool' | 'block' | 'final';
+        msg: string;
+        path: string;
+        base64: string;
+        fileName: string;
+        [key: string]: unknown;
       },
+      ts: createdAt,
     },
-    createdAt,
-    retryCount: 0,
-    nextAttemptAt: createdAt,
-  };
-}
-
-export function buildTextOutboxEntry(args: {
-  createMessageId: () => string;
-  now: () => number;
-  normalizeAccountId: (accountId?: string | null) => string;
-  accountId: string;
-  extra?: Record<string, unknown>;
-  sessionKey: string;
-  route: BncrRoute;
-  text: string;
-  kind?: 'tool' | 'block' | 'final';
-  replyToId?: string;
-  replyTargetPolicy?: OutboundReplyTargetPolicy;
-}): OutboxEntry {
-  const messageId = args.createMessageId();
-  const createdAt = args.now();
-  const frame = {
-    type: 'message.outbound',
-    messageId,
-    idempotencyKey: messageId,
-    sessionKey: args.sessionKey,
-    replyToId:
-      normalizeOutboundReplyToId({
-        kind: args.kind,
-        replyToId: args.replyToId,
-        replyTargetPolicy: args.replyTargetPolicy,
-      }) || undefined,
-    message: {
-      platform: args.route.platform,
-      groupId: args.route.groupId,
-      userId: args.route.userId,
-      type: 'text',
-      kind: args.kind,
-      msg: args.text,
-      path: '',
-      base64: '',
-      fileName: '',
-      // Extra fields from marker/pipeline spread for adapter-specific data
-      // (e.g. type="appmsg", msg="<appmsg>..." from [BncrParam:...])
-      ...(args.extra ? sanitizeExtraSpread(args.extra) : {}),
-    },
-    ts: createdAt,
-  };
-
-  return {
-    messageId,
-    accountId: args.normalizeAccountId(args.accountId),
-    sessionKey: args.sessionKey,
-    route: args.route,
-    payload: frame,
     createdAt,
     retryCount: 0,
     nextAttemptAt: createdAt,

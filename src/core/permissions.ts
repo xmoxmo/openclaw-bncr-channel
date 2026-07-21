@@ -10,7 +10,7 @@ type BncrElevatedConfigRoot = {
     };
   };
 };
-export function getBncrElevatedConfig(rootCfg: BncrElevatedConfigRoot | null | undefined) {
+function getBncrElevatedConfig(rootCfg: BncrElevatedConfigRoot | null | undefined) {
   const elevated = rootCfg?.tools?.elevated || {};
   const allowFrom = elevated?.allowFrom || {};
   const bncrRules = Array.isArray(allowFrom?.bncr)

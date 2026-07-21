@@ -24,7 +24,6 @@ test('bridge media facade preserves route selection, orchestrator delegation, an
     },
     replyMediaOrchestrator: {
       enqueueFromReply: (params) => replyCalls.push(['fromReply', params]),
-      enqueueReplyMediaEntries: (params) => replyCalls.push(['entries', params]),
     },
     logInfoJson: (scope, event, payload) => logs.push([scope, event, payload]),
     buildEnqueueFromReplyDebugInfo: (args) => ({

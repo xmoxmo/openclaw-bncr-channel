@@ -34,7 +34,7 @@ function getCounter(map: Map<string, number>, accountId: string): number {
   return map.get(normalizeAccountId(accountId)) || 0;
 }
 
-export function buildRuntimeQueueSnapshot(args: {
+function buildRuntimeQueueSnapshot(args: {
   accountId: string;
   outboxEntries: Iterable<OutboxEntry>;
   deadLetterEntries: Iterable<OutboxEntry>;
@@ -59,7 +59,7 @@ export function buildRuntimeQueueSnapshot(args: {
   };
 }
 
-export function buildRuntimeEventCounters(args: {
+function buildRuntimeEventCounters(args: {
   accountId: string;
   connectEventsByAccount: Map<string, number>;
   inboundEventsByAccount: Map<string, number>;

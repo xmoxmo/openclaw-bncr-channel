@@ -19,10 +19,7 @@ import {
   emitBncrLog,
   summarizeBncrTextPreview,
 } from './core/logging.ts';
-import {
-  buildFileTransferOutboxEntry as buildFileTransferOutboxEntryFromRuntime,
-  buildTextOutboxEntry as buildTextOutboxEntryFromRuntime,
-} from './core/outbox-entry-builders.ts';
+import { buildOutboxEntry as buildOutboxEntryFromRuntime } from './core/outbox-entry-builders.ts';
 import { summarizeOutboxEntry } from './core/outbox-summary.ts';
 import { normalizePersistedOutboxEntry as normalizePersistedOutboxEntryFromRuntime } from './core/persisted-outbox-entry.ts';
 import {
@@ -53,7 +50,6 @@ import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from './messaging/outbo
 import type {
   NormalizedReplyPayload,
   OutboundReplyTargetPolicy,
-  ReplyMediaEntriesParams,
   ReplyPayloadInput,
 } from './messaging/outbound/reply-enqueue.ts';
 import type { OpenClawChannelRuntimeApiHolder } from './openclaw/channel-runtime-contracts.ts';
@@ -67,7 +63,6 @@ import { createBncrBridgeConnectionFacade } from './plugin/bridge-connection-fac
 import { createBncrBridgeDiagnosticsFacade } from './plugin/bridge-diagnostics-facade.ts';
 import { createBncrBridgeDrainFacade } from './plugin/bridge-drain-facade.ts';
 import { createBncrBridgeExtendedDiagnosticsFacade } from './plugin/bridge-extended-diagnostics-facade.ts';
-import { createBncrBridgeFileTransferPushFacade } from './plugin/bridge-file-transfer-push-facade.ts';
 import {
   cleanupBncrBridgeRuntime,
   shutdownBncrBridgeService,
@@ -175,9 +170,9 @@ import { createBncrInboundSurfaceHandlersGroup } from './plugin/inbound-surface-
 import { createBncrMediaOrchestratorsRuntimeGroup } from './plugin/media-orchestrators-runtime-group.ts';
 import { BNCR_CHANNEL_META } from './plugin/meta.ts';
 import type { BncrOutboxAckOkTelemetryPatch } from './plugin/outbox-ack-outcome.ts';
-import { runBncrFileTransferOutboxPush } from './plugin/outbox-file-push-flow.ts';
+
 import { createBncrOutboxPushRouteRuntimeGroup } from './plugin/outbox-push-route-runtime-group.ts';
-import { runBncrTextOutboxPush } from './plugin/outbox-text-push-flow.ts';
+import { runBncrOutboxPush } from './plugin/outbox-unified-push-flow.ts';
 import {
   createBncrDeadLetterDiagnosticsHelpers,
   createBncrDiagnosticsSelectionHelpers,
@@ -1131,83 +1126,53 @@ class BncrBridgeRuntime {
   // This block prepares media, chooses transfer mode, sends chunk/complete
   // frames, and feeds successful media pushes back into the shared outbox path.
 
-  private async pushFileTransferSuccessPath(args: {
-    entry: OutboxEntry;
-    msg: Record<string, unknown>;
-    owner: ReturnType<BncrBridgeRuntime['resolveOutboxPushOwner']>;
-    connIds: Iterable<string>;
-    recentInboundReachable: boolean;
-    routeReason: string;
-    mediaUrl: string;
-  }): Promise<void> {
-    await this.fileTransferPushFacade.pushFileTransferSuccessPath(args);
-  }
-
   private handleFileTransferPushFailure(args: { entry: OutboxEntry; error: unknown }) {
-    this.fileTransferPushFacade.handleFileTransferPushFailure(args);
+    this.outboxPush.handleFileTransferPushFailure(args);
   }
 
   private handleFileTransferPushGuardFailure(
-    args: Parameters<typeof this.fileTransferPushFacade.handleFileTransferPushGuardFailure>[0],
+    args: Parameters<typeof this.outboxPush.handleFileTransferPushGuardFailure>[0],
   ) {
-    this.fileTransferPushFacade.handleFileTransferPushGuardFailure(args);
+    this.outboxPush.handleFileTransferPushGuardFailure(args);
   }
 
   // File-transfer outbound entry builders / dedupe -------------------------
 
-  private async tryPushFileTransferEntry(
-    entry: OutboxEntry,
-    msg: Record<string, unknown>,
-  ): Promise<boolean> {
-    return await runBncrFileTransferOutboxPush({
-      entry,
-      msg,
-      gatewayContext: this.gatewayContext,
-      owner: this.resolveOutboxPushOwner(entry.accountId),
-      resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
-      resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
-      hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
-      isRevalidatedAttemptedConn: (connId) => this.isRevalidatedAttemptedConn(entry, connId),
-      handleFileTransferPushGuardFailure: (flowArgs) =>
-        this.handleFileTransferPushGuardFailure(flowArgs),
-      pushFileTransferSuccessPath: (flowArgs) => this.pushFileTransferSuccessPath(flowArgs),
-      handleFileTransferPushFailure: (flowArgs) => this.handleFileTransferPushFailure(flowArgs),
-    });
-  }
-
-  private buildFileTransferOutboxEntry(params: {
+  private buildOutboxEntry(params: {
     accountId: string;
     sessionKey: string;
     route: BncrRoute;
-    mediaUrl: string;
-    mediaLocalRoots?: readonly string[];
-    text?: string;
-    asVoice?: boolean;
-    audioAsVoice?: boolean;
     type?: string;
-    extra?: Record<string, unknown>;
+    msg: string;
     kind?: 'tool' | 'block' | 'final';
     replyToId?: string;
     replyTargetPolicy?: OutboundReplyTargetPolicy;
+    extra?: Record<string, unknown>;
+    transferMode?: 'text' | 'media';
+    mediaUrl?: string;
+    mediaLocalRoots?: readonly string[];
+    asVoice?: boolean;
+    audioAsVoice?: boolean;
     downloadMedia?: boolean;
   }): OutboxEntry {
-    return buildFileTransferOutboxEntryFromRuntime({
+    return buildOutboxEntryFromRuntime({
       createMessageId: () => randomUUID(),
       now,
       normalizeAccountId,
       accountId: params.accountId,
       sessionKey: params.sessionKey,
       route: params.route,
-      mediaUrl: params.mediaUrl,
-      mediaLocalRoots: params.mediaLocalRoots,
-      text: asString(params.text || ''),
-      asVoice: params.asVoice,
-      audioAsVoice: params.audioAsVoice,
       type: params.type,
-      extra: params.extra,
+      msg: params.msg,
       kind: params.kind,
       replyToId: asString(params.replyToId || '').trim() || undefined,
       replyTargetPolicy: params.replyTargetPolicy,
+      extra: params.extra,
+      transferMode: params.transferMode,
+      mediaUrl: params.mediaUrl,
+      mediaLocalRoots: params.mediaLocalRoots,
+      asVoice: params.asVoice,
+      audioAsVoice: params.audioAsVoice,
       downloadMedia: params.downloadMedia,
     });
   }
@@ -1321,52 +1286,33 @@ class BncrBridgeRuntime {
   // This is the core outbound state machine: build entries, enqueue them,
   // push them, observe ACK outcomes, and terminate in retry or dead-letter.
 
-  private buildTextOutboxEntry(params: {
-    accountId: string;
-    sessionKey: string;
-    route: BncrRoute;
-    text: string;
-    extra?: Record<string, unknown>;
-    kind?: 'tool' | 'block' | 'final';
-    replyToId?: string;
-    replyTargetPolicy?: OutboundReplyTargetPolicy;
-  }): OutboxEntry {
-    return buildTextOutboxEntryFromRuntime({
-      createMessageId: () => randomUUID(),
-      now,
-      normalizeAccountId,
-      accountId: params.accountId,
-      sessionKey: params.sessionKey,
-      route: params.route,
-      text: params.text,
-      extra: params.extra && Object.keys(params.extra).length > 0 ? { ...params.extra } : undefined,
-      kind: params.kind,
-      replyToId: params.replyToId,
-      replyTargetPolicy: params.replyTargetPolicy,
-    });
-  }
-
   private async tryPushEntry(entry: OutboxEntry): Promise<boolean> {
-    const msg =
-      isPlainObject(entry.payload) &&
-      isPlainObject((entry.payload as Record<string, unknown>).message)
-        ? ((entry.payload as Record<string, unknown>).message as Record<string, unknown>)
-        : null;
-    if (msg?.transferMode === 'media') {
-      return this.tryPushFileTransferEntry(entry, msg);
-    }
-    return this.tryPushTextEntry(entry);
-  }
-
-  private pushTextSuccessPath(args: {
-    entry: OutboxEntry;
-    owner: ReturnType<BncrBridgeRuntime['resolveOutboxPushOwner']>;
-    connIds: Iterable<string>;
-    recentInboundReachable: boolean;
-    routeReason: string;
-    ownerConnId?: string;
-  }) {
-    this.outboxPush.pushTextSuccessPath(args);
+    return runBncrOutboxPush({
+      entry,
+      gatewayContext: this.gatewayContext,
+      owner: this.resolveOutboxPushOwner(entry.accountId),
+      resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
+      resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
+      hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
+      isRevalidatedAttemptedConn: (connId) => this.isRevalidatedAttemptedConn(entry, connId),
+      recordOutboxPrePushFailure: (flowArgs) => this.recordOutboxPrePushFailure(flowArgs),
+      logOutboxPushSkip: (flowArgs) => this.logOutboxPushSkip(flowArgs),
+      handleFileTransferPushGuardFailure: (flowArgs) =>
+        this.handleFileTransferPushGuardFailure(flowArgs),
+      handleTextPushFailure: (flowArgs) => this.handleTextPushFailure(flowArgs),
+      handleFileTransferPushFailure: (flowArgs) => this.handleFileTransferPushFailure(flowArgs),
+      // Unified push deps
+      pushEvent: BNCR_PUSH_EVENT,
+      gatewayBroadcastToConnIds: (event, payload, connIds) =>
+        this.gatewayContext?.broadcastToConnIds(event, payload, connIds),
+      recordOutboxPushSuccess: (args) => this.recordOutboxPushSuccess(args),
+      logOutboxRouteSelect: (args) => this.logOutboxRouteSelect(args),
+      logOutboxPushOkSummary: (mid) => this.logOutboxPushOkSummary(mid),
+      logOutboundSummary: (entry) => this.logOutboundSummary(entry),
+      logOutboxPushOk: (args) => this.logOutboxPushOk(args),
+      transferMediaToBncrClient: (params) => this.transferMediaToBncrClient(params),
+      buildFileTransferOutboundFrame: (params) => this.buildFileTransferOutboundFrame(params),
+    });
   }
 
   private handleTextPushFailure(args: { entry: OutboxEntry; error: unknown }) {
@@ -1378,22 +1324,6 @@ class BncrBridgeRuntime {
   // Outbound diagnostics/logging helpers -----------------------------------
   // Keep the compact logging helpers adjacent to the outbound state machine so
   // queue transitions and emitted diagnostics remain easy to correlate.
-
-  private async tryPushTextEntry(entry: OutboxEntry): Promise<boolean> {
-    return await runBncrTextOutboxPush({
-      entry,
-      gatewayContext: this.gatewayContext,
-      owner: this.resolveOutboxPushOwner(entry.accountId),
-      resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
-      resolveRecentInboundConnIds: (accountId) => this.resolveRecentInboundConnIds(accountId),
-      hasRecentInboundReachability: (accountId) => this.hasRecentInboundReachability(accountId),
-      isRevalidatedAttemptedConn: (connId) => this.isRevalidatedAttemptedConn(entry, connId),
-      recordOutboxPrePushFailure: (flowArgs) => this.recordOutboxPrePushFailure(flowArgs),
-      logOutboxPushSkip: (flowArgs) => this.logOutboxPushSkip(flowArgs),
-      pushTextSuccessPath: (flowArgs) => this.pushTextSuccessPath(flowArgs),
-      handleTextPushFailure: (flowArgs) => this.handleTextPushFailure(flowArgs),
-    });
-  }
 
   private logOutboxPushSkip(args: {
     messageId: string;
@@ -2734,8 +2664,7 @@ class BncrBridgeRuntime {
     logInfo: (scope, message, options) => this.logInfo(scope, message, options),
     logEnqueueFromReply: (args) => this.logEnqueueFromReply(args),
     enqueueOutbound: (entry) => this.enqueueOutbound(entry),
-    buildTextOutboxEntry: (args) => this.buildTextOutboxEntry(args),
-    buildFileTransferOutboxEntry: (args) => this.buildFileTransferOutboxEntry(args),
+    buildOutboxEntry: (args) => this.buildOutboxEntry(args),
     rememberRecentMediaSend: (args) => this.rememberRecentMediaSend(args),
     tryBuildMediaDedupeFallback: (args) => this.tryBuildMediaDedupeFallback(args),
   });
@@ -2789,7 +2718,7 @@ class BncrBridgeRuntime {
     mediaLocalRoots?: readonly string[];
     replyTargetPolicy?: OutboundReplyTargetPolicy;
   }) {
-    this.bridgeMediaFacade.enqueueFromReply(params);
+    return this.bridgeMediaFacade.enqueueFromReply(params);
   }
 
   private logEnqueueFromReply(args: {
@@ -2828,24 +2757,6 @@ class BncrBridgeRuntime {
     },
     normalizeAccountId,
   });
-
-  private readonly fileTransferPushFacade = createBncrBridgeFileTransferPushFacade({
-    pushEvent: BNCR_PUSH_EVENT,
-    getGatewayContext: () => this.gatewayContext,
-    transferMediaToBncrClient: (params) => this.transferMediaToBncrClient(params),
-    buildFileTransferOutboundFrame: (params) => this.buildFileTransferOutboundFrame(params),
-    logOutboxRouteSelect: (args) => this.logOutboxRouteSelect(args),
-    recordOutboxPushSuccess: (args) => this.recordOutboxPushSuccess(args),
-    logOutboxPushOkSummary: (messageId) => this.logOutboxPushOkSummary(messageId),
-    logOutboxPushOk: (args) => this.logOutboxPushOk(args),
-    handleFileTransferPushFailure: (args) => this.outboxPush.handleFileTransferPushFailure(args),
-    handleFileTransferPushGuardFailure: (args) =>
-      this.outboxPush.handleFileTransferPushGuardFailure(args),
-  });
-
-  private enqueueReplyMediaEntries(params: ReplyMediaEntriesParams) {
-    this.bridgeMediaFacade.enqueueReplyMediaEntries(params);
-  }
 
   // Surface runtime assembly -----------------------------------------------
   // The bridge remains the ownership root, but these builders keep the final

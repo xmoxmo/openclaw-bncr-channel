@@ -169,7 +169,7 @@ test('sendDispatch passes raw marker text to bridge; normalisation downstream', 
   await runtime.channelSendText({
     accountId: 'Primary',
     to: 'Bncr:tgBot:0:10001',
-    text: '[BncrParam:{"type":"file","path":"/tmp/doc.pdf"}] send as file',
+    text: '[BncrParam:{"type":"file","path":"tests/media/doc.pdf"}] send as file',
     extra: { gifPlayback: true },
   });
 

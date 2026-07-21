@@ -8,7 +8,7 @@ import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { BncrChannelSendContext, BncrVerifiedTarget } from './channel-runtime-types.ts';
 
 /**
- * Resolve downloadMedia with cascade: override (host/user) > ctx > scene.
+ * Resolve downloadMedia with cascade: host override > ctx > scene > default(false).
  * Marker-level downloadMedia is extracted downstream by the orchestrator's
  * normalisation and has highest priority (overrides whatever we pass).
  */
@@ -52,7 +52,7 @@ export type BncrChannelSendRuntime = {
     mediaLocalRoots?: readonly string[];
   }) => Promise<void>;
   listOutboxEntries: () => OutboxEntry[];
-  /** Resolve downloadMedia from scene config: marker > scene > global > default(false). */
+  /** Resolve downloadMedia from scene config (host/ctx already resolved above). */
   resolveSceneDownloadMedia?: (to: string) => boolean | undefined;
 };
 
@@ -81,8 +81,9 @@ async function enqueueChannelMessageHandoff(
 }
 
 /**
- * Resolve downloadMedia from scene config when not already set by marker/host.
- * Scene cascade: marker > scene config > global > default(false).
+ * Resolve downloadMedia from scene config when not already set.
+ * Scene cascade: host override > ctx > scene config > default(false).
+ * (Marker-level downloadMedia overrides everything and is handled downstream.)
  */
 
 export function createBncrChannelSendRuntime(runtime: BncrChannelSendRuntime) {

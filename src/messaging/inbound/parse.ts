@@ -58,7 +58,7 @@ function asInboundMediaItems(params: BncrInboundParamsInput): BncrInboundMediaIt
   }));
 }
 
-export function inboundDedupKey(params: {
+function inboundDedupKey(params: {
   accountId: string;
   platform: string;
   groupId: string;

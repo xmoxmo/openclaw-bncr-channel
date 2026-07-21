@@ -44,7 +44,7 @@ export const pluginRoot = resolveBncrPluginRoot(pluginFile);
 const runtimeSourceDir = resolveBncrRuntimeSourceDir(pluginDir);
 let runtime: LoadedRuntime | null = null;
 
-export const readPluginVersion = (rootDir = pluginRoot) => {
+const readPluginVersion = (rootDir = pluginRoot) => {
   try {
     const raw = fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8');
     const parsed = JSON.parse(raw);

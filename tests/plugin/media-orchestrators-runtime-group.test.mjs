@@ -29,25 +29,21 @@ function createRuntime() {
     enqueueOutbound(entry) {
       calls.enqueueOutbound.push(entry);
     },
-    buildTextOutboxEntry(args) {
-      return {
-        messageId: `text-${calls.enqueueOutbound.length + 1}`,
+    buildOutboxEntry(args) {
+      const isMedia = args.transferMode === 'media';
+      const entry = {
+        messageId: isMedia
+          ? `file-${calls.enqueueOutbound.length + 1}`
+          : `text-${calls.enqueueOutbound.length + 1}`,
         retryCount: 0,
         nextAttemptAt: 1,
         createdAt: 1,
-        payload: { text: args.text },
+        payload: isMedia
+          ? { message: { mediaUrl: args.mediaUrl, msg: args.msg, transferMode: 'media' } }
+          : { message: { msg: args.msg } },
         ...args,
       };
-    },
-    buildFileTransferOutboxEntry(args) {
-      return {
-        messageId: `file-${calls.enqueueOutbound.length + 1}`,
-        retryCount: 0,
-        nextAttemptAt: 1,
-        createdAt: 1,
-        payload: { message: { mediaUrl: args.mediaUrl, msg: args.text, transferMode: 'media' } },
-        ...args,
-      };
+      return entry;
     },
     rememberRecentMediaSend(args) {
       calls.rememberRecentMediaSend.push(args);
@@ -69,7 +65,7 @@ test('media orchestrators runtime group exposes base64 transfer and reply enqueu
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },
     mediaUrl: '/tmp/a.png',
   });
-  group.replyMediaOrchestrator.enqueueFromReply({
+  await group.replyMediaOrchestrator.enqueueFromReply({
     accountId: 'Primary',
     sessionKey: 'session-1',
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },
@@ -86,12 +82,12 @@ test('media orchestrators runtime group exposes base64 transfer and reply enqueu
   assert.equal(calls.rememberRecentMediaSend.length, 1);
 });
 
-test('reply media orchestrator forwards extra metadata into file-transfer entry without retaining caller object', () => {
+test('reply media orchestrator forwards extra metadata into file-transfer entry without retaining caller object', async () => {
   const { runtime, calls } = createRuntime();
   const group = createBncrMediaOrchestratorsRuntimeGroup(runtime);
   const extra = { parse_mode: 'MarkdownV2', protect_content: true };
 
-  group.replyMediaOrchestrator.enqueueFromReply({
+  await group.replyMediaOrchestrator.enqueueFromReply({
     accountId: 'Primary',
     sessionKey: 'session-1',
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },

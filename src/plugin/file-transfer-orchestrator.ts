@@ -193,7 +193,38 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
   };
   const HTTP_URL_RE = /^https?:\/\//i;
 
-  /** Try HEAD for Content-Type; fall back to Range+sniff for magic bytes when unclear. */
+  const EXT_TO_MIME: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+    heic: 'image/heic',
+    heif: 'image/heif',
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+    mkv: 'video/x-matroska',
+    webm: 'video/webm',
+    avi: 'video/x-msvideo',
+    m4v: 'video/x-m4v',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
+    oga: 'audio/ogg',
+    opus: 'audio/opus',
+    m4a: 'audio/mp4',
+    aac: 'audio/aac',
+    flac: 'audio/flac',
+  };
+
+  function mimeFromUrlExt(url: string): string | undefined {
+    const clean = url.split(/[?#]/, 1)[0] || '';
+    const ext = clean.includes('.') ? clean.slice(clean.lastIndexOf('.') + 1).toLowerCase() : '';
+    return EXT_TO_MIME[ext];
+  }
+
+  /** Try HEAD for Content-Type; fall back to Range+sniff for magic bytes; then URL extension. */
   async function resolveRemoteMediaType(url: string): Promise<{ mimeType?: string }> {
     // 1) HEAD -> Content-Type
     let headerType = '';
@@ -229,8 +260,14 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
       if (!sniffed) return {};
       return { mimeType: sniffed };
     } catch {
-      return {};
+      /* Range sniff failed, fall through to extension inference */
     }
+
+    // 3) URL extension -> mime type (fallback when HEAD and Range both fail)
+    const extMime = mimeFromUrlExt(url);
+    if (extMime) return { mimeType: extMime };
+
+    return {};
   }
 
   /** Minimal magic-byte MIME sniffer for the first ~512 bytes. */

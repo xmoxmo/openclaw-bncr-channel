@@ -141,7 +141,7 @@ function scoreOutboundPushConnection(args: {
   };
 }
 
-export function compareOutboundPushConnections(args: {
+function compareOutboundPushConnections(args: {
   a: BncrConnection;
   b: BncrConnection;
   now: number;

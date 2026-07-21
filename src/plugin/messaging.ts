@@ -67,12 +67,12 @@ function isDisplayTarget(
   return Boolean(value && typeof value === 'object');
 }
 
-export function normalizeBncrMessagingTarget(raw: string) {
+function normalizeBncrMessagingTarget(raw: string) {
   const input = asSanitizedString(raw).trim();
   return input || undefined;
 }
 
-export function formatBncrMessagingTargetDisplay({ target }: BncrMessagingTargetDisplayInput) {
+function formatBncrMessagingTargetDisplay({ target }: BncrMessagingTargetDisplayInput) {
   if (typeof target === 'string') {
     const parsed = parseExplicitTarget(asSanitizedString(target).trim());
     return parsed?.route ? formatBncrHumanDisplay(parsed.route) : asSanitizedString(target).trim();
@@ -183,7 +183,7 @@ export function createBncrMessagingSurface(getBridge: () => BncrMessagingRuntime
   };
 }
 
-export function createBncrMessagingTargetResolver(getBridge: () => BncrMessagingRuntimeBridge) {
+function createBncrMessagingTargetResolver(getBridge: () => BncrMessagingRuntimeBridge) {
   return {
     looksLikeId: (raw: string, normalized?: string) => {
       return looksLikeBncrExplicitTarget(asSanitizedString(normalized || raw).trim());

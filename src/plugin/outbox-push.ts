@@ -3,12 +3,7 @@ import {
   resolveFileTransferFailureState,
 } from '../core/outbox-file-transfer-failure.ts';
 import { buildTextPushFailureArgs } from '../core/outbox-text-push-failure.ts';
-import {
-  buildTextPushBroadcastPayload,
-  buildTextPushOkArgs,
-  buildTextPushRouteSelectArgs,
-  buildTextPushSuccessArgs,
-} from '../core/outbox-text-push-success.ts';
+
 import type { BncrConnection, OutboxEntry } from '../core/types.ts';
 import {
   buildOutboxPushOkDebugInfo,
@@ -137,51 +132,6 @@ export function createBncrOutboxPush(runtime: BncrOutboxPushRuntime) {
     );
   };
 
-  const pushTextSuccessPath = (args: {
-    entry: OutboxEntry;
-    owner: BncrConnection | null;
-    connIds: Iterable<string>;
-    recentInboundReachable: boolean;
-    routeReason: string;
-    ownerConnId?: string;
-  }) => {
-    runtime.gatewayBroadcastToConnIds(
-      runtime.pushEvent,
-      buildTextPushBroadcastPayload({
-        payload: args.entry.payload,
-        messageId: args.entry.messageId,
-      }),
-      new Set(args.connIds),
-    );
-    logOutboxRouteSelect(
-      buildTextPushRouteSelectArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        routeReason: args.routeReason,
-        recentInboundReachable: args.recentInboundReachable,
-        owner: args.owner,
-        event: runtime.pushEvent,
-      }),
-    );
-    runtime.recordOutboxPushSuccess(
-      buildTextPushSuccessArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        ownerConnId: args.ownerConnId,
-        ownerClientId: args.ownerConnId ? args.owner?.clientId : undefined,
-      }),
-    );
-    logOutboxPushOkSummary(args.entry.messageId);
-    logOutboxPushOk(
-      buildTextPushOkArgs({
-        entry: args.entry,
-        connIds: args.connIds,
-        recentInboundReachable: args.recentInboundReachable,
-        event: runtime.pushEvent,
-      }),
-    );
-  };
-
   const handleTextPushFailure = (args: { entry: OutboxEntry; error: unknown }) => {
     runtime.recordOutboxPushFailure({
       entry: args.entry,
@@ -253,7 +203,6 @@ export function createBncrOutboxPush(runtime: BncrOutboxPushRuntime) {
   };
 
   return {
-    pushTextSuccessPath,
     handleTextPushFailure,
     handleFileTransferPushFailure,
     handleFileTransferPushGuardFailure,

@@ -5,10 +5,10 @@ export type LogDedupeStateEntry = {
 
 export type LogDedupeState = Map<string, LogDedupeStateEntry>;
 
-export const LOG_DEDUPE_STATE_TTL_MS = 10 * 60 * 1000;
-export const LOG_DEDUPE_STATE_MAX_ENTRIES = 1_000;
+const LOG_DEDUPE_STATE_TTL_MS = 10 * 60 * 1000;
+const LOG_DEDUPE_STATE_MAX_ENTRIES = 1_000;
 
-export function pruneLogDedupeState(
+function pruneLogDedupeState(
   state: LogDedupeState,
   currentTime: number,
   options?: {

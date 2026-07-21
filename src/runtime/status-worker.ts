@@ -49,7 +49,7 @@ export type ChannelAccountWorkerHandle = {
   healthLogState?: HealthStatusLogState;
 };
 
-export const HEALTH_STATUS_STABLE_WINDOW_MS = 10_000;
+const HEALTH_STATUS_STABLE_WINDOW_MS = 10_000;
 
 export type HealthStatusLogState = {
   emittedSig: string | null;
@@ -112,11 +112,7 @@ type StatusWorkerRuntime = {
   hooks: StatusWorkerHooks;
 };
 
-export function clearBncrStatusWorker(
-  runtime: StatusWorkerRuntime,
-  accountId: string,
-  reason: string,
-) {
+function clearBncrStatusWorker(runtime: StatusWorkerRuntime, accountId: string, reason: string) {
   const worker = runtime.workers.get(accountId);
   if (!worker) return false;
   worker.finish(reason);

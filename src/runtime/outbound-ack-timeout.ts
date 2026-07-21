@@ -42,9 +42,7 @@ function isAdaptiveAckRecovered(args: {
   );
 }
 
-export function computeBncrRecommendedAckTimeoutReason(
-  args: ComputeBncrRecommendedAckTimeoutReasonArgs,
-) {
+function computeBncrRecommendedAckTimeoutReason(args: ComputeBncrRecommendedAckTimeoutReasonArgs) {
   if (args.recentAckTimeoutCount <= 0) return 'no-timeout-evidence';
   if (args.lateAckOkCount <= 0) return 'no-late-ack-evidence';
   if (typeof args.lastLateAckPushLatencyMs !== 'number') return 'missing-latency';
@@ -54,7 +52,7 @@ export function computeBncrRecommendedAckTimeoutReason(
   return 'late-ack-observed';
 }
 
-export function computeBncrRecommendedAckTimeoutMs(args: ComputeBncrRecommendedAckTimeoutArgs) {
+function computeBncrRecommendedAckTimeoutMs(args: ComputeBncrRecommendedAckTimeoutArgs) {
   if (
     args.lateAckOkCount <= 0 ||
     args.recentAckTimeoutCount <= 0 ||

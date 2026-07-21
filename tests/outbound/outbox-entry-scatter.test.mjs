@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  buildFileTransferOutboxEntry,
-  buildTextOutboxEntry,
-} from '../../src/core/outbox-entry-builders.ts';
+import { buildOutboxEntry } from '../../src/core/outbox-entry-builders.ts';
 
 function makeId() {
   let i = 0;
@@ -20,7 +17,7 @@ const baseRoute = { platform: 'tgBot', groupId: '0', userId: '10001' };
  * Text outbox — extra fields scattered into payload.message, extra key absent
  * =================================================================== */
 test('[outbox] text entry scatters extra into message, no extra key', () => {
-  const entry = buildTextOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -28,7 +25,7 @@ test('[outbox] text entry scatters extra into message, no extra key', () => {
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
-    text: 'hello',
+    msg: 'hello',
     kind: 'final',
     replyToId: 'reply-1',
     replyTargetPolicy: 'agent-default',
@@ -47,7 +44,7 @@ test('[outbox] text entry scatters extra into message, no extra key', () => {
 });
 
 test('[outbox] text entry with no extra keeps message clean', () => {
-  const entry = buildTextOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -55,7 +52,7 @@ test('[outbox] text entry with no extra keeps message clean', () => {
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
-    text: 'hi',
+    msg: 'hi',
     kind: undefined,
     replyToId: undefined,
     replyTargetPolicy: 'agent-default',
@@ -67,7 +64,7 @@ test('[outbox] text entry with no extra keeps message clean', () => {
 });
 
 test('[outbox] text entry extra type field overrides default type', () => {
-  const entry = buildTextOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -75,7 +72,7 @@ test('[outbox] text entry extra type field overrides default type', () => {
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
-    text: '<appmsg/>',
+    msg: '<appmsg/>',
     kind: 'final',
     replyToId: undefined,
     replyTargetPolicy: 'agent-default',
@@ -91,7 +88,7 @@ test('[outbox] text entry extra type field overrides default type', () => {
  * Media outbox — extra fields scattered into message, extra key absent
  * =================================================================== */
 test('[outbox] media entry scatters extra into message, no extra key', () => {
-  const entry = buildFileTransferOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -100,7 +97,8 @@ test('[outbox] media entry scatters extra into message, no extra key', () => {
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
     mediaUrl: '/tmp/photo.jpg',
-    text: 'see this',
+    transferMode: 'media',
+    msg: 'see this',
     asVoice: false,
     audioAsVoice: false,
     type: 'image',
@@ -123,7 +121,7 @@ test('[outbox] media entry scatters extra into message, no extra key', () => {
 });
 
 test('[outbox] media entry with no extra keeps message clean', () => {
-  const entry = buildFileTransferOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -132,7 +130,8 @@ test('[outbox] media entry with no extra keeps message clean', () => {
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
     mediaUrl: '/tmp/vid.mp4',
-    text: '',
+    transferMode: 'media',
+    msg: '',
     asVoice: false,
     audioAsVoice: false,
     type: undefined,
@@ -147,7 +146,7 @@ test('[outbox] media entry with no extra keeps message clean', () => {
 });
 
 test('[outbox] media entry with empty extra (empty object) keeps message clean', () => {
-  const entry = buildFileTransferOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -156,7 +155,8 @@ test('[outbox] media entry with empty extra (empty object) keeps message clean',
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
     mediaUrl: '/tmp/a.pdf',
-    text: '',
+    transferMode: 'media',
+    msg: '',
     asVoice: false,
     audioAsVoice: false,
     type: 'file',
@@ -172,7 +172,7 @@ test('[outbox] media entry with empty extra (empty object) keeps message clean',
 });
 
 test('[outbox] media entry type not set defaults to undefined (not file) for downstream inference', () => {
-  const entry = buildFileTransferOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -181,7 +181,8 @@ test('[outbox] media entry type not set defaults to undefined (not file) for dow
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
     mediaUrl: '/tmp/photo.jpg',
-    text: 'caption',
+    transferMode: 'media',
+    msg: 'caption',
     asVoice: false,
     audioAsVoice: false,
     // type intentionally omitted — downstream adapter infers from extension
@@ -198,7 +199,7 @@ test('[outbox] media entry type not set defaults to undefined (not file) for dow
 });
 
 test('[outbox] media entry explicit type is preserved', () => {
-  const entry = buildFileTransferOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: makeId(),
     now,
     normalizeAccountId: norm,
@@ -207,7 +208,8 @@ test('[outbox] media entry explicit type is preserved', () => {
     sessionKey: 'agent:orion:bncr:group:xxx',
     route: baseRoute,
     mediaUrl: '/tmp/photo.jpg',
-    text: 'caption',
+    transferMode: 'media',
+    msg: 'caption',
     asVoice: false,
     audioAsVoice: false,
     type: 'image',

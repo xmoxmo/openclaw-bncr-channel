@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildTextOutboxEntry } from '../../src/core/outbox-entry-builders.ts';
+import { buildOutboxEntry } from '../../src/core/outbox-entry-builders.ts';
 import { buildBncrNativeReplyDeliveryPayload } from '../../src/messaging/inbound/native-reply-delivery.ts';
 import {
   enqueueReplyTextEntry,
@@ -91,7 +91,7 @@ test('native command tool reply keeps reply target after enqueue normalization',
     effectiveReply: { blockStreaming: true, allowTool: true },
     msgId: '1780776712995',
   });
-  const normalized = normalizeReplyPayload(
+  const normalized = await normalizeReplyPayload(
     payload,
     { asString: String },
     { replyTargetPolicy: 'preserve' },
@@ -107,8 +107,8 @@ test('native command tool reply keeps reply target after enqueue normalization',
     },
     {
       enqueueOutbound: (entry) => enqueued.push(entry),
-      buildTextOutboxEntry: (args) =>
-        buildTextOutboxEntry({
+      buildOutboxEntry: (args) =>
+        buildOutboxEntry({
           ...args,
           createMessageId: () => 'native-tool-reply-target',
           now: () => 1000,

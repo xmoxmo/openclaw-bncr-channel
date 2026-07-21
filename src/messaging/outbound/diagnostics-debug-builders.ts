@@ -348,18 +348,3 @@ export function buildPushFailureDebugInfo(args: {
       (typeof args.lastError === 'string' && args.lastError) || OUTBOUND_TERMINAL_REASON.PUSH_RETRY,
   };
 }
-
-export function buildReplyMediaFallbackDebugInfo(args: {
-  sessionKey: string;
-  mediaUrl: string;
-  replyToId: string;
-  fallback: { text: string; reason: string };
-}) {
-  return {
-    sessionKey: args.sessionKey,
-    mediaUrl: args.mediaUrl,
-    replyToId: args.replyToId || undefined,
-    fallbackText: args.fallback.text,
-    reason: args.fallback.reason,
-  };
-}

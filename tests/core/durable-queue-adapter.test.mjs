@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  buildFileTransferOutboxEntry,
-  buildTextOutboxEntry,
-} from '../../src/core/outbox-entry-builders.ts';
+import { buildOutboxEntry } from '../../src/core/outbox-entry-builders.ts';
 import { buildBncrDurableQueuedResult } from '../../src/messaging/outbound/durable-queue-adapter.ts';
 
 const route = {
@@ -14,7 +11,7 @@ const route = {
 };
 
 function buildTextEntry(overrides = {}) {
-  return buildTextOutboxEntry({
+  return buildOutboxEntry({
     createMessageId: () => overrides.messageId ?? 'msg-text-1',
     now: () => overrides.createdAt ?? 1_790_000_000_000,
     normalizeAccountId: (value) => value || 'Primary',
@@ -22,7 +19,7 @@ function buildTextEntry(overrides = {}) {
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:direct:demo',
     route,
-    text: 'hello queued',
+    msg: 'hello queued',
     kind: 'final',
     replyToId: overrides.replyToId ?? 'source-mid-1',
   });
@@ -57,7 +54,7 @@ test('buildBncrDurableQueuedResult reports plugin accepted queued text without c
 });
 
 test('buildBncrDurableQueuedResult maps file transfer entries as queued media receipts', () => {
-  const entry = buildFileTransferOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: () => 'file-msg-1',
     now: () => 1_790_000_123_000,
     normalizeAccountId: (value) => value || 'Primary',
@@ -66,7 +63,8 @@ test('buildBncrDurableQueuedResult maps file transfer entries as queued media re
     sessionKey: 'agent:orion:bncr:direct:demo',
     route,
     mediaUrl: '/tmp/demo.png',
-    text: 'image caption',
+    transferMode: 'media',
+    msg: 'image caption',
     kind: 'final',
     replyToId: 'source-mid-file',
   });
@@ -82,7 +80,7 @@ test('buildBncrDurableQueuedResult maps file transfer entries as queued media re
 });
 
 test('buildBncrDurableQueuedResult maps voice-like file transfer entries as queued voice receipts', () => {
-  const entry = buildFileTransferOutboxEntry({
+  const entry = buildOutboxEntry({
     createMessageId: () => 'voice-msg-1',
     now: () => 1_790_000_456_000,
     normalizeAccountId: (value) => value || 'Primary',
@@ -91,7 +89,8 @@ test('buildBncrDurableQueuedResult maps voice-like file transfer entries as queu
     sessionKey: 'agent:orion:bncr:direct:demo',
     route,
     mediaUrl: '/tmp/demo.ogg',
-    text: '',
+    transferMode: 'media',
+    msg: '',
     asVoice: true,
   });
 

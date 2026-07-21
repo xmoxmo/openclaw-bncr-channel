@@ -36,7 +36,7 @@ export function buildSceneKey(parsed: ParsedInbound): string {
     : `${parsed.platform}:${parsed.userId}`;
 }
 
-export function buildSceneRecord(args: {
+function buildSceneRecord(args: {
   parsed: ParsedInbound;
   sceneKey: string;
   kind: BncrSceneKind;

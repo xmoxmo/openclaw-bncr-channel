@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  buildFileTransferOutboxEntry,
-  buildTextOutboxEntry,
-} from '../../src/core/outbox-entry-builders.ts';
+import { buildOutboxEntry } from '../../src/core/outbox-entry-builders.ts';
 import { buildBncrMediaOutboundFrame } from '../../src/messaging/outbound/media.ts';
 
 const route = { platform: 'tgBot', groupId: '-1001', userId: '10001' };
@@ -19,24 +16,24 @@ function normalizeReplyToId(value) {
 }
 
 test('tool text outbound strips replyToId while final keeps it', () => {
-  const toolEntry = buildTextOutboxEntry({
+  const toolEntry = buildOutboxEntry({
     ...commonRuntime,
     normalizeReplyToId,
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:direct:demo',
     route,
-    text: 'tool progress',
+    msg: 'tool progress',
     kind: 'tool',
     replyToId: 'inbound-msg-1',
   });
 
-  const finalEntry = buildTextOutboxEntry({
+  const finalEntry = buildOutboxEntry({
     ...commonRuntime,
     normalizeReplyToId,
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:direct:demo',
     route,
-    text: 'final answer',
+    msg: 'final answer',
     kind: 'final',
     replyToId: 'inbound-msg-1',
   });
@@ -54,6 +51,7 @@ test('tool media outbound frame strips replyToId while block keeps it', () => {
     route,
     media: { mode: 'chunk', mimeType: 'image/png', path: '/tmp/tool.png' },
     mediaUrl: '/tmp/tool.png',
+    transferMode: 'media',
     mediaMsg: 'tool image',
     fileName: 'tool.png',
     kind: 'tool',
@@ -67,6 +65,7 @@ test('tool media outbound frame strips replyToId while block keeps it', () => {
     route,
     media: { mode: 'chunk', mimeType: 'image/png', path: '/tmp/block.png' },
     mediaUrl: '/tmp/block.png',
+    transferMode: 'media',
     mediaMsg: 'block image',
     fileName: 'block.png',
     kind: 'block',
@@ -81,26 +80,28 @@ test('tool media outbound frame strips replyToId while block keeps it', () => {
 });
 
 test('tool file-transfer metadata strips replyToId while final keeps it', () => {
-  const toolEntry = buildFileTransferOutboxEntry({
+  const toolEntry = buildOutboxEntry({
     ...commonRuntime,
     pushEvent: 'plugin.bncr.push',
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:direct:demo',
     route,
     mediaUrl: '/tmp/tool.png',
-    text: 'tool file',
+    transferMode: 'media',
+    msg: 'tool file',
     kind: 'tool',
     replyToId: 'inbound-msg-1',
   });
 
-  const finalEntry = buildFileTransferOutboxEntry({
+  const finalEntry = buildOutboxEntry({
     ...commonRuntime,
     pushEvent: 'plugin.bncr.push',
     accountId: 'Primary',
     sessionKey: 'agent:orion:bncr:direct:demo',
     route,
     mediaUrl: '/tmp/final.png',
-    text: 'final file',
+    transferMode: 'media',
+    msg: 'final file',
     kind: 'final',
     replyToId: 'inbound-msg-1',
   });

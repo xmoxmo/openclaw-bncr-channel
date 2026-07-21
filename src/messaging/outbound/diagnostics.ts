@@ -17,7 +17,6 @@ export {
   buildOutboxRouteSelectDebugInfo,
   buildOutboxScheduleDebugInfo,
   buildPushFailureDebugInfo,
-  buildReplyMediaFallbackDebugInfo,
   buildRetryRerouteDebugInfo,
 } from './diagnostics-debug-builders.ts';
 

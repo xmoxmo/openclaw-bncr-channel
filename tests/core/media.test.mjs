@@ -50,8 +50,8 @@ test('loadOpenClawWebMedia prefers channel readRemoteMediaBuffer for remote http
 test('isOpenClawRemoteHttpMediaUrl only treats http and https URLs as remote fetch media', () => {
   assert.equal(isOpenClawRemoteHttpMediaUrl('https://example.com/a.png'), true);
   assert.equal(isOpenClawRemoteHttpMediaUrl(' HTTP://example.com/a.png '), true);
-  assert.equal(isOpenClawRemoteHttpMediaUrl('/tmp/a.png'), false);
-  assert.equal(isOpenClawRemoteHttpMediaUrl('file:///tmp/a.png'), false);
+  assert.equal(isOpenClawRemoteHttpMediaUrl('tests/media/a.png'), false);
+  assert.equal(isOpenClawRemoteHttpMediaUrl('file:///tests/media/a.png'), false);
   assert.equal(isOpenClawRemoteHttpMediaUrl('data:image/png;base64,abc'), false);
   assert.equal(isOpenClawRemoteHttpMediaUrl('media://inbound/demo'), false);
 });
@@ -77,12 +77,12 @@ test('loadOpenClawWebMedia keeps local media paths on runtime loadWebMedia path'
         },
       },
     },
-    '/tmp/voice.ogg',
+    'tests/media/voice.ogg',
     { localRoots: ['/tmp'], maxBytes: 5678 },
   );
 
   assert.deepEqual(calls, [
-    ['loadWebMedia', '/tmp/voice.ogg', { localRoots: ['/tmp'], maxBytes: 5678 }],
+    ['loadWebMedia', 'tests/media/voice.ogg', { localRoots: ['/tmp'], maxBytes: 5678 }],
   ]);
   assert.equal(loaded.buffer.toString(), 'local');
   assert.equal(loaded.contentType, 'audio/ogg');
@@ -148,7 +148,7 @@ test('buildBncrMediaOutboundFrame writes resolved type and path', () => {
     messageId: 'm1',
     sessionKey: 'agent:main:bncr:direct:abc',
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-    media: { mode: 'chunk', mimeType: 'audio/mpeg', path: '/tmp/a.mp3' },
+    media: { mode: 'chunk', mimeType: 'audio/mpeg', path: 'tests/media/a.mp3' },
     mediaUrl: '',
     mediaMsg: 'hi',
     fileName: 'a.mp3',
@@ -156,7 +156,7 @@ test('buildBncrMediaOutboundFrame writes resolved type and path', () => {
   });
 
   assert.equal(frame.message.type, 'audio');
-  assert.equal(frame.message.path, '/tmp/a.mp3');
+  assert.equal(frame.message.path, 'tests/media/a.mp3');
   assert.equal(frame.message.fileName, 'a.mp3');
 });
 
@@ -191,7 +191,7 @@ test('buildBncrMediaOutboundFrame preserves extra metadata as a shallow copy', (
     sessionKey: 'agent:main:bncr:direct:def',
     route: { platform: 'tgBot', groupId: '0', userId: '10002' },
     media: { mode: 'base64', mimeType: 'image/png', mediaBase64: 'Zm9v' },
-    mediaUrl: '/tmp/a.png',
+    mediaUrl: 'tests/media/a.png',
     mediaMsg: 'caption',
     fileName: 'a.png',
     extra,
@@ -220,7 +220,7 @@ test('channelSendMedia enqueues file-transfer outbox entry with voice metadata',
       accountId: 'Primary',
       to: 'Bncr:tgBot:-1001:10001',
       text: 'voice test',
-      mediaUrl: '/tmp/voice.ogg',
+      mediaUrl: 'tests/media/voice.ogg',
       asVoice: true,
     });
 
@@ -229,7 +229,7 @@ test('channelSendMedia enqueues file-transfer outbox entry with voice metadata',
     assert.equal(entry.accountId, 'Primary');
     assert.equal(entry.route.platform, 'tgBot');
     assert.equal(entry.payload.message?.transferMode, 'media');
-    assert.equal(entry.payload.message?.mediaUrl, '/tmp/voice.ogg');
+    assert.equal(entry.payload.message?.mediaUrl, 'tests/media/voice.ogg');
     assert.equal(entry.payload.message?.msg, 'voice test');
     assert.equal(entry.payload.message?.asVoice, true);
     // finalEvent no longer stored in new message format
@@ -254,7 +254,7 @@ test('channelSendMedia stores replyToId on file-transfer metadata', async () => 
       accountId: 'Primary',
       to: 'Bncr:tgBot:-1001:10001',
       text: 'image reply',
-      mediaUrl: '/tmp/a.png',
+      mediaUrl: 'tests/media/a.png',
       type: 'image',
       replyToId: 'reply-123',
     });
@@ -262,7 +262,7 @@ test('channelSendMedia stores replyToId on file-transfer metadata', async () => 
     const [entry] = bridge.outbox.values();
     assert.equal(entry.payload.replyToId, 'reply-123');
     assert.equal(entry.payload.message?.transferMode, 'media');
-    assert.equal(entry.payload.message?.mediaUrl, '/tmp/a.png');
+    assert.equal(entry.payload.message?.mediaUrl, 'tests/media/a.png');
     assert.equal(entry.payload.message?.msg, 'image reply');
     assert.equal(entry.payload.message?.type, 'image');
   } finally {
@@ -286,7 +286,7 @@ test('channelSendMedia strips replyToId for tool file-transfer metadata', async 
       accountId: 'Primary',
       to: 'Bncr:tgBot:-1001:10001',
       text: 'tool image reply',
-      mediaUrl: '/tmp/tool.png',
+      mediaUrl: 'tests/media/tool.png',
       kind: 'tool',
       replyToId: 'reply-tool-123',
     });
@@ -294,7 +294,7 @@ test('channelSendMedia strips replyToId for tool file-transfer metadata', async 
     const [entry] = bridge.outbox.values();
     assert.equal(entry.payload.replyToId, undefined);
     assert.equal(entry.payload.message?.kind, 'tool');
-    assert.equal(entry.payload.message?.mediaUrl, '/tmp/tool.png');
+    assert.equal(entry.payload.message?.mediaUrl, 'tests/media/tool.png');
   } finally {
     cleanupBridge(bridge);
   }
@@ -320,7 +320,7 @@ test('file-transfer waits until final push is emitted before waiting for message
       mode: 'chunk',
       mimeType: 'image/png',
       fileName: 'delayed.png',
-      path: '/tmp/delayed.png',
+      path: 'tests/media/delayed.png',
     };
   };
   bridge.waitForMessageAck = async () => {
@@ -340,7 +340,7 @@ test('file-transfer waits until final push is emitted before waiting for message
       message: {
         type: 'file',
         msg: 'hello',
-        mediaUrl: '/tmp/delayed.png',
+        mediaUrl: 'tests/media/delayed.png',
         transferMode: 'media',
       },
     },
@@ -389,7 +389,7 @@ test('file-transfer failure does not start message ack wait or rewrite error to 
       message: {
         type: 'file',
         msg: 'hello',
-        mediaUrl: '/tmp/fail.png',
+        mediaUrl: 'tests/media/fail.png',
         transferMode: 'media',
       },
     },

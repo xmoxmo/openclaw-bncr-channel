@@ -1,10 +1,33 @@
+import { buildBncrDebugJsonMessage } from '../../core/logging.ts';
 import type { BncrRoute, OutboxEntry } from '../../core/types.ts';
-import { buildNormalizedSends, normalizeOutboundSend } from './normalize-outbound-send.ts';
+import {
+  buildNormalizedSends,
+  type NormalizedOutboundSend,
+  normalizeOutboundSend,
+} from './normalize-outbound-send.ts';
 import { hasReplyMediaEntries } from './reply-enqueue-media.ts';
 import type { OutboundReplyTargetPolicy } from './reply-target-policy.ts';
 import { normalizeOutboundReplyToId } from './reply-target-policy.ts';
 
 const MEDIA_TEXT_SPLIT_THRESHOLD = 1020;
+
+type BuildOutboxEntryFn = (args: {
+  accountId: string;
+  sessionKey: string;
+  route: BncrRoute;
+  type?: string;
+  msg: string;
+  kind?: 'tool' | 'block' | 'final';
+  replyToId?: string;
+  replyTargetPolicy?: OutboundReplyTargetPolicy;
+  extra?: Record<string, unknown>;
+  transferMode?: 'text' | 'media';
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  asVoice?: boolean;
+  audioAsVoice?: boolean;
+  downloadMedia?: boolean;
+}) => OutboxEntry;
 
 export type ReplyEnqueuePlan =
   | { kind: 'text-only' }
@@ -43,14 +66,6 @@ export type NormalizedReplyPayload = {
   replyTargetPolicy: OutboundReplyTargetPolicy;
 };
 
-export type ReplyMediaEntriesParams = {
-  accountId: string;
-  sessionKey: string;
-  route: BncrRoute;
-  payload: NormalizedReplyPayload;
-  mediaLocalRoots?: readonly string[];
-};
-
 export type EnqueueNormalizedReplyPayloadParams = {
   accountId: string;
   sessionKey: string;
@@ -58,46 +73,6 @@ export type EnqueueNormalizedReplyPayloadParams = {
   payload: NormalizedReplyPayload;
   mediaLocalRoots?: readonly string[];
   replyToId?: string;
-};
-
-export type ReplyMediaFileTransferParams = {
-  accountId: string;
-  sessionKey: string;
-  route: BncrRoute;
-  mediaUrl: string;
-  mediaLocalRoots?: readonly string[];
-  text: string;
-  normalizedText: string;
-  asVoice: boolean;
-  audioAsVoice: boolean;
-  downloadMedia?: boolean;
-  type?: string;
-  markerHasMsg?: boolean;
-  extra?: Record<string, unknown>;
-  kind?: 'tool' | 'block' | 'final';
-  replyToId: string;
-  replyTargetPolicy: OutboundReplyTargetPolicy;
-  createdAt: number;
-};
-
-export type EnqueueSingleReplyMediaEntryParams = {
-  params: ReplyMediaEntriesParams;
-  mediaUrl: string;
-  normalizedText: string;
-  text: string;
-  fallback: { text: string; reason: string } | null;
-  currentTime: number;
-};
-
-export type ReplyMediaFallbackTextEntryParams = {
-  accountId: string;
-  sessionKey: string;
-  route: BncrRoute;
-  mediaUrl: string;
-  kind?: 'tool' | 'block' | 'final';
-  replyToId: string;
-  replyTargetPolicy: OutboundReplyTargetPolicy;
-  fallback: { text: string; reason: string };
 };
 
 function shouldSplitReplyMediaText(payload: NormalizedReplyPayload) {
@@ -118,51 +93,9 @@ export function buildReplyEnqueuePlan(payload: NormalizedReplyPayload): ReplyEnq
   return { kind: 'media-only', clearText: false };
 }
 
-function withoutReplyMediaText(payload: NormalizedReplyPayload): NormalizedReplyPayload {
-  return {
-    ...payload,
-    text: '',
-  };
-}
-
-function buildReplyTextOutboxEntry(
-  params: {
-    accountId: string;
-    sessionKey: string;
-    route: BncrRoute;
-    text: string;
-    kind?: 'tool' | 'block' | 'final';
-    replyToId: string;
-    replyTargetPolicy: OutboundReplyTargetPolicy;
-    markerHasMsg?: boolean;
-    extra?: Record<string, unknown>;
-  },
-  helpers: {
-    buildTextOutboxEntry: (args: {
-      accountId: string;
-      sessionKey: string;
-      route: BncrRoute;
-      text: string;
-      kind?: 'tool' | 'block' | 'final';
-      replyToId?: string;
-      replyTargetPolicy?: OutboundReplyTargetPolicy;
-      markerHasMsg?: boolean;
-      extra?: Record<string, unknown>;
-    }) => OutboxEntry;
-  },
-): OutboxEntry {
-  return helpers.buildTextOutboxEntry({
-    accountId: params.accountId,
-    sessionKey: params.sessionKey,
-    route: params.route,
-    text: params.text,
-    kind: params.kind,
-    replyToId: params.replyToId || undefined,
-    replyTargetPolicy: params.replyTargetPolicy,
-    extra: params.extra,
-  });
-}
-
+/**
+ * @deprecated Only used by native-reply-delivery.test.mjs. Not called from production code.
+ */
 export function enqueueReplyTextEntry(
   params: {
     accountId: string;
@@ -172,35 +105,34 @@ export function enqueueReplyTextEntry(
   },
   helpers: {
     enqueueOutbound: (entry: OutboxEntry) => void;
-    buildTextOutboxEntry: (args: {
+    buildOutboxEntry: (args: {
       accountId: string;
       sessionKey: string;
       route: BncrRoute;
-      text: string;
+      type?: string;
+      msg: string;
       kind?: 'tool' | 'block' | 'final';
       replyToId?: string;
       replyTargetPolicy?: OutboundReplyTargetPolicy;
-      markerHasMsg?: boolean;
       extra?: Record<string, unknown>;
+      transferMode?: 'text' | 'media';
     }) => OutboxEntry;
   },
 ): void {
   if (!params.payload.text && !params.payload.extra) return;
 
   helpers.enqueueOutbound(
-    buildReplyTextOutboxEntry(
-      {
-        accountId: params.accountId,
-        sessionKey: params.sessionKey,
-        route: params.route,
-        text: params.payload.text,
-        extra: params.payload.extra,
-        kind: params.payload.kind,
-        replyToId: params.payload.replyToId,
-        replyTargetPolicy: params.payload.replyTargetPolicy,
-      },
-      { buildTextOutboxEntry: helpers.buildTextOutboxEntry },
-    ),
+    helpers.buildOutboxEntry({
+      accountId: params.accountId,
+      sessionKey: params.sessionKey,
+      route: params.route,
+      type: 'text',
+      msg: params.payload.text,
+      extra: params.payload.extra,
+      kind: params.payload.kind,
+      replyToId: params.payload.replyToId,
+      replyTargetPolicy: params.payload.replyTargetPolicy,
+    }),
   );
 }
 
@@ -211,71 +143,209 @@ export function enqueueReplyTextEntry(
  * main payload).  Every entry goes through `buildReplyEnqueuePlan` → the same
  * text/media dispatch.  There is no separate pre-send or main-send branch.
  */
-function dispatchNormalizedSends(
+function buildSendPayload(
+  entry: NormalizedOutboundSend,
+  parent: NormalizedReplyPayload,
+): NormalizedReplyPayload {
+  return {
+    text: entry.text,
+    mediaUrl: entry.mediaUrl || '',
+    mediaUrls: entry.mediaUrls,
+    mediaList: entry.mediaUrl ? [entry.mediaUrl] : entry.mediaUrls?.length ? entry.mediaUrls : [],
+    asVoice: entry.asVoice,
+    audioAsVoice: entry.audioAsVoice,
+    downloadMedia: entry.downloadMedia,
+    type: entry.type,
+    extra: entry.extra,
+    kind: entry.kind,
+    replyToId: entry.replyToId ?? '',
+    replyTargetPolicy: parent.replyTargetPolicy,
+  };
+}
+
+/**
+ * Unified outbound dispatch: single exit point for all sends.
+ *
+ * Iterates `buildNormalizedSends` entries and dispatches each through
+ * the existing text or media helpers internally.  External callers only
+ * see one unified function — they do not choose the branch.
+ */
+function enqueueUnifiedOutbound(
   params: EnqueueNormalizedReplyPayloadParams,
   helpers: {
-    enqueueReplyMediaEntries: (params: ReplyMediaEntriesParams) => void;
-    enqueueReplyTextEntry: (params: {
-      accountId: string;
+    enqueueOutbound: (entry: OutboxEntry) => void;
+    buildOutboxEntry: BuildOutboxEntryFn;
+    tryBuildMediaDedupeFallback: (args: {
       sessionKey: string;
-      route: BncrRoute;
-      payload: NormalizedReplyPayload;
+      mediaUrl: string;
+      text: string;
+      replyToId: string;
+      currentTime: number;
+    }) => {
+      text: string;
+      reason: 'same-text-sent-checkmark' | 'text-changed-downgrade';
+    } | null;
+    rememberRecentMediaSend: (args: {
+      sessionKey: string;
+      mediaUrl: string;
+      text: string;
+      replyToId: string;
+      createdAt: number;
     }) => void;
+    logInfo: (
+      scope: string | undefined,
+      message: string,
+      options?: { debugOnly?: boolean },
+    ) => void;
   },
 ): void {
   for (const entry of buildNormalizedSends(params.payload)) {
-    // Build a NormalizedReplyPayload from the plan entry.
-    const sendPayload: NormalizedReplyPayload = {
-      text: entry.text,
-      mediaUrl: entry.mediaUrl || '',
-      mediaUrls: entry.mediaUrls,
-      mediaList: entry.mediaUrl ? [entry.mediaUrl] : entry.mediaUrls?.length ? entry.mediaUrls : [],
-      asVoice: entry.asVoice,
-      audioAsVoice: entry.audioAsVoice,
-      downloadMedia: entry.downloadMedia,
-      type: entry.type,
-      extra: entry.extra,
-      kind: entry.kind,
-      replyToId: entry.replyToId ?? '',
-      replyTargetPolicy: params.payload.replyTargetPolicy,
-    };
-
+    const sendPayload = buildSendPayload(entry, params.payload);
     const plan = buildReplyEnqueuePlan(sendPayload);
 
     if (plan.kind === 'text-and-media') {
-      helpers.enqueueReplyTextEntry({
-        accountId: params.accountId,
-        sessionKey: params.sessionKey,
-        route: params.route,
-        payload: sendPayload,
-      });
-      helpers.enqueueReplyMediaEntries({
-        accountId: params.accountId,
-        sessionKey: params.sessionKey,
-        route: params.route,
-        payload: withoutReplyMediaText(sendPayload),
-        mediaLocalRoots: params.mediaLocalRoots,
-      });
+      // Text first, then media entries with empty text
+      helpers.enqueueOutbound(
+        helpers.buildOutboxEntry({
+          accountId: params.accountId,
+          sessionKey: params.sessionKey,
+          route: params.route,
+          type: 'text',
+          msg: sendPayload.text,
+          kind: sendPayload.kind,
+          replyToId: sendPayload.replyToId || undefined,
+          replyTargetPolicy: sendPayload.replyTargetPolicy,
+          extra: sendPayload.extra,
+        }),
+      );
+      enqueueUnifiedMediaEntries(params, sendPayload, '', helpers);
       continue;
     }
 
     if (plan.kind !== 'text-only') {
-      helpers.enqueueReplyMediaEntries({
-        accountId: params.accountId,
-        sessionKey: params.sessionKey,
-        route: params.route,
-        payload: sendPayload,
-        mediaLocalRoots: params.mediaLocalRoots,
-      });
+      // Media-only: first entry carries caption text
+      enqueueUnifiedMediaEntries(params, sendPayload, sendPayload.text, helpers);
       continue;
     }
 
-    helpers.enqueueReplyTextEntry({
-      accountId: params.accountId,
+    // Text-only
+    if (!sendPayload.text && !sendPayload.extra) continue;
+    helpers.enqueueOutbound(
+      helpers.buildOutboxEntry({
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+        route: params.route,
+        type: 'text',
+        msg: sendPayload.text,
+        kind: sendPayload.kind,
+        replyToId: sendPayload.replyToId || undefined,
+        replyTargetPolicy: sendPayload.replyTargetPolicy,
+        extra: sendPayload.extra,
+      }),
+    );
+  }
+}
+
+/** Internal: iterate mediaList and enqueue file-transfer entries (with dedup). */
+function enqueueUnifiedMediaEntries(
+  params: EnqueueNormalizedReplyPayloadParams,
+  sendPayload: NormalizedReplyPayload,
+  firstCaption: string,
+  helpers: {
+    enqueueOutbound: (entry: OutboxEntry) => void;
+    buildOutboxEntry: BuildOutboxEntryFn;
+    tryBuildMediaDedupeFallback: (args: {
+      sessionKey: string;
+      mediaUrl: string;
+      text: string;
+      replyToId: string;
+      currentTime: number;
+    }) => {
+      text: string;
+      reason: 'same-text-sent-checkmark' | 'text-changed-downgrade';
+    } | null;
+    rememberRecentMediaSend: (args: {
+      sessionKey: string;
+      mediaUrl: string;
+      text: string;
+      replyToId: string;
+      createdAt: number;
+    }) => void;
+    logInfo: (
+      scope: string | undefined,
+      message: string,
+      options?: { debugOnly?: boolean },
+    ) => void;
+  },
+): void {
+  let first = true;
+  for (const mediaUrl of sendPayload.mediaList) {
+    const text = first ? firstCaption : '';
+    const currentTime = Date.now();
+    const normalizedText = text || '';
+    const fallback = helpers.tryBuildMediaDedupeFallback({
       sessionKey: params.sessionKey,
-      route: params.route,
-      payload: sendPayload,
+      mediaUrl,
+      text: normalizedText,
+      replyToId: sendPayload.replyToId,
+      currentTime,
     });
+
+    if (fallback) {
+      helpers.logInfo(
+        'outbound',
+        buildBncrDebugJsonMessage('media-dedupe-hit', {
+          sessionKey: params.sessionKey,
+          mediaUrl,
+          text: normalizedText,
+          replyToId: sendPayload.replyToId,
+          reason: fallback.reason,
+        }),
+        { debugOnly: true },
+      );
+      helpers.enqueueOutbound(
+        helpers.buildOutboxEntry({
+          accountId: params.accountId,
+          sessionKey: params.sessionKey,
+          route: params.route,
+          type: 'text',
+          msg: fallback.text,
+          kind: sendPayload.kind,
+          replyToId: sendPayload.replyToId || undefined,
+          replyTargetPolicy: sendPayload.replyTargetPolicy,
+        }),
+      );
+      first = false;
+      continue;
+    }
+
+    helpers.enqueueOutbound(
+      helpers.buildOutboxEntry({
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+        route: params.route,
+        type: sendPayload.type,
+        msg: text,
+        kind: sendPayload.kind,
+        replyToId: sendPayload.replyToId,
+        replyTargetPolicy: sendPayload.replyTargetPolicy,
+        extra: sendPayload.extra,
+        transferMode: 'media',
+        mediaUrl,
+        mediaLocalRoots: params.mediaLocalRoots,
+        asVoice: sendPayload.asVoice,
+        audioAsVoice: sendPayload.audioAsVoice,
+        downloadMedia: sendPayload.downloadMedia,
+      }),
+    );
+    helpers.rememberRecentMediaSend({
+      sessionKey: params.sessionKey,
+      mediaUrl,
+      text: normalizedText,
+      replyToId: sendPayload.replyToId,
+      createdAt: currentTime,
+    });
+    first = false;
   }
 }
 
@@ -288,13 +358,30 @@ export function enqueueNormalizedReplyPayload(
       route: BncrRoute;
       payload: NormalizedReplyPayload;
     }) => void;
-    enqueueReplyMediaEntries: (params: ReplyMediaEntriesParams) => void;
-    enqueueReplyTextEntry: (params: {
-      accountId: string;
+    enqueueOutbound: (entry: OutboxEntry) => void;
+    buildOutboxEntry: BuildOutboxEntryFn;
+    tryBuildMediaDedupeFallback: (args: {
       sessionKey: string;
-      route: BncrRoute;
-      payload: NormalizedReplyPayload;
+      mediaUrl: string;
+      text: string;
+      replyToId: string;
+      currentTime: number;
+    }) => {
+      text: string;
+      reason: 'same-text-sent-checkmark' | 'text-changed-downgrade';
+    } | null;
+    rememberRecentMediaSend: (args: {
+      sessionKey: string;
+      mediaUrl: string;
+      text: string;
+      replyToId: string;
+      createdAt: number;
     }) => void;
+    logInfo: (
+      scope: string | undefined,
+      message: string,
+      options?: { debugOnly?: boolean },
+    ) => void;
   },
 ): void {
   // Log only the main (last) send entry for traceability.
@@ -306,15 +393,15 @@ export function enqueueNormalizedReplyPayload(
   });
 
   // Dispatch ALL entries (pre-send + main) through the same path.
-  dispatchNormalizedSends(params, helpers);
+  enqueueUnifiedOutbound(params, helpers);
 }
 
-export function normalizeReplyPayload(
+export async function normalizeReplyPayload(
   payload: ReplyPayloadInput,
   helpers: { asString: (value: unknown, fallback?: string) => string },
   options?: { replyTargetPolicy?: OutboundReplyTargetPolicy },
-): NormalizedReplyPayload {
-  const normalized = normalizeOutboundSend({
+): Promise<NormalizedReplyPayload> {
+  const normalized = await normalizeOutboundSend({
     text: helpers.asString(payload?.text || ''),
     mediaUrl: helpers.asString(payload?.mediaUrl || ''),
     mediaUrls: payload?.mediaUrls,

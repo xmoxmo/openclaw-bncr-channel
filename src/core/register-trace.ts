@@ -43,7 +43,7 @@ export type RegisterDriftSnapshot = {
   traceRecent: Array<Record<string, unknown>>;
 };
 
-export function classifyRegisterTrace(stack: string) {
+function classifyRegisterTrace(stack: string) {
   if (
     stack.includes('prepareSecretsRuntimeSnapshot') ||
     stack.includes('resolveRuntimeWebTools') ||
@@ -66,7 +66,7 @@ export function classifyRegisterTrace(stack: string) {
   return 'other';
 }
 
-export function dominantRegisterBucket(sourceBuckets: Record<string, number>) {
+function dominantRegisterBucket(sourceBuckets: Record<string, number>) {
   let winner: string | null = null;
   let winnerCount = -1;
   for (const [bucket, count] of Object.entries(sourceBuckets)) {
