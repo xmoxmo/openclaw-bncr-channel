@@ -53,8 +53,21 @@ export function createBncrBridgeOutboxFacade(runtime: {
     lastError: string;
     persist?: boolean;
   }) => {
+    const nowMs = runtime.now();
+    const nextRetry = (args.entry.retryCount || 0) + 1;
+    if (nextRetry > runtime.maxRetry) {
+      // Budget exhausted — dead-letter the entry
+      Object.assign(args.entry, {
+        lastError: args.lastError,
+        retryCount: nextRetry,
+        lastAttemptAt: nowMs,
+      });
+      moveToDeadLetter(args.entry, args.lastError);
+      return;
+    }
+    const nextAttemptAt = nowMs + runtime.backoffMs(nextRetry);
     const nextEntry = buildBncrOutboxFailureEntryPatch({
-      entry: args.entry,
+      entry: { ...args.entry, retryCount: nextRetry, lastAttemptAt: nowMs, nextAttemptAt },
       lastError: args.lastError,
     });
     Object.assign(args.entry, nextEntry);

@@ -21,6 +21,8 @@ type BncrOutboxDrainFailureRuntime = {
   backoffMs: (retryCount: number) => number;
   outbox: Map<string, OutboxEntry>;
   resolveAccountIdForSession: (sessionKey: string) => string | null;
+  resolveActiveAccountIds?: () => Iterable<string>;
+  resolvePushConnIds?: (accountId: string) => Iterable<string>;
   logInfo: (scope: string, message: string, options?: { debugOnly?: boolean }) => void;
   logWarn: (scope: string, message: string, options?: { debugOnly?: boolean }) => void;
   isPrePushGuardDeferral: (entry: OutboxEntry) => boolean;
@@ -45,7 +47,7 @@ export function createBncrOutboxDrainFailure(runtime: BncrOutboxDrainFailureRunt
     // If the entry keeps hitting pre-push guard (no active connection), the
     // accountId on the entry might be wrong (e.g. constructed from route data).
     // Try to correct it from recent inbound session context before giving up.
-    if (runtime.isPrePushGuardDeferral(entry) && entry.retryCount > 0) {
+    if (runtime.isPrePushGuardDeferral(entry) && entry.retryCount >= 1) {
       const corrected = runtime.resolveAccountIdForSession(entry.sessionKey);
       if (corrected && corrected !== entry.accountId) {
         const oldAccountId = entry.accountId;
@@ -75,7 +77,38 @@ export function createBncrOutboxDrainFailure(runtime: BncrOutboxDrainFailureRunt
       }
     }
 
+    // Round-robin fallback: try all active accounts when session healing fails
+    if (
+      runtime.isPrePushGuardDeferral(entry) &&
+      runtime.resolveActiveAccountIds &&
+      runtime.resolvePushConnIds
+    ) {
+      const currentId = entry.accountId;
+      for (const candidateId of runtime.resolveActiveAccountIds()) {
+        if (candidateId === currentId) continue;
+        const connIds = Array.from(runtime.resolvePushConnIds(candidateId));
+        if (connIds.length > 0) {
+          const oldAccountId = entry.accountId;
+          runtime.logWarn(
+            'outbound',
+            `account round-robin corrected sessionKey=${entry.sessionKey} ${oldAccountId}→${candidateId}`,
+          );
+          entry.accountId = candidateId;
+          entry.retryCount = 0;
+          entry.lastError = undefined;
+          runtime.outbox.set(entry.messageId, entry);
+          runtime.scheduleSave();
+          return { action: 'continue', localNextDelay };
+        }
+      }
+    }
+
     if (runtime.isPrePushGuardDeferral(entry)) {
+      // Budget check: guard failures that exceed maxRetry go to dead-letter
+      if ((entry.retryCount || 0) >= runtime.maxRetry) {
+        runtime.moveToDeadLetter(entry, entry.lastError || 'guard-failure-limit');
+        return { action: 'continue', localNextDelay };
+      }
       const wait = runtime.prePushGuardRetryDelayMs;
       localNextDelay = runtime.outboxDrainSchedule.scheduleAccountWait({
         accountId,

@@ -102,7 +102,7 @@ test('flushPushQueue logs non-debug push skip summary when text push guard rejec
 
       const updated = bridge.outbox.get(entry.messageId);
       assert.ok(updated, 'entry should remain queued for retry after push skip');
-      assert.equal(updated.retryCount, 0);
+      assert.equal(updated.retryCount, 1);
       assert.equal(updated.lastError, 'gateway context unavailable');
       assert.ok(saveCount >= 1, 'guard reason should be persisted');
       assert.deepEqual(scheduled, [1_000]);
@@ -112,14 +112,14 @@ test('flushPushQueue logs non-debug push skip summary when text push guard rejec
   }
 });
 
-test('pre-push guard skip does not consume retry budget or dead-letter queued entry', async () => {
+test('pre-push guard skip consumes retry budget but does not prematurely dead-letter', async () => {
   const bridge = createBridge();
   const scheduled = [];
   const before = Date.now();
 
   try {
     const entry = makeEntry('msg-push-skip-retry-budget', 'push skip retry budget');
-    entry.retryCount = 10;
+    entry.retryCount = 0;
     entry.nextAttemptAt = before - 1_000;
     bridge.outbox.set(entry.messageId, entry);
 
@@ -136,8 +136,8 @@ test('pre-push guard skip does not consume retry budget or dead-letter queued en
     });
 
     const updated = bridge.outbox.get(entry.messageId);
-    assert.ok(updated, 'pre-push guard skip should keep entry queued');
-    assert.equal(updated.retryCount, 10);
+    assert.ok(updated, 'pre-push guard should keep entry queued until budget exhausted');
+    assert.equal(updated.retryCount, 1);
     assert.equal(updated.lastError, 'gateway context unavailable');
     assert.equal(bridge.deadLetter.length, 0);
     assert.deepEqual(scheduled, [1_000]);
@@ -305,7 +305,7 @@ test('push failure matrix separates guard deferral retry retry-limit and dead-le
     bridge.outbox.set(guard.messageId, guard);
     bridge.gatewayContext = null;
     await bridge.flushPushQueue({ accountId: 'Primary', trigger: 'test', reason: 'guard' });
-    assert.equal(bridge.outbox.get('matrix-guard')?.retryCount, 0);
+    assert.equal(bridge.outbox.get('matrix-guard')?.retryCount, 1);
     bridge.outbox.clear();
 
     const retry = makeEntry('matrix-retry', 'retry');

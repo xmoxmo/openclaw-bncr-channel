@@ -59,6 +59,7 @@ type BncrOutboxDrainRuntime = {
   isPlainObject: (value: unknown) => value is Record<string, unknown>;
   normalizeAccountId: (accountId: string) => string;
   resolveAccountIdForSession: (sessionKey: string) => string | null;
+  resolveActiveAccountIds?: () => Iterable<string>;
   stopped: () => boolean;
   outbox: Map<string, OutboxEntry>;
   deadLetter: () => OutboxEntry[];
@@ -137,6 +138,8 @@ export function createBncrOutboxDrainRuntime(runtime: BncrOutboxDrainRuntime) {
     backoffMs: runtime.backoffMs,
     outbox: runtime.outbox,
     resolveAccountIdForSession: runtime.resolveAccountIdForSession,
+    resolveActiveAccountIds: runtime.resolveActiveAccountIds,
+    resolvePushConnIds: runtime.resolvePushConnIds,
     logInfo: runtime.logInfo,
     logWarn: runtime.logWarn,
     isPrePushGuardDeferral: runtime.isPrePushGuardDeferral,

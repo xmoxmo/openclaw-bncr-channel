@@ -233,9 +233,28 @@ async function probeMediaPath(raw: string): Promise<{
       });
       clearTimeout(timer);
       if (response.ok || response.status === 206) return { ok: true };
-      return { ok: false, reason: `HTTP ${response.status} ${response.statusText}` };
+      // HEAD failed — try Range GET (first 4 bytes) as fallback.
+      // Some CDNs / object stores reject HEAD but serve GET with Range.
+      const probeReason = `HEAD ${response.status}`;
+      try {
+        const controller2 = new AbortController();
+        const timer2 = setTimeout(() => controller2.abort(), PROBE_TIMEOUT_MS);
+        const rangeResp = await fetch(path, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-3' },
+          signal: controller2.signal,
+          redirect: 'follow',
+        });
+        clearTimeout(timer2);
+        if (rangeResp.status === 206 || rangeResp.ok) return { ok: true }; // 206=Range ok, other 2xx=server reachable
+        return { ok: false, reason: `${probeReason}, Range GET ${rangeResp.status}` };
+      } catch (err2: unknown) {
+        const reason2 = err2 instanceof Error ? err2.message : String(err2);
+        return { ok: false, reason: `${probeReason}, Range GET error: ${reason2}` };
+      }
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : String(err);
+      // fetch-level error (DNS / timeout) — don't attempt fallback
       return { ok: false, reason };
     }
   }

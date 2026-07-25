@@ -1741,6 +1741,7 @@ class BncrBridgeRuntime {
     handleFileTransferPushFailure: (args) => this.handleFileTransferPushFailure(args),
     handleTextPushFailure: (args) => this.handleTextPushFailure(args),
     isPrePushGuardDeferral: (entry) => this.isPrePushGuardDeferral(entry),
+    resolveActiveAccountIds: () => this.activeConnectionByAccount.keys(),
     resolveAccountIdForSession: (sessionKey) => {
       const hit = this.sessionRoutes.get(sessionKey);
       return hit ? hit.accountId : BNCR_DEFAULT_ACCOUNT_ID;
