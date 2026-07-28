@@ -392,7 +392,11 @@ export async function prepareBncrInboundSessionContext(args: {
   });
   const body = formatOpenClawAgentEnvelope(api, {
     channel: 'Bncr',
-    from: `${platform}:${groupId}:${userId}`,
+    from:
+      (parsed.userId
+        ? `${parsed.userName} (${parsed.userId})`
+        : parsed.userName || `${platform}:${groupId}:${userId}`) +
+      (parsed.msgId ? ` #${parsed.msgId}` : ''),
     timestamp: Date.now(),
     previousTimestamp: readBncrSessionUpdatedAt(api, {
       storePath,
