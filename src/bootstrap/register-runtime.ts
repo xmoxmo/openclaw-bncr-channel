@@ -97,6 +97,7 @@ export function createBncrRegisterRuntime() {
     'bncr.diagnostics': (bridge, opts) => bridge.handleDiagnostics(opts),
     'bncr.deadLetter.inspect': (bridge, opts) => bridge.handleDeadLetterInspect(opts),
     'bncr.deadLetter.prune': (bridge, opts) => bridge.handleDeadLetterPrune(opts),
+    'bncr.rpc.response': (bridge, opts) => bridge.handleRpcResponse(opts),
     'bncr.file.init': (bridge, opts) => bridge.handleFileInit(opts),
     'bncr.file.chunk': (bridge, opts) => bridge.handleFileChunk(opts),
     'bncr.file.complete': (bridge, opts) => bridge.handleFileComplete(opts),

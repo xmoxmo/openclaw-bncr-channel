@@ -9,7 +9,17 @@ function makeEntry(messageId, accountId = 'Primary') {
     accountId,
     sessionKey: 'session-1',
     route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-    payload: { text: messageId },
+    payload: {
+      type: 'message.outbound',
+      messageId,
+      message: {
+        type: 'text',
+        msg: messageId,
+        path: '',
+        base64: '',
+        fileName: '',
+      },
+    },
     retryCount: 0,
     nextAttemptAt: 1,
     createdAt: 1,
@@ -26,6 +36,7 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
   const lastEnqueue = new Map();
   const deadLetterSinceStart = new Map();
   const lastOutboundByAccount = new Map();
+  const outboundReplayCache = new Map();
   let saveCount = 0;
 
   const facade = createBncrBridgeOutboxFacade({
@@ -50,6 +61,8 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
     lastPrePushGuardSkipReasonByAccount: new Map(),
     deadLetterSinceStartByAccount: deadLetterSinceStart,
     lastOutboundByAccount,
+    outboundReplayCache,
+    isOutboundAckRequired: () => true,
     scheduleSave: () => {
       saveCount += 1;
     },
@@ -73,6 +86,17 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
 
   facade.recordOutboxPushSuccess({ entry: first, connIds: ['c1'], ownerConnId: 'c1' });
   assert.equal(lastOutboundByAccount.get('Primary'), 10);
+  assert.equal(outboundReplayCache.size, 0);
+
+  facade.markRecentOutboundAcked(first);
+  assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.messageId, 'm1');
+  assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.body, 'm1');
+  assert.equal(facade.listRecentOutbound('session-1')[0]?.messageId, 'm1');
+  assert.equal(facade.listRecentOutboundByAccount('Primary')[0]?.messageId, 'm1');
+
+  outboundReplayCache.delete('Primary:tgBot:10001');
+  assert.deepEqual(facade.listRecentOutbound('session-1'), []);
+  assert.deepEqual(facade.listRecentOutboundByAccount('Primary'), []);
 
   outbox.delete('m1');
 

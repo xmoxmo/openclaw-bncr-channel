@@ -208,6 +208,7 @@ const plugin = {
     ensureGatewayMethodRegistered(api, 'bncr.diagnostics', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.deadLetter.inspect', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.deadLetter.prune', debugLog);
+    ensureGatewayMethodRegistered(api, 'bncr.rpc.response', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.file.init', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.file.chunk', debugLog);
     ensureGatewayMethodRegistered(api, 'bncr.file.complete', debugLog);

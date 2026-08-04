@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { BNCR_GATEWAY_METHODS } from '../../src/plugin/gateway-methods.ts';
 import { createRegisterApiStub, resetBncrRegisterGlobals } from '../helpers/register-api.mjs';
 
 test('bncr manifest config schemas stay aligned with runtime schema keys', async () => {
@@ -35,6 +36,19 @@ test('bncr register is idempotent on the same api instance', async () => {
   assert.equal(api.channels.length, channelCountAfterFirstRegister);
   assert.equal(api.services.length, serviceCountAfterFirstRegister);
   assert.equal(api.methods.length, new Set(api.methods.map((item) => item.name)).size);
+});
+
+test('bncr register exposes every declared gateway method', async () => {
+  resetBncrRegisterGlobals();
+  const mod = await import('../../index.ts');
+  const api = createRegisterApiStub();
+
+  mod.default.register(api);
+
+  const registered = new Set(api.methods.map((item) => item.name));
+  for (const method of BNCR_GATEWAY_METHODS) {
+    assert.ok(registered.has(method), `missing gateway method ${method}`);
+  }
 });
 
 test('bncr register reuses bridge but only registers methods on a new api instance', async () => {

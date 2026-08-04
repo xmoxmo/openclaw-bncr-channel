@@ -6,6 +6,7 @@ import type { BncrRoute } from '../core/types.ts';
 import type { BncrInboundParamsInput } from '../messaging/inbound/contracts.ts';
 import { dispatchBncrInbound } from '../messaging/inbound/dispatch.ts';
 import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
+import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from '../messaging/outbound/reasons.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
@@ -211,6 +212,7 @@ export function createBncrInboundHandlersComponent(runtime: {
   defaultPublicAgentId: Parameters<typeof createBncrInboundHandlers>[0]['defaultPublicAgentId'];
   sceneRegistry: Parameters<typeof createBncrInboundHandlers>[0]['sceneRegistry'];
   groupHistories: BncrGroupHistoryMap;
+  outboundReplayCache: BncrOutboundReplayCache;
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlers
   >[0]['prepareInboundAcceptance'];
@@ -256,6 +258,7 @@ export function createBncrInboundHandlersComponent(runtime: {
     defaultPublicAgentId: runtime.defaultPublicAgentId,
     sceneRegistry: runtime.sceneRegistry,
     groupHistories: runtime.groupHistories,
+    outboundReplayCache: runtime.outboundReplayCache,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     formatDisplayScope,
     logInboundSummary: runtime.logInboundSummary,
@@ -275,6 +278,7 @@ export function createBncrInboundHandlersComponent(runtime: {
       shouldAccumulate,
       sceneRegistry,
       groupHistories,
+      outboundReplayCache,
       defaultAdminAgentId,
       defaultPublicAgentId,
       now,
@@ -290,6 +294,7 @@ export function createBncrInboundHandlersComponent(runtime: {
         shouldAccumulate,
         sceneRegistry,
         groupHistories,
+        outboundReplayCache,
         defaultAdminAgentId,
         defaultPublicAgentId,
         now,

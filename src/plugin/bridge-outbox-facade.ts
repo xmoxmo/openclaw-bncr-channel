@@ -6,7 +6,12 @@ import {
   collectDueOutboxEntries,
 } from '../core/outbox-queue.ts';
 import { formatDisplayScope } from '../core/targets.ts';
-import type { OutboxEntry } from '../core/types.ts';
+import type { BncrRecentOutboundEntry, OutboxEntry } from '../core/types.ts';
+import {
+  type BncrOutboundReplayCache,
+  type BncrOutboundReplayEntry,
+  recordBncrOutboundReplay,
+} from '../messaging/inbound/outbound-replay-cache.ts';
 import {
   buildBncrOutboxFailureEntryPatch,
   buildBncrOutboxPushSuccessEntryPatch,
@@ -36,6 +41,9 @@ export function createBncrBridgeOutboxFacade(runtime: {
   lastPrePushGuardSkipReasonByAccount: Map<string, string>;
   deadLetterSinceStartByAccount: Map<string, number>;
   lastOutboundByAccount: Map<string, number>;
+  outboundReplayCache?: BncrOutboundReplayCache;
+  resolveOutboundSender?: (entry: OutboxEntry) => { sender: string; senderId?: string };
+  isOutboundAckRequired?: (accountId: string) => boolean;
   scheduleSave: () => void;
   flushPushQueueBestEffort: (args?: {
     accountId?: string;
@@ -48,6 +56,25 @@ export function createBncrBridgeOutboxFacade(runtime: {
   resolveMessageAck: (messageId: string, result?: 'acked' | 'timeout') => boolean;
   markActivity: (accountId: string, at?: number) => void;
 }) {
+  const recordOutboundMessage = (entry: OutboxEntry, status: 'pushed' | 'acked') => {
+    if (!runtime.outboundReplayCache) return;
+    const senderInfo = runtime.resolveOutboundSender?.(entry) ?? {
+      sender: entry.accountId,
+      senderId: entry.accountId,
+    };
+    recordBncrOutboundReplay({
+      cache: runtime.outboundReplayCache,
+      entry,
+      sender: senderInfo.sender,
+      senderId: senderInfo.senderId,
+      status,
+    });
+  };
+
+  const markRecentOutboundAcked = (entry: OutboxEntry) => {
+    recordOutboundMessage(entry, 'acked');
+  };
+
   const recordOutboxPrePushFailure = (args: {
     entry: OutboxEntry;
     lastError: string;
@@ -120,6 +147,9 @@ export function createBncrBridgeOutboxFacade(runtime: {
     });
     Object.assign(args.entry, nextEntry);
     runtime.outbox.set(nextEntry.messageId, args.entry);
+    if (runtime.isOutboundAckRequired?.(args.entry.accountId) === false) {
+      recordOutboundMessage(args.entry, 'pushed');
+    }
     runtime.lastOutboundByAccount.set(nextEntry.accountId, pushedAt);
     runtime.markActivity(nextEntry.accountId, pushedAt);
     runtime.scheduleSave();
@@ -181,6 +211,41 @@ export function createBncrBridgeOutboxFacade(runtime: {
     return result.duePayloads;
   };
 
+  const buildRecentOutboundEntry = (
+    cacheKey: string,
+    replay: BncrOutboundReplayEntry,
+  ): BncrRecentOutboundEntry => {
+    const keyParts = cacheKey.split(':');
+    const accountId = replay.accountId || keyParts[0] || '';
+    const route = replay.route
+      ? replay.route
+      : keyParts[1] && keyParts[2]
+        ? keyParts[2].startsWith('-')
+          ? { platform: keyParts[1], groupId: keyParts[2], userId: '0' }
+          : { platform: keyParts[1], groupId: '0', userId: keyParts[2] }
+        : { platform: '', groupId: '0', userId: '0' };
+    return {
+      messageId: replay.messageId || '',
+      accountId,
+      sessionKey: replay.sessionKey || '',
+      route,
+      ...(replay.type ? { type: replay.type } : {}),
+      ...(replay.type ? { kind: replay.type } : {}),
+      text: replay.body,
+      ...(replay.mediaUrl ? { mediaUrl: replay.mediaUrl } : {}),
+      createdAt: replay.createdAt ?? replay.timestamp ?? runtime.now(),
+      ...(replay.timestamp ? { lastPushAt: replay.timestamp } : {}),
+      status: replay.status === 'acked' ? 'acked' : 'pushed',
+    };
+  };
+
+  const listReplayEntries = () => {
+    if (!runtime.outboundReplayCache) return [];
+    return Array.from(runtime.outboundReplayCache.entries()).flatMap(([cacheKey, entries]) =>
+      entries.map((entry) => buildRecentOutboundEntry(cacheKey, entry)),
+    );
+  };
+
   return {
     recordOutboxPrePushFailure,
     recordPrePushGuardSkip,
@@ -190,5 +255,18 @@ export function createBncrBridgeOutboxFacade(runtime: {
     enqueueOutbound,
     moveToDeadLetter,
     collectDue,
+    listRecentOutbound: (sessionKey: string) => {
+      const normalized = runtime.asString(sessionKey || '').trim();
+      return listReplayEntries()
+        .filter((entry) => entry.sessionKey === normalized)
+        .sort((a, b) => b.createdAt - a.createdAt);
+    },
+    listRecentOutboundByAccount: (accountId: string) => {
+      const normalized = runtime.normalizeAccountId(accountId);
+      return listReplayEntries()
+        .filter((entry) => entry.accountId === normalized)
+        .sort((a, b) => b.createdAt - a.createdAt);
+    },
+    markRecentOutboundAcked,
   };
 }

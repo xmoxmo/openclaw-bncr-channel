@@ -1,7 +1,13 @@
 import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-message';
-import type { BncrRoute } from '../core/types.ts';
+import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import type { BncrRecentOutboundEntry, BncrRoute } from '../core/types.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
+import {
+  type BncrBridgeCallDiagnosticsBridge,
+  createBncrBridgeCallBridge,
+  invokeBncrBridgeGatewayHandler,
+} from './bridge-call.ts';
 import type {
   BncrChannelConfigRoot,
   BncrChannelSendContext,
@@ -34,6 +40,8 @@ export type BncrChannelPluginBridge = {
   getStatusHeadline: (accountId: string) => string;
   resolveVerifiedTarget: (to: string, accountId: string) => BncrVerifiedTarget;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) => void;
+  listRecentOutbound: (sessionKey: string) => BncrRecentOutboundEntry[];
+  listRecentOutboundByAccount: (accountId: string) => BncrRecentOutboundEntry[];
   enqueueFromReply: (args: {
     accountId: string;
     sessionKey: string;
@@ -44,6 +52,14 @@ export type BncrChannelPluginBridge = {
   }) => Promise<void>;
   channelStartAccount: (ctx: unknown) => void | Promise<void>;
   channelStopAccount: (ctx: unknown) => void | Promise<void>;
+  handleDiagnostics: (ctx: GatewayRequestHandlerOptions) => Promise<void>;
+  handleDeadLetterInspect: (ctx: GatewayRequestHandlerOptions) => Promise<void>;
+  handleDeadLetterPrune: (ctx: GatewayRequestHandlerOptions) => Promise<void>;
+  callClientRpc: (
+    method: string,
+    args: Record<string, unknown>,
+    accountId: string,
+  ) => Promise<Record<string, unknown>>;
 };
 
 export function createBncrChannelPluginBridgeGroup(runtime: {
@@ -118,6 +134,31 @@ export function createBncrChannelPluginBridgeGroup(runtime: {
     };
   };
 
+  const getDiagnosticsBridge = (): BncrBridgeCallDiagnosticsBridge => {
+    const bridge = runtime.getBridge();
+    return {
+      diagnostics: async (args) => invokeBncrBridgeGatewayHandler(bridge.handleDiagnostics, args),
+      deadLetterInspect: async (args) =>
+        invokeBncrBridgeGatewayHandler(bridge.handleDeadLetterInspect, args),
+      deadLetterPrune: async (args) =>
+        invokeBncrBridgeGatewayHandler(bridge.handleDeadLetterPrune, args),
+    };
+  };
+
+  const getBridgeCallBridge = () => {
+    const bridge = runtime.getBridge();
+    return createBncrBridgeCallBridge({
+      defaultAccountId: runtime.defaultAccountId,
+      getStatusBridge,
+      getDiagnosticsBridge,
+      getRecentOutboundBridge: () => ({
+        listRecentOutbound: (sessionKey) => bridge.listRecentOutbound(sessionKey),
+        listRecentOutboundByAccount: (accountId) => bridge.listRecentOutboundByAccount(accountId),
+      }),
+      callClientRpc: (method, args, accountId) => bridge.callClientRpc(method, args, accountId),
+    });
+  };
+
   return {
     getMessageSendBridge,
     getOutboundBridge,
@@ -125,5 +166,6 @@ export function createBncrChannelPluginBridgeGroup(runtime: {
     getStatusBridge,
     getToolActionBridge,
     getGatewayBridge,
+    getBridgeCallBridge,
   };
 }

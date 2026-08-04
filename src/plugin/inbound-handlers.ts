@@ -2,6 +2,7 @@ import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import { buildCanonicalBncrSessionKey } from '../core/targets.ts';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
 import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
+import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type {
@@ -134,6 +135,7 @@ export type BncrInboundHandlersRuntime = {
   defaultPublicAgentId: () => string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   groupHistories: BncrGroupHistoryMap;
+  outboundReplayCache: BncrOutboundReplayCache;
   prepareInboundAcceptance: (args: {
     parsed: ParsedInboundParams;
     canonicalAgentId: string;
@@ -164,6 +166,7 @@ export type BncrInboundHandlersRuntime = {
     shouldAccumulate: boolean;
     sceneRegistry: Map<string, BncrSceneRecord>;
     groupHistories: BncrGroupHistoryMap;
+    outboundReplayCache: BncrOutboundReplayCache;
     defaultAdminAgentId: string;
     defaultPublicAgentId: string;
     now: () => number;
@@ -333,6 +336,7 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           shouldAccumulate,
           sceneRegistry: runtime.sceneRegistry,
           groupHistories: runtime.groupHistories,
+          outboundReplayCache: runtime.outboundReplayCache,
           defaultAdminAgentId,
           defaultPublicAgentId: runtime.defaultPublicAgentId(),
           now: runtime.now,

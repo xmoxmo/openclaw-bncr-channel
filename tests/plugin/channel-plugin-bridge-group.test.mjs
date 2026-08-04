@@ -62,6 +62,22 @@ function createBridge() {
     channelStopAccount(ctx) {
       calls.push(['channelStopAccount', ctx]);
     },
+    async handleDiagnostics({ params, respond }) {
+      calls.push(['handleDiagnostics', params]);
+      respond(true, { ok: true, accountId: params.accountId });
+    },
+    async handleDeadLetterInspect({ params, respond }) {
+      calls.push(['handleDeadLetterInspect', params]);
+      respond(true, { ok: true, accountId: params.accountId });
+    },
+    async handleDeadLetterPrune({ params, respond }) {
+      calls.push(['handleDeadLetterPrune', params]);
+      respond(true, { ok: true, accountId: params.accountId });
+    },
+    async callClientRpc(method, args, accountId) {
+      calls.push(['callClientRpc', method, args, accountId]);
+      return { ok: true, method, result: { accountId, echoed: args } };
+    },
   };
   return { bridge, calls };
 }
@@ -124,4 +140,56 @@ test('bridge group forwards every surface through the current bridge instance', 
 
   assert.deepEqual(calls[0], ['channelMessageSendPayload', { id: 1 }]);
   assert.deepEqual(calls[1], ['channelSendText', { id: 2 }]);
+});
+
+test('bridge group routes bridge calls through client RPC', async () => {
+  const { bridge, calls } = createBridge();
+  const group = createBncrChannelPluginBridgeGroup({
+    channelId: 'bncr',
+    defaultAccountId: 'Primary',
+    getBridge: () => bridge,
+  });
+
+  const result = await group.getBridgeCallBridge().call('client.ping', { echo: true }, 'Primary');
+
+  assert.deepEqual(result, {
+    ok: true,
+    method: 'client.ping',
+    result: { accountId: 'Primary', echoed: { echo: true } },
+  });
+  assert.deepEqual(calls[0], ['callClientRpc', 'client.ping', { echo: true }, 'Primary']);
+});
+
+test('bridge group routes local diagnostics methods through plugin handlers', async () => {
+  const { bridge, calls } = createBridge();
+  const group = createBncrChannelPluginBridgeGroup({
+    channelId: 'bncr',
+    defaultAccountId: 'Primary',
+    getBridge: () => bridge,
+  });
+
+  const result = await group
+    .getBridgeCallBridge()
+    .call('bncr.diagnostics', { accountId: 'Primary' });
+
+  assert.deepEqual(result, {
+    ok: true,
+    method: 'bncr.diagnostics',
+    result: { ok: true, accountId: 'Primary' },
+  });
+  assert.deepEqual(calls[0], ['handleDiagnostics', { accountId: 'Primary' }]);
+});
+
+test('bridge call forwards any dynamic method and rejects empty method', async () => {
+  const { bridge } = createBridge();
+  const group = createBncrChannelPluginBridgeGroup({
+    channelId: 'bncr',
+    defaultAccountId: 'Primary',
+    getBridge: () => bridge,
+  });
+
+  const result = await group.getBridgeCallBridge().call('bncr.client.newMethod', { a: 1 });
+  assert.equal(result.method, 'bncr.client.newMethod');
+
+  await assert.rejects(() => group.getBridgeCallBridge().call('', {}), /bridge method is required/);
 });

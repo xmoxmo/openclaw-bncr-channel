@@ -105,6 +105,7 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
   setOutboxEntry: (messageId: string, entry: OutboxEntry) => void;
   resolveMessageAck: (messageId: string, result: 'acked' | 'timeout') => boolean;
   moveToDeadLetter: (entry: OutboxEntry, reason: string) => void;
+  markRecentOutboundAcked?: (entry: OutboxEntry) => void;
   recordAckTimeoutTelemetry: (accountId: string) => void;
   degradeOutboundCapability: (args: {
     accountId: string;
@@ -154,6 +155,7 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
       runtime.resolveMessageAck(messageId, result);
     },
     moveToDeadLetter: runtime.moveToDeadLetter,
+    markRecentOutboundAcked: runtime.markRecentOutboundAcked,
     logOutboxAckSummary: outboxAckLogs.logOutboxAckSummary,
   });
 

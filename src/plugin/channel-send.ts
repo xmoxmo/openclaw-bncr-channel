@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { normalizeAccountId } from '../core/accounts.ts';
 import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import type { BncrRoute, OutboxEntry } from '../core/types.ts';
@@ -211,28 +210,22 @@ export function createBncrChannelSendRuntime(runtime: BncrChannelSendRuntime) {
     const verified = runtime.resolveVerifiedTarget(to, accountId);
     runtime.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
 
-    await runtime.enqueueFromReply({
-      accountId,
-      sessionKey: verified.sessionKey,
-      route: verified.route,
-      payload: {
-        text: text,
-        mediaUrl: mediaUrl || undefined,
-        mediaUrls: Array.isArray(mediaUrls) && mediaUrls.length ? mediaUrls : undefined,
-        asVoice: asVoice || undefined,
-        audioAsVoice: audioAsVoice || undefined,
-        downloadMedia,
-        type,
-        extra,
-        kind: kind as 'tool' | 'block' | 'final' | undefined,
-        replyToId,
-      },
-      mediaLocalRoots: ctx.mediaLocalRoots,
+    const entry = await enqueueChannelMessageHandoff(runtime, ctx, {
+      text: text,
+      mediaUrl: mediaUrl || undefined,
+      mediaUrls: Array.isArray(mediaUrls) && mediaUrls.length ? mediaUrls : undefined,
+      asVoice: asVoice || undefined,
+      audioAsVoice: audioAsVoice || undefined,
+      downloadMedia,
+      type,
+      extra,
+      kind: kind as 'tool' | 'block' | 'final' | undefined,
+      replyToId,
     });
 
     return {
       channel: runtime.channelId,
-      messageId: randomUUID(),
+      messageId: entry.messageId,
       chatId: verified.sessionKey,
     };
   }

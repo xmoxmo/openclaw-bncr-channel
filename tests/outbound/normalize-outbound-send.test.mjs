@@ -338,6 +338,36 @@ test('[BncrParam] host downloadMedia:false passes through false (skip cascade)',
   assert.equal(r.asVoice, false);
 });
 
+/* ===================================================================
+ * Structured `message` tool extra shares the same normalizer as BncrParam.
+ * =================================================================== */
+test('[structured extra] media type and downloadMedia are consumed, unknown fields survive', async () => {
+  const r = await n({
+    text: 'structured voice',
+    mediaUrl: 'tests/media/a.mp3',
+    extra: { type: 'voice', downloadMedia: true, customBadge: 'VIP' },
+  });
+
+  assert.equal(r.hasMedia, true);
+  assert.equal(r.type, 'voice');
+  assert.equal(r.downloadMedia, true);
+  assert.equal(r.extra?.type, undefined);
+  assert.equal(r.extra?.downloadMedia, undefined);
+  assert.equal(r.extra?.customBadge, 'VIP');
+});
+
+test('[structured extra] appmsg type and msg pass through for downstream scatter', async () => {
+  const r = await n({
+    text: 'card',
+    extra: { type: 'appmsg', msg: '<appmsg/>', customKey: 'keep' },
+  });
+
+  assert.equal(r.hasMedia, false);
+  assert.equal(r.extra?.type, 'appmsg');
+  assert.equal(r.extra?.msg, '<appmsg/>');
+  assert.equal(r.extra?.customKey, 'keep');
+});
+
 test('[BncrParam] empty text and no media returns hasMedia=false, asVoice=false', async () => {
   const r = await n({});
   assert.equal(r.text, '');

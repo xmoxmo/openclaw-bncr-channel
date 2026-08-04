@@ -6,6 +6,7 @@ export const BNCR_GATEWAY_METHODS = [
   'bncr.diagnostics',
   'bncr.deadLetter.inspect',
   'bncr.deadLetter.prune',
+  'bncr.rpc.response',
   'bncr.file.init',
   'bncr.file.chunk',
   'bncr.file.complete',

@@ -81,6 +81,13 @@ openclaw devices approve --latest
 - 状态诊断
 - 文件互传
 
+### 0.6.1 新增说明
+
+- `bncr.outbound.recent`：本地 bridge 方法，可直接查询最近的出站记录；该记录来自出站重放缓存，不额外维护一份独立最近出站存储。
+- 出站重放缓存：最近出站消息会在下轮入站上下文回灌时带给 agent，用于让 agent 知道自己刚发过什么；查询和回灌共享同一份 `outboundReplayCache`。
+- bridge 方法调用：`message` 工具支持传入 `bridgeMethod`，可调用插件本地方法（如 `bncr.status.*`、`bncr.outbound.recent`）或转发到 OpenClawClient RPC。
+- unsend / delete：`message` 工具支持撤回/删除动作，按发送缓存映射回真实平台消息，不需要业务侧单独拼平台 message id。
+
 补充口径：
 
 - 入站会话按正式 scene / route 语义接入 OpenClaw，区分私聊与群聊会话。
@@ -285,6 +292,7 @@ npm pack
 - `npm run typecheck`：执行 `tsconfig.typecheck.json`，确保类型边界与 OpenClaw surface 对齐
 - `npm run selfcheck`：检查插件骨架是否完整，并验证关键 OpenClaw SDK subpath 可解析
 - `npm run check-pack`：执行 `npm pack --dry-run --json`，确认发布包包含关键入口与 OpenClaw adapter 文件
+- `tests/integrity/source-manifest.test.mjs`：确保 `selfcheck` / `check-pack` 的源文件清单与当前 `src/**/*.ts` 一致，新增源文件不会漏进发布清单
 - `npm run format:check`：执行 Biome `format` 只读检查（不带 `--write`），防止格式漂移混进发布门禁
 - `npm pack`：确认当前版本可正常打包
 - `npm run check-register-drift -- --duration-sec 300 --interval-sec 15`：静置采样 `bncr.diagnostics`，观察 `registerCount / apiGeneration / postWarmupRegisterCount` 是否在 warmup 后继续增长

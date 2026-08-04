@@ -118,6 +118,47 @@ export type OutboxEntry = {
   awaitingRetryPush?: boolean;
 };
 
+export type BncrRecentOutboundEntry = {
+  messageId: string;
+  accountId: string;
+  sessionKey: string;
+  route: BncrRoute;
+  type?: string;
+  kind?: string;
+  text: string;
+  mediaUrl?: string;
+  createdAt: number;
+  lastPushAt?: number;
+  lastError?: string;
+  ackedAt?: number;
+  status: 'queued' | 'pushed' | 'failed' | 'acked';
+};
+
+export type BncrOutboundReplayMediaEntry = {
+  path?: string;
+  contentType?: string;
+  kind?: 'image' | 'video' | 'audio' | 'document' | 'unknown';
+  messageId?: string;
+};
+
+export type BncrOutboundReplayStatus = 'pushed' | 'acked';
+
+export type BncrOutboundReplayEntry = {
+  sender: string;
+  senderId?: string;
+  body: string;
+  timestamp?: number;
+  messageId?: string;
+  media?: BncrOutboundReplayMediaEntry[];
+  accountId?: string;
+  sessionKey?: string;
+  route?: BncrRoute;
+  type?: string;
+  mediaUrl?: string;
+  createdAt?: number;
+  status?: BncrOutboundReplayStatus;
+};
+
 export type BncrDiagnosticsSummary = {
   health: {
     connected: boolean;

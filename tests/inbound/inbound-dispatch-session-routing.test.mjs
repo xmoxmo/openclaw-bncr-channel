@@ -6,6 +6,7 @@ import {
   resolveBncrInboundConversation,
 } from '../../src/messaging/inbound/dispatch.ts';
 import { prepareBncrInboundSessionContext } from '../../src/messaging/inbound/dispatch-prep.ts';
+import { recordBncrOutboundReplay } from '../../src/messaging/inbound/outbound-replay-cache.ts';
 import { parseBncrInboundParams, resolveChatType } from '../../src/messaging/inbound/parse.ts';
 import { resetBncrReplyDispatchSerialForTest } from '../../src/messaging/inbound/reply-dispatch-serial.ts';
 import {
@@ -302,6 +303,216 @@ test('dispatchBncrInbound routes non-admin direct sessions to public when resolv
     'agent:public:bncr:direct:7467426f743a3130303031',
   );
   assert.equal(enqueueCalls[0].sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
+});
+
+test('dispatchBncrInbound replays acknowledged outbound messages into direct context', async () => {
+  const { api, calls } = createInboundApiStub();
+  const outboundReplayCache = new Map();
+  const sessionKey = 'agent:public:bncr:direct:7467426f743a3130303031';
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    entry: {
+      messageId: 'out-direct-history-1',
+      accountId: 'Primary',
+      sessionKey,
+      route,
+      payload: {
+        type: 'message.outbound',
+        messageId: 'out-direct-history-1',
+        message: {
+          type: 'text',
+          msg: 'my previous outbound message',
+          path: '',
+          base64: '',
+          fileName: '',
+        },
+      },
+      createdAt: 1,
+      retryCount: 0,
+      nextAttemptAt: 1,
+    },
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'hello after my message',
+    mimeType: 'text/plain',
+    msgId: 'direct-after-outbound-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  assert.match(ctx.message.bodyForAgent, /my previous outbound message/);
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.pendingMediaContext;
+  assert.equal(historyFacts?.[0]?.messageId, 'out-direct-history-1');
+  assert.equal(historyFacts?.[0]?.sender, 'OpenClaw');
+  assert.equal(historyFacts?.[0]?.senderId, 'Primary');
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+});
+
+test('dispatchBncrInbound replays acknowledged outbound messages into group context', async () => {
+  const { api, calls } = createInboundApiStub();
+  const outboundReplayCache = new Map();
+  const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    entry: {
+      messageId: 'out-group-history-1',
+      accountId: 'Primary',
+      sessionKey: 'agent:public:bncr:group:7467426f743a2d31303031',
+      route,
+      payload: {
+        type: 'message.outbound',
+        messageId: 'out-group-history-1',
+        message: {
+          type: 'text',
+          msg: 'my previous group outbound message',
+          path: '',
+          base64: '',
+          fileName: '',
+        },
+      },
+      createdAt: 1,
+      retryCount: 0,
+      nextAttemptAt: 1,
+    },
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '@bot hello after my message',
+    mimeType: 'text/plain',
+    msgId: 'group-after-outbound-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  assert.match(ctx.message.bodyForAgent, /my previous group outbound message/);
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.pendingMediaContext;
+  assert.equal(historyFacts?.[0]?.messageId, 'out-group-history-1');
+  assert.equal(historyFacts?.[0]?.sender, 'OpenClaw');
+  assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
+});
+
+test('dispatchBncrInbound replays all cached outbound messages and clears cache', async () => {
+  const { api, calls } = createInboundApiStub();
+  const outboundReplayCache = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  for (let index = 0; index < 12; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      entry: {
+        messageId: `out-full-${index}`,
+        accountId: 'Primary',
+        sessionKey: `agent:public:bncr:direct:${index}`,
+        route,
+        payload: {
+          type: 'message.outbound',
+          messageId: `out-full-${index}`,
+          message: {
+            type: 'text',
+            msg: `outbound message ${index}`,
+            path: '',
+            base64: '',
+            fileName: '',
+          },
+        },
+        createdAt: index + 1,
+        retryCount: 0,
+        nextAttemptAt: index + 1,
+      },
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'hello after many outbound messages',
+    mimeType: 'text/plain',
+    msgId: 'direct-after-many-outbound',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.pendingMediaContext;
+  assert.equal(historyFacts?.length, 12);
+  for (let index = 0; index < 12; index += 1) {
+    assert.match(ctx.message.bodyForAgent, new RegExp(`outbound message ${index}`));
+    assert.equal(historyFacts[index]?.messageId, `out-full-${index}`);
+  }
+  assert.equal(outboundReplayCache.size, 0);
 });
 
 test('dispatchBncrInbound preserves explicit custom agent for non-admin direct sessions', async () => {

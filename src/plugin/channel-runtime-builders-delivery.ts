@@ -1,6 +1,7 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import type { BncrRoute, OutboxEntry } from '../core/types.ts';
 import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
+import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
@@ -107,6 +108,7 @@ export function buildBncrInboundSurfaceRuntime(deps: {
   defaultPublicAgentId: () => string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   groupHistories: BncrGroupHistoryMap;
+  outboundReplayCache: BncrOutboundReplayCache;
   prepareInboundAcceptance: (args: {
     parsed: ReturnType<typeof parseBncrInboundParams>;
     canonicalAgentId: string;

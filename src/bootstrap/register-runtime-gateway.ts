@@ -23,6 +23,7 @@ export type BncrGatewayMethodName =
   | 'bncr.diagnostics'
   | 'bncr.deadLetter.inspect'
   | 'bncr.deadLetter.prune'
+  | 'bncr.rpc.response'
   | 'bncr.file.init'
   | 'bncr.file.chunk'
   | 'bncr.file.complete'

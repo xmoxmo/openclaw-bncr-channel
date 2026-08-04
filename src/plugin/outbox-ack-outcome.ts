@@ -26,6 +26,7 @@ export type BncrOutboxAckOutcomeRuntime = {
   scheduleSave: () => void;
   resolveMessageAck: (messageId: string, result: 'acked' | 'timeout') => void;
   moveToDeadLetter: (entry: OutboxEntry, reason: string) => void;
+  markRecentOutboundAcked?: (entry: OutboxEntry) => void;
   logOutboxAckSummary: (
     scope: 'outbox ack ok' | 'outbox ack ok late' | 'outbox ack retry' | 'outbox ack fatal',
     args: {
@@ -69,6 +70,7 @@ export function createBncrOutboxAckOutcome(runtime: BncrOutboxAckOutcomeRuntime)
     runtime.deleteOutboxEntry(args.messageId);
     runtime.scheduleSave();
     runtime.resolveMessageAck(args.messageId, 'acked');
+    runtime.markRecentOutboundAcked?.(args.entry);
     runtime.logOutboxAckSummary(
       telemetryPatch.lateAccepted ? 'outbox ack ok late' : 'outbox ack ok',
       {

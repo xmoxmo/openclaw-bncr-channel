@@ -1,4 +1,5 @@
 import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-message';
+import { Type } from 'typebox';
 import { listAccountIds, normalizeAccountId, resolveAccount } from '../core/accounts.ts';
 import { BncrConfigSchema } from '../core/config-schema.ts';
 import { resolveBncrChannelPolicy } from '../core/policy.ts';
@@ -6,9 +7,11 @@ import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
 import { readOpenClawStringParam } from '../openclaw/sdk-helpers.ts';
+import type { BncrBridgeCallBridge } from './bridge-call.ts';
 import type {
   BncrChannelConfigRoot,
   BncrChannelSendContext,
+  BncrMessageToolSchemaContribution,
   BncrSceneRecord,
   BncrStatusRuntimeSnapshot,
   BncrVerifiedTarget,
@@ -34,6 +37,33 @@ type BncrChannelMeta = {
 };
 
 type PluginSurfaceResult = ReturnType<typeof openClawJsonResult>;
+
+const BNCR_MESSAGE_TOOL_SCHEMA: BncrMessageToolSchemaContribution = {
+  visibility: 'current-channel',
+  properties: {
+    bridgeMethod: Type.Optional(
+      Type.String({
+        description:
+          'Bncr-only bridge method forwarded to the OpenClawClient RPC bridge; use bncr.methods to list calls, or bncr.client.adapters.call to invoke a Bncr adapter method generically.',
+      }),
+    ),
+    extra: Type.Optional(
+      Type.Record(Type.String(), Type.Unknown(), {
+        description: 'Bncr-specific structured params merged into the unified outbound normalizer.',
+      }),
+    ),
+    type: Type.Optional(
+      Type.String({
+        description: 'Explicit outbound type such as text, audio, video, voice, file, or appmsg.',
+      }),
+    ),
+    downloadMedia: Type.Optional(
+      Type.Boolean({
+        description: 'Force URL media to be downloaded before sending.',
+      }),
+    ),
+  },
+};
 
 export function createBncrChannelPluginSurfaceGroup(runtime: {
   channelId: string;
@@ -80,6 +110,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
     channelStartAccount: BncrGatewayAccountBridge['channelStartAccount'];
     channelStopAccount: BncrGatewayAccountBridge['channelStopAccount'];
   };
+  getBridgeCallBridge: () => BncrBridgeCallBridge;
   channelMeta: BncrChannelMeta;
   channelCapabilities: {
     chatTypes: Array<'direct' | 'group' | 'thread'>;
@@ -121,11 +152,12 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
       }
 
       return {
-        actions: ['send'] as const,
+        actions: ['send', 'delete', 'unsend'] as const,
         capabilities: [] as const,
+        schema: BNCR_MESSAGE_TOOL_SCHEMA,
       };
     },
-    supportsAction: ({ action }) => action === 'send',
+    supportsAction: ({ action }) => action === 'send' || action === 'delete' || action === 'unsend',
     extractToolSend: ({ args }) =>
       runtime.extractToolSend(
         (args && typeof args === 'object' ? (args as Record<string, unknown>) : {}) as Record<
@@ -135,19 +167,62 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
         'sendMessage',
       ) || null,
     handleAction: async ({ action, params, accountId, mediaLocalRoots }) => {
-      if (action !== 'send') {
-        throw new Error(`Action ${action} is not supported for provider ${runtime.channelId}.`);
-      }
-
       /* -- extract raw params (no normalization) ----------------------- */
       const paramsObj = (params && typeof params === 'object' ? params : {}) as Record<
         string,
         unknown
       >;
-      const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
       const resolvedAccountId = normalizeAccountId(
         (readOpenClawStringParam(paramsObj, 'accountId') ?? accountId) || '',
       );
+      if (action === 'delete' || action === 'unsend') {
+        const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
+        const messageId =
+          (typeof paramsObj.messageId === 'number'
+            ? String(paramsObj.messageId)
+            : readOpenClawStringParam(paramsObj, 'messageId')) ||
+          readOpenClawStringParam(paramsObj, 'message_id');
+        if (!messageId) {
+          throw new Error(`${action} requires messageId`);
+        }
+
+        const verified = runtime.getToolActionBridge().resolveVerifiedTarget(to, resolvedAccountId);
+        const bridgeResult = await runtime.getBridgeCallBridge().call(
+          'bncr.client.adapters.call',
+          {
+            msgInfo: {
+              groupId: verified.route.groupId || '0',
+              userId: verified.route.userId || '0',
+            },
+            from: verified.route.platform,
+            method: 'delMsg',
+            messageId,
+          },
+          resolvedAccountId,
+        );
+        return runtime.openClawJsonResult({ ok: true, ...bridgeResult });
+      }
+
+      if (action !== 'send') {
+        throw new Error(`Action ${action} is not supported for provider ${runtime.channelId}.`);
+      }
+
+      const bridgeMethod =
+        typeof paramsObj.bridgeMethod === 'string' ? paramsObj.bridgeMethod.trim() : '';
+      if (bridgeMethod) {
+        const rawExtra = paramsObj.extra;
+        const bridgeArgs =
+          rawExtra && typeof rawExtra === 'object' && !Array.isArray(rawExtra)
+            ? { ...(rawExtra as Record<string, unknown>) }
+            : {};
+        if (!('accountId' in bridgeArgs)) {
+          bridgeArgs.accountId = resolvedAccountId || undefined;
+        }
+        const bridgeResult = await runtime.getBridgeCallBridge().call(bridgeMethod, bridgeArgs);
+        return runtime.openClawJsonResult(bridgeResult);
+      }
+
+      const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
       const toolMediaUrl =
         (typeof paramsObj.mediaUrl === 'string' ? paramsObj.mediaUrl : '') ||
         (typeof paramsObj.media === 'string' ? paramsObj.media : '') ||

@@ -200,6 +200,19 @@ test('sendDispatch passes raw marker-only text; extra unchanged', async () => {
   assert.equal(calls[0].payload.extra, undefined);
 });
 
+test('sendDispatch returns the queued outbox message id', async () => {
+  const { runtime } = createRuntimeHarness();
+
+  const result = await runtime.channelSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: 'hello',
+  });
+
+  assert.equal(result.messageId, 'msg-1');
+  assert.equal(result.chatId, 'agent:orion:bncr:direct:7467426f743a303a3130303031');
+});
+
 test('messageSendDispatch passes raw text; extra from ctx', async () => {
   const { runtime, calls } = createRuntimeHarness();
 

@@ -32,6 +32,7 @@ function createStore() {
     maxAccountActivityEntries: 100,
     sceneRegistry: new Map(),
     groupHistories: new Map(),
+    outboundReplayCache: new Map(),
     outbox: new Map(),
     getDeadLetter: () => [],
     setDeadLetter: () => {},
@@ -310,4 +311,36 @@ test('createBncrStateStore uses a minimum persisted group history cap of 60 for 
   assert.equal(store.dumpPersistedGroupHistories()[0]?.entries.length, 60);
   assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[0]?.body, 'd11');
   assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[59]?.body, 'd70');
+});
+
+test('createBncrStateStore persists outbound replay buckets without truncation', () => {
+  const { runtime, store } = createStore();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  const entries = Array.from({ length: 60 }, (_, index) => ({
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+    body: `m${index + 1}`,
+    timestamp: index + 1,
+    messageId: `cache-mid-${index + 1}`,
+    accountId: 'Primary',
+    sessionKey: 'session-1',
+    route,
+    type: 'text',
+    createdAt: index + 1,
+    status: 'acked',
+  }));
+
+  store.loadPersistedOutboundReplayCache([
+    {
+      key: 'Primary:tgBot:10001',
+      entries,
+    },
+  ]);
+
+  assert.equal(runtime.outboundReplayCache.get('Primary:tgBot:10001')?.length, 60);
+  assert.equal(store.dumpPersistedOutboundReplayCache()[0]?.entries.length, 60);
+  assert.equal(store.dumpPersistedOutboundReplayCache()[0]?.entries[0]?.body, 'm1');
+  assert.equal(store.dumpPersistedOutboundReplayCache()[0]?.entries[59]?.body, 'm60');
+  assert.equal(store.dumpPersistedOutboundReplayCache()[0]?.entries[0]?.sessionKey, 'session-1');
+  assert.equal(store.dumpPersistedOutboundReplayCache()[0]?.entries[0]?.status, 'acked');
 });

@@ -30,6 +30,7 @@ test('register runtime gateway registry deduplicates per api and registry finger
       'bncr.diagnostics': (_bridge, opts) => opts,
       'bncr.deadLetter.inspect': (_bridge, opts) => opts,
       'bncr.deadLetter.prune': (_bridge, opts) => opts,
+      'bncr.rpc.response': (_bridge, opts) => opts,
       'bncr.file.init': (_bridge, opts) => opts,
       'bncr.file.chunk': (_bridge, opts) => opts,
       'bncr.file.complete': (_bridge, opts) => opts,
@@ -49,6 +50,48 @@ test('register runtime gateway registry deduplicates per api and registry finger
   assert.equal(api.methods.length, 1);
   assert.equal(meta.methods.has('bncr.connect'), true);
   assert.match(calls[1], /already registered on this api/);
+});
+
+test('register runtime registers the client RPC response method', () => {
+  const api = {
+    methods: [],
+    registerGatewayMethod(name, handler) {
+      this.methods.push({ name, handler });
+    },
+  };
+  const meta = { methods: new Set(), registryFingerprint: 'svc:chn:mth' };
+  const gatewayRuntime = {
+    currentBridge: { getBridgeId: () => 'bridge-1', gatewayPid: 123 },
+    registeredMethodsByRegistry: new Map(),
+  };
+  const registry = createBncrGatewayMethodRegistry({
+    getRegisterMeta: () => meta,
+    getRegistryFingerprint: () => 'svc:chn:mth',
+    getGatewayRuntime: () => gatewayRuntime,
+    gatewayMethodDispatchers: {
+      'bncr.connect': (_bridge, opts) => opts,
+      'bncr.inbound': (_bridge, opts) => opts,
+      'bncr.activity': (_bridge, opts) => opts,
+      'bncr.ack': (_bridge, opts) => opts,
+      'bncr.diagnostics': (_bridge, opts) => opts,
+      'bncr.deadLetter.inspect': (_bridge, opts) => opts,
+      'bncr.deadLetter.prune': (_bridge, opts) => opts,
+      'bncr.rpc.response': (_bridge, opts) => opts,
+      'bncr.file.init': (_bridge, opts) => opts,
+      'bncr.file.chunk': (_bridge, opts) => opts,
+      'bncr.file.complete': (_bridge, opts) => opts,
+      'bncr.file.abort': (_bridge, opts) => opts,
+      'bncr.file.ack': (_bridge, opts) => opts,
+    },
+    getBridgeRegisterStateCarrier: (bridge) => bridge,
+  });
+
+  registry.ensureGatewayMethodRegistered(api, 'bncr.rpc.response', () => {});
+
+  assert.deepEqual(
+    api.methods.map((item) => item.name),
+    ['bncr.rpc.response'],
+  );
 });
 
 test('register runtime singleton manager rebuilds bridge when owner changes and hydrates state', () => {
@@ -129,6 +172,7 @@ test('gateway method error emits summary always and detailed JSON only in debug 
       'bncr.diagnostics': (_bridge, opts) => opts,
       'bncr.deadLetter.inspect': (_bridge, opts) => opts,
       'bncr.deadLetter.prune': (_bridge, opts) => opts,
+      'bncr.rpc.response': (_bridge, opts) => opts,
       'bncr.file.init': (_bridge, opts) => opts,
       'bncr.file.chunk': (_bridge, opts) => opts,
       'bncr.file.complete': (_bridge, opts) => opts,

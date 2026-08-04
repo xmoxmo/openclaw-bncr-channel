@@ -1,5 +1,11 @@
+import type { TSchema } from 'typebox';
 import type { RegisterDriftSnapshot } from '../core/register-trace.ts';
-import type { BncrDiagnosticsSummary, BncrRoute, OutboxEntry } from '../core/types.ts';
+import type {
+  BncrDiagnosticsSummary,
+  BncrOutboundReplayEntry,
+  BncrRoute,
+  OutboxEntry,
+} from '../core/types.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
 
 type OpenClawJsonResultPayload = ReturnType<typeof openClawJsonResult>;
@@ -88,6 +94,13 @@ export type BncrPersistedGroupHistoryBucket = {
   entries: BncrPersistedGroupHistoryEntry[];
 };
 
+export type BncrPersistedOutboundReplayEntry = BncrOutboundReplayEntry;
+export type BncrPersistedOutboundReplayMediaEntry = BncrPersistedGroupHistoryMediaEntry;
+export type BncrPersistedOutboundReplayBucket = {
+  key: string;
+  entries: BncrPersistedOutboundReplayEntry[];
+};
+
 export type BncrStatusRuntimeSnapshot = {
   connected?: boolean;
   running?: boolean;
@@ -143,10 +156,20 @@ export type BncrChannelSendContext = {
   extra?: Record<string, unknown>;
 };
 
+/**
+ * TypeBox schema contribution for the shared `message` tool.
+ * The host wraps each property with Type.Optional before validation.
+ */
+export type BncrMessageToolSchemaContribution = {
+  visibility?: 'current-channel' | 'all-configured';
+  properties: Record<string, TSchema>;
+};
+
 export type ChannelMessageActionAdapter = {
   describeMessageTool: (ctx: { cfg: BncrChannelConfigRoot }) => {
-    actions: readonly ['send'];
+    actions: readonly ('send' | 'delete' | 'unsend')[];
     capabilities: readonly [];
+    schema?: BncrMessageToolSchemaContribution;
   } | null;
   supportsAction: (ctx: { action: string }) => boolean;
   extractToolSend: (ctx: { args: unknown }) => OpenClawChannelToolSend | null;
@@ -164,6 +187,7 @@ export type PersistedState = {
   sessionRoutes: BncrPersistedSessionRoute[];
   sceneRegistry?: BncrSceneRecord[];
   groupHistories?: BncrPersistedGroupHistoryBucket[];
+  outboundReplayCache?: BncrPersistedOutboundReplayBucket[];
   lastSessionByAccount?: BncrPersistedLastSession[];
   lastActivityByAccount?: BncrPersistedAccountTimestamp[];
   lastInboundByAccount?: BncrPersistedAccountTimestamp[];

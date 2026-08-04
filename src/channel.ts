@@ -4,7 +4,12 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
 } from 'openclaw/plugin-sdk/core';
-import { BNCR_DEFAULT_ACCOUNT_ID, CHANNEL_ID, normalizeAccountId } from './core/accounts.ts';
+import {
+  BNCR_DEFAULT_ACCOUNT_ID,
+  CHANNEL_ID,
+  normalizeAccountId,
+  resolveAccount,
+} from './core/accounts.ts';
 import {
   countInvalidOutboxSessionKeys as countInvalidOutboxSessionKeysFromRuntime,
   countLegacyAccountResidue as countLegacyAccountResidueFromRuntime,
@@ -39,6 +44,7 @@ import type {
   OutboxEntry,
 } from './core/types.ts';
 import type { BncrGroupHistoryMap } from './messaging/inbound/group-history.ts';
+import type { BncrOutboundReplayCache } from './messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from './messaging/inbound/parse.ts';
 import { buildEnqueueFromReplyDebugInfo } from './messaging/outbound/diagnostics.ts';
 import { buildBncrMediaOutboundFrame } from './messaging/outbound/media.ts';
@@ -160,6 +166,7 @@ import {
   now,
   resolveOutboundFileName,
 } from './plugin/channel-utils.ts';
+import { createBncrClientRpcRuntime } from './plugin/client-rpc-runtime.ts';
 import { BNCR_CONFIG_SURFACE } from './plugin/config.ts';
 import { createBncrConnectionStateRuntimeGroup } from './plugin/connection-state-runtime-group.ts';
 import type { FileAckPayloadState } from './plugin/file-ack-runtime.ts';
@@ -287,6 +294,7 @@ class BncrBridgeRuntime {
     return this.sceneRegistry;
   }
   private groupHistories: BncrGroupHistoryMap = new Map();
+  private outboundReplayCache: BncrOutboundReplayCache = new Map();
   private routeAliases = new Map<
     string,
     { accountId: string; route: BncrRoute; updatedAt: number }
@@ -372,6 +380,14 @@ class BncrBridgeRuntime {
     }
   >();
   private earlyFileAcks = new Map<string, FileAckPayloadState>();
+
+  private readonly clientRpcRuntime = createBncrClientRpcRuntime({
+    resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
+    broadcastToConnIds: (event, payload, connIds) =>
+      this.gatewayContext?.broadcastToConnIds(event, payload, connIds),
+    now,
+    logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+  });
 
   private readonly bridgeSupportRuntime = createBridgeSupportRuntime({
     isStopped: () => this.stopped,
@@ -851,6 +867,7 @@ class BncrBridgeRuntime {
   }
 
   private cleanupRuntimeWaitersAndTimers(reason: string) {
+    this.clientRpcRuntime.shutdown();
     cleanupBncrBridgeRuntime(
       {
         bridgeId: this.bridgeId,
@@ -1759,6 +1776,7 @@ class BncrBridgeRuntime {
     setOutboxEntry: (messageId, entry) => this.outbox.set(messageId, entry),
     resolveMessageAck: (messageId, result) => this.resolveMessageAck(messageId, result),
     moveToDeadLetter: (entry, reason) => this.moveToDeadLetter(entry, reason),
+    markRecentOutboundAcked: (entry) => this.markRecentOutboundAcked(entry),
     recordAckTimeoutTelemetry: (accountId) => this.recordAckTimeoutTelemetry(accountId),
     degradeOutboundCapability: (args) => this.degradeOutboundCapability(args),
     flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
@@ -1884,6 +1902,7 @@ class BncrBridgeRuntime {
     maxAccountActivityEntries: MAX_ACCOUNT_ACTIVITY_ENTRIES,
     sceneRegistry: this.sceneRegistry,
     groupHistories: this.groupHistories,
+    outboundReplayCache: this.outboundReplayCache,
     outbox: this.outbox,
     getDeadLetter: () => this.deadLetter,
     setDeadLetter: (entries) => {
@@ -2148,6 +2167,16 @@ class BncrBridgeRuntime {
     lastPrePushGuardSkipReasonByAccount: this.lastPrePushGuardSkipReasonByAccount,
     deadLetterSinceStartByAccount: this.deadLetterSinceStartByAccount,
     lastOutboundByAccount: this.lastOutboundByAccount,
+    outboundReplayCache: this.outboundReplayCache,
+    resolveOutboundSender: (entry) => {
+      try {
+        const account = resolveAccount(getOpenClawRuntimeConfig(this.api), entry.accountId);
+        return { sender: account.name, senderId: entry.accountId };
+      } catch {
+        return { sender: 'OpenClaw', senderId: entry.accountId };
+      }
+    },
+    isOutboundAckRequired: (accountId) => this.isOutboundAckRequired(accountId),
     scheduleSave: () => this.scheduleSave(),
     flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
     logInfo: (scope, message, options) => this.logInfo(scope, message, options),
@@ -2722,6 +2751,18 @@ class BncrBridgeRuntime {
     return this.bridgeMediaFacade.enqueueFromReply(params);
   }
 
+  listRecentOutbound(sessionKey: string) {
+    return this.bridgeOutboxFacade.listRecentOutbound(sessionKey);
+  }
+
+  listRecentOutboundByAccount(accountId: string) {
+    return this.bridgeOutboxFacade.listRecentOutboundByAccount(accountId);
+  }
+
+  private markRecentOutboundAcked(entry: OutboxEntry) {
+    this.bridgeOutboxFacade.markRecentOutboundAcked(entry);
+  }
+
   private logEnqueueFromReply(args: {
     accountId: string;
     sessionKey: string;
@@ -2853,6 +2894,7 @@ class BncrBridgeRuntime {
       defaultPublicAgentId: () => this.defaultPublicAgentId(),
       sceneRegistry: this.sceneRegistry,
       groupHistories: this.groupHistories,
+      outboundReplayCache: this.outboundReplayCache,
       prepareInboundAcceptance: (args) => this.prepareInboundAcceptance(args),
       logInboundSummary: (args) => this.logInboundSummary(args),
       flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
@@ -2921,6 +2963,12 @@ class BncrBridgeRuntime {
 
   handleDeadLetterPrune = async (ctx: GatewayRequestHandlerOptions) =>
     this.diagnosticsHandlers.handleDeadLetterPrune(ctx);
+
+  handleRpcResponse = async (ctx: GatewayRequestHandlerOptions) =>
+    this.clientRpcRuntime.handleResponse(ctx);
+
+  callClientRpc = async (method: string, args: Record<string, unknown>, accountId: string) =>
+    this.clientRpcRuntime.call(method, args, normalizeAccountId(accountId));
 
   handleFileInit = async (ctx: GatewayRequestHandlerOptions) =>
     this.fileInboundHandlers.handleFileInit(ctx);
@@ -3024,6 +3072,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
     getStatusBridge: bridgeGroup.getStatusBridge,
     getToolActionBridge: bridgeGroup.getToolActionBridge,
     getGatewayBridge: bridgeGroup.getGatewayBridge,
+    getBridgeCallBridge: bridgeGroup.getBridgeCallBridge,
     channelMeta: BNCR_CHANNEL_META,
     channelCapabilities: BNCR_CHANNEL_CAPABILITIES,
     gatewayMethods: BNCR_GATEWAY_METHODS,

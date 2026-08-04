@@ -1,5 +1,6 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
+import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import {
   createBncrFileInboundHandlersComponent,
   createBncrInboundHandlersComponent,
@@ -86,6 +87,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
   >[0]['defaultPublicAgentId'];
   sceneRegistry: Parameters<typeof createBncrInboundHandlersComponent>[0]['sceneRegistry'];
   groupHistories: Parameters<typeof createBncrInboundHandlersComponent>[0]['groupHistories'];
+  outboundReplayCache: BncrOutboundReplayCache;
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlersComponent
   >[0]['prepareInboundAcceptance'];
@@ -152,6 +154,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     defaultPublicAgentId: runtime.defaultPublicAgentId,
     sceneRegistry: runtime.sceneRegistry,
     groupHistories: runtime.groupHistories,
+    outboundReplayCache: runtime.outboundReplayCache,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     logInboundSummary: runtime.logInboundSummary,
     flushPushQueueBestEffort: runtime.flushPushQueueBestEffort,

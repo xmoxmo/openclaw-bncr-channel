@@ -27,6 +27,12 @@ import {
   recordBncrPendingGroupMedia,
   recordBncrPendingGroupText,
 } from './group-history.ts';
+import {
+  type BncrOutboundReplayCache,
+  type BncrOutboundReplayEntry,
+  clearBncrOutboundReplay,
+  readBncrOutboundReplaySnapshot,
+} from './outbound-replay-cache.ts';
 import { runBncrInboundReplyDispatch } from './reply-dispatch.ts';
 import { buildBncrInboundTurnContext } from './turn-context.ts';
 
@@ -48,6 +54,7 @@ export async function dispatchBncrInbound(params: {
   resolvedAgentId?: string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   groupHistories: BncrGroupHistoryMap;
+  outboundReplayCache?: BncrOutboundReplayCache;
   defaultAdminAgentId: string;
   defaultPublicAgentId: string;
   now: () => number;
@@ -68,6 +75,7 @@ export async function dispatchBncrInbound(params: {
     resolvedAgentId,
     sceneRegistry = new Map(),
     groupHistories = new Map(),
+    outboundReplayCache = new Map(),
     defaultAdminAgentId,
     defaultPublicAgentId,
     now,
@@ -193,7 +201,7 @@ export async function dispatchBncrInbound(params: {
     }
   }
 
-  if (shouldDispatch && !silentHistoryFlush && parsed.peer.kind === 'group') {
+  if (shouldDispatch && !silentHistoryFlush) {
     pendingHistoryEntries = readBncrPendingGroupHistorySnapshot({
       historyMap: groupHistories,
       parsed,
@@ -206,6 +214,21 @@ export async function dispatchBncrInbound(params: {
         historyLimit: resolvedHistoryLimit,
       });
     }
+  }
+
+  let outboundReplayEntries: BncrOutboundReplayEntry[] = [];
+  if (shouldDispatch && !silentHistoryFlush) {
+    outboundReplayEntries = readBncrOutboundReplaySnapshot({
+      cache: outboundReplayCache,
+      parsed,
+      accountId,
+      excludeMessageId: msgId,
+    });
+    clearBncrOutboundReplay({
+      cache: outboundReplayCache,
+      parsed,
+      accountId,
+    });
   }
 
   const ctxPayload = await buildBncrInboundTurnContext({
@@ -227,6 +250,7 @@ export async function dispatchBncrInbound(params: {
     shouldDispatch,
     silentHistoryFlush,
     pendingHistoryEntries,
+    outboundReplayEntries,
   });
 
   await runBncrInboundReplyDispatch({
@@ -250,13 +274,7 @@ export async function dispatchBncrInbound(params: {
     enqueueFromReply,
   });
 
-  if (shouldDispatch && pendingHistoryEntries.length === 0) {
-    clearBncrPendingGroupHistory({
-      historyMap: groupHistories,
-      parsed,
-      historyLimit: resolvedHistoryLimit,
-    });
-  }
+  scheduleSave();
 
   return {
     accountId,

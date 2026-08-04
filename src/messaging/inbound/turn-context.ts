@@ -20,6 +20,7 @@ import {
   buildBncrGroupContextFromEntries,
   collectBncrHistoryMediaFromEntries,
 } from './group-history.ts';
+import type { BncrOutboundReplayEntry } from './outbound-replay-cache.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 
 function parseSlashCommandName(body: string): string | undefined {
@@ -78,6 +79,7 @@ export function buildBncrInboundTurnContext(args: {
   historyLimit?: number;
   silentHistoryFlush?: boolean;
   pendingHistoryEntries?: readonly BncrHistoryEntry[];
+  outboundReplayEntries?: readonly BncrOutboundReplayEntry[];
 }): BncrInboundContextPayload | Promise<BncrInboundContextPayload> {
   const {
     api,
@@ -98,7 +100,13 @@ export function buildBncrInboundTurnContext(args: {
   const pendingHistoryEntries = Array.isArray(args.pendingHistoryEntries)
     ? args.pendingHistoryEntries
     : [];
+  const outboundReplayEntries = Array.isArray(args.outboundReplayEntries)
+    ? args.outboundReplayEntries
+    : [];
   const silentHistoryFlush = args.silentHistoryFlush === true;
+  const contextEntries = silentHistoryFlush
+    ? pendingHistoryEntries
+    : [...pendingHistoryEntries, ...outboundReplayEntries];
   const flushSenderId = 'bncr-history-system';
   const flushSenderName = 'Bncr History System';
   const flushRawBody =
@@ -123,11 +131,11 @@ export function buildBncrInboundTurnContext(args: {
   const senderIsOwner = parsed.isAdmin === true || Boolean(ownerAllowFrom?.length);
   const senderIsAuthorized = senderIsOwner;
   const inboundHistory = undefined;
-  const pendingHistoryMedia = shouldDispatch
-    ? collectBncrHistoryMediaFromEntries({ entries: pendingHistoryEntries })
+  const contextMedia = shouldDispatch
+    ? collectBncrHistoryMediaFromEntries({ entries: contextEntries })
     : [];
-  const pendingHistoryContext = shouldDispatch
-    ? pendingHistoryEntries.map((entry) => ({
+  const structuredContextEntries = shouldDispatch
+    ? contextEntries.map((entry) => ({
         messageId: entry.messageId,
         sender: entry.sender,
         senderId: entry.senderId,
@@ -155,7 +163,7 @@ export function buildBncrInboundTurnContext(args: {
     bridgeSenderName,
     senderIsOwner,
     senderIsAuthorized,
-    pendingHistoryContext,
+    pendingHistoryContext: structuredContextEntries,
   });
   const promptVisibleContextFacts = buildBncrPromptVisibleContextFacts(structuredContextFacts);
   const supplementalUntrustedContext = [
@@ -177,10 +185,10 @@ export function buildBncrInboundTurnContext(args: {
   const wasMentioned = parsed.isBotMentioned === true || platformWantsReply;
   const isAuthorizedTextCommand = Boolean(ownerAllowFrom?.length);
   const bodyForAgent =
-    shouldDispatch && pendingHistoryEntries.length > 0
+    shouldDispatch && contextEntries.length > 0
       ? buildBncrGroupContextFromEntries({
           api,
-          entries: pendingHistoryEntries,
+          entries: contextEntries,
           channelLabel: resolution.canonicalTo,
           currentTimestamp: Date.now(),
           previousTimestamp: readBncrSessionUpdatedAt(api, {
@@ -199,7 +207,7 @@ export function buildBncrInboundTurnContext(args: {
     kind: item.kind,
     messageId: msgId ?? undefined,
   }));
-  const media = [...pendingHistoryMedia, ...currentTurnMedia];
+  const media = [...contextMedia, ...currentTurnMedia];
 
   return Promise.resolve(
     resolveBncrChannelInboundRuntime(api).buildContext({
