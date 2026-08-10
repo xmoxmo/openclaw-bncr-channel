@@ -122,7 +122,11 @@ test('buildBncrStructuredContextFacts preserves structured message, route, reply
         messageId: 'msg-1',
       },
     ],
-    pendingMediaContext: [],
+    conversationContext: [],
+    participants: null,
+    isGroupChat: undefined,
+    groupSubject: undefined,
+    accountId: 'Primary',
   });
 });
 
@@ -349,7 +353,7 @@ test('buildBncrPromptVisibleContextFacts drops prompt-visible path for non-inbou
   });
 });
 
-test('buildBncrPromptVisibleContextFacts preserves pending media context with sender, body, and multi-attachment refs', () => {
+test('buildBncrPromptVisibleContextFacts preserves conversation context with sender, role, body, and multi-attachment refs', () => {
   const facts = buildBncrStructuredContextFacts({
     channelId: 'bncr',
     accountId: 'Primary',
@@ -371,12 +375,14 @@ test('buildBncrPromptVisibleContextFacts preserves pending media context with se
       id: 'msg-1',
       rawBody: '@bot 看看上面的图',
     },
-    pendingMediaContext: [
+    conversationContext: [
       {
         messageId: 'pending-1',
+        timestamp: 1700000000000,
         sender: 'osxmo',
         senderId: '6278285192',
-        body: '这个',
+        role: 'user',
+        content: '这个',
         media: [
           {
             path: '/home/test/.openclaw/media/inbound/a.jpg',
@@ -393,6 +399,17 @@ test('buildBncrPromptVisibleContextFacts preserves pending media context with se
         ],
       },
     ],
+    participants: {
+      6278285192: {
+        name: 'osxmo',
+        username: 'osxmo',
+        isBot: false,
+        role: 'user',
+        displayName: 'osxmo',
+      },
+    },
+    isGroupChat: true,
+    groupSubject: 'wind_system',
   });
 
   assert.deepEqual(buildBncrPromptVisibleContextFacts(facts), {
@@ -400,28 +417,48 @@ test('buildBncrPromptVisibleContextFacts preserves pending media context with se
       to: 'Bncr:tgBot:-1001:0',
       originatingTo: 'Bncr:tgBot:-1001:10001',
     },
-    pendingMediaContext: [
+    conversation_context: [
       {
         messageId: 'pending-1',
+        timestamp: 1700000000000,
+        role: 'user',
         sender: 'osxmo',
         senderId: '6278285192',
-        body: '这个',
-        media: [
-          {
-            path: 'media://inbound/a.jpg',
-            contentType: 'image/jpeg',
-            kind: 'image',
-            messageId: 'pending-1',
-          },
-          {
-            path: 'media://inbound/b.png',
-            contentType: 'image/png',
-            kind: 'image',
-            messageId: 'pending-1',
-          },
-        ],
+        content: '这个',
+      },
+      {
+        messageId: 'pending-1',
+        timestamp: 1700000000000,
+        role: 'user',
+        sender: 'osxmo',
+        senderId: '6278285192',
+        media_type: 'image',
+        path: 'media://inbound/a.jpg',
+        contentType: 'image/jpeg',
+      },
+      {
+        messageId: 'pending-1',
+        timestamp: 1700000000000,
+        role: 'user',
+        sender: 'osxmo',
+        senderId: '6278285192',
+        media_type: 'image',
+        path: 'media://inbound/b.png',
+        contentType: 'image/png',
       },
     ],
+    participants: {
+      6278285192: {
+        name: 'osxmo',
+        username: 'osxmo',
+        isBot: false,
+        role: 'user',
+        displayName: 'osxmo',
+      },
+    },
+    is_group_chat: true,
+    group_subject: 'wind_system',
+    account_id: 'Primary',
   });
 });
 

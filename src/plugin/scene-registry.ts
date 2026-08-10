@@ -56,8 +56,8 @@ function buildSceneRecord(args: {
     ...(kind === 'group' && parsed.groupName ? { groupName: parsed.groupName } : {}),
     ...(agentId ? { agentId } : {}),
     ...(kind === 'group' ? { groupReplyMode: defaultGroupReplyMode(kind) } : {}),
-    ...(kind === 'group' ? { historyLimit: 50 } : {}),
-    ...(kind === 'group' ? { historyForce: true } : {}),
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt,
   };
 }
@@ -90,8 +90,8 @@ export function decideSceneAdmission(args: {
       ...(kind === 'group' && !existing.groupReplyMode
         ? { groupReplyMode: defaultGroupReplyMode(kind) }
         : {}),
-      ...(kind === 'group' && existing.historyLimit === undefined ? { historyLimit: 50 } : {}),
-      ...(kind === 'group' && existing.historyForce === undefined ? { historyForce: true } : {}),
+      ...(existing.historyLimit === undefined ? { historyLimit: 50 } : {}),
+      ...(existing.historyForce === undefined ? { historyForce: true } : {}),
       lastSeenAt: now,
     } satisfies BncrSceneRecord;
 

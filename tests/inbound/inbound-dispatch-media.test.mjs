@@ -101,6 +101,38 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
       type: 'bncr.inbound_context',
       payload: {
         platform: 'bncr/tgBot',
+        conversation_context: [
+          {
+            messageId: 'inbound-media-small',
+            timestamp:
+              calls.builtContexts[0].StructuredContextFacts.conversationContext[0].timestamp,
+            role: 'user',
+            sender: 'Bncr:tgBot:-1001:0',
+            senderId: '10001',
+            content: 'image inbound',
+          },
+          {
+            messageId: 'inbound-media-small',
+            timestamp:
+              calls.builtContexts[0].StructuredContextFacts.conversationContext[0].timestamp,
+            role: 'user',
+            sender: 'Bncr:tgBot:-1001:0',
+            senderId: '10001',
+            media_type: 'image',
+            path: 'media://inbound/bncr-inbound-media-1.bin',
+            contentType: 'image/png',
+          },
+        ],
+        participants: {
+          10001: {
+            name: 'Bncr:tgBot:-1001:0',
+            isBot: false,
+            role: 'user',
+            displayName: 'Bncr:tgBot:-1001:0',
+          },
+        },
+        is_group_chat: true,
+        account_id: 'Primary',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'Bncr:tgBot:-1001:0',

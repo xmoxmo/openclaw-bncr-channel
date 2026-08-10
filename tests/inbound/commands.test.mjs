@@ -145,6 +145,8 @@ test('resolveBncrNativeHelpCommand returns builtin bncr help text', () => {
   assert.match(helpText, /\/bncr download-media on\|off\|clear\|default on\|off/);
   assert.match(helpText, /\/bncr history-limit \[<number>\|clear\] \[<SceneId>\]/);
   assert.match(helpText, /\/bncr history-force on\|off\|clear \[<SceneId>\]/);
+  assert.match(helpText, /📋 Conversation history/);
+  assert.doesNotMatch(helpText, /📋 Group history/);
   assert.doesNotMatch(helpText, /💬 Group reply modes/);
   assert.doesNotMatch(helpText, /\/status/);
   assert.doesNotMatch(helpText, /\/whoami/);
@@ -721,6 +723,67 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: false, text: 'Admin permission required.' },
   );
+});
+
+test('executeSceneAdminCommand history shortcuts resolve the current private chat scene', () => {
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = {
+    isAdmin: true,
+    peer: { kind: 'direct' },
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+  };
+
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-get', sceneKey: '' },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 2,
+    }),
+    { ok: true, text: 'Current tgBot:10001 history limit is 50.' },
+  );
+
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-set', sceneKey: '', limit: 100 },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 3,
+    }),
+    { ok: true, text: 'Set tgBot:10001 history limit to 100.' },
+  );
+  assert.equal(sceneRegistry.get('tgBot:10001')?.historyLimit, 100);
+
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-force-set', sceneKey: '', enabled: false },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 4,
+    }),
+    { ok: true, text: 'Set tgBot:10001 history auto flush to off.' },
+  );
+  assert.equal(sceneRegistry.get('tgBot:10001')?.historyForce, false);
 });
 
 test('parseSceneAdminCommand: mode clear', () => {

@@ -174,7 +174,7 @@ const requiredSourceFiles = [
   'src/bootstrap/register-runtime-singleton.ts',
   'src/core/value-sanitize.ts',
   'src/messaging/inbound/contracts.ts',
-  'src/messaging/inbound/group-history.ts',
+  'src/messaging/inbound/conversation-history.ts',
   'src/messaging/inbound/native-command-runtime.ts',
   'src/messaging/inbound/reply-dispatch-serial.ts',
   'src/messaging/inbound/scene-admin.ts',

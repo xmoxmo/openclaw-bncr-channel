@@ -151,7 +151,7 @@ test('prepareBncrInboundAcceptance returns accepted payload with normalized sess
     hasMedia: false,
     resolvedAgentId: 'public',
     shouldDispatch: true,
-    shouldAccumulate: false,
+    shouldAccumulate: true,
     dispatchBy: 'mode-admin-admin',
   });
 });
@@ -171,7 +171,7 @@ test('prepareBncrInboundAcceptance defaults group scenes to admin-only reply mod
 
   assert.equal(result.ok, true);
   assert.equal(result.shouldDispatch, true);
-  assert.equal(result.shouldAccumulate, false);
+  assert.equal(result.shouldAccumulate, true);
   assert.deepEqual(sceneRegistry.get('tgBot:-1001'), {
     sceneKey: 'tgBot:-1001',
     kind: 'group',
@@ -304,6 +304,7 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
   );
   assert.equal(all.ok, true);
   assert.equal(all.shouldDispatch, true);
+  assert.equal(all.shouldAccumulate, true);
 });
 
 test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public agent', async () => {
@@ -338,6 +339,8 @@ test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public ag
     platform: 'tgBot',
     userId: '10001',
     agentId: 'public',
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt: 123,
   });
 });
@@ -485,6 +488,8 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
     userId: '10001',
     userName: 'xmo',
     agentId: 'public',
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt: 123,
   });
 });
@@ -530,6 +535,8 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
     userId: '10001',
     userName: 'xmo',
     agentId: 'public',
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt: 123,
   });
 });
@@ -579,6 +586,8 @@ test('prepareBncrInboundAcceptance preserves explicit custom agent on legacy non
     userId: '10001',
     userName: 'xmo',
     agentId: 'custom-agent',
+    historyLimit: 50,
+    historyForce: true,
     lastSeenAt: 123,
   });
 });

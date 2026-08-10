@@ -66,30 +66,12 @@ function shouldDispatchForScene(args: {
 }
 
 function shouldAccumulateForScene(args: {
-  parsed: ReturnType<typeof parseBncrInboundParams>;
+  shouldDispatch: boolean;
   admission: ReturnType<typeof decideSceneAdmission>;
-  cfg: BncrChannelConfigRoot;
 }) {
-  const { parsed, admission, cfg } = args;
-  if (parsed.peer.kind === 'direct') return true;
-  if (!admission.allowed) return false;
-
-  const isBncrNativeCommand =
-    parseBncrNativeCommand(parsed.extracted.text, {
-      allowBareWhoami: parsed.isAdmin !== true,
-    }) !== null;
-  const isAdminOpenClawNativeCommand =
-    parsed.isAdmin === true &&
-    !isBncrNativeCommand &&
-    hasControlCommand(parsed.extracted.text, cfg as Parameters<typeof hasControlCommand>[1]);
-  if (isAdminOpenClawNativeCommand) return true;
-
-  const mode = admission.scene.groupReplyMode || 'admin';
-  // admin and all: no accumulation needed - messages are either dispatched directly or discarded
-  if (mode === 'admin') return false;
-  if (mode === 'all') return false;
-  // mention and hybrid: non-trigger messages accumulate for future context
-  return true;
+  if (args.shouldDispatch) return true;
+  const mode = args.admission.scene.groupReplyMode || 'admin';
+  return mode === 'mention' || mode === 'hybrid';
 }
 
 export async function prepareBncrInboundAcceptance(args: {
@@ -206,6 +188,9 @@ export async function prepareBncrInboundAcceptance(args: {
     resolveAgentRoute: args.resolveAgentRoute,
   });
 
+  const shouldDispatch = shouldDispatchForScene({ parsed, admission, cfg });
+  const shouldAccumulate = shouldAccumulateForScene({ shouldDispatch, admission });
+
   return {
     ok: true as const,
     accountId,
@@ -213,8 +198,8 @@ export async function prepareBncrInboundAcceptance(args: {
     inboundText,
     hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
     resolvedAgentId: admission.agentId,
-    shouldDispatch: shouldDispatchForScene({ parsed, admission, cfg }),
-    shouldAccumulate: shouldAccumulateForScene({ parsed, admission, cfg }),
+    shouldDispatch,
+    shouldAccumulate,
     dispatchBy: resolveDispatchBy({ parsed, admission, cfg }),
   };
 }

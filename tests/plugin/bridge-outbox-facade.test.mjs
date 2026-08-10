@@ -37,6 +37,7 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
   const deadLetterSinceStart = new Map();
   const lastOutboundByAccount = new Map();
   const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
   let saveCount = 0;
 
   const facade = createBncrBridgeOutboxFacade({
@@ -62,6 +63,7 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
     deadLetterSinceStartByAccount: deadLetterSinceStart,
     lastOutboundByAccount,
     outboundReplayCache,
+    conversationHistories,
     isOutboundAckRequired: () => true,
     scheduleSave: () => {
       saveCount += 1;
@@ -91,6 +93,9 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
   facade.markRecentOutboundAcked(first);
   assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.messageId, 'm1');
   assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.body, 'm1');
+  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.messageId, 'm1');
+  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.body, 'm1');
+  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.role, 'assistant');
   assert.equal(facade.listRecentOutbound('session-1')[0]?.messageId, 'm1');
   assert.equal(facade.listRecentOutboundByAccount('Primary')[0]?.messageId, 'm1');
 

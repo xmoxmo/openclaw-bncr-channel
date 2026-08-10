@@ -4,8 +4,8 @@ import { emitBncrLogLine } from '../core/logging.ts';
 import { formatDisplayScope, normalizeStoredSessionKey, parseRouteLike } from '../core/targets.ts';
 import type { BncrRoute } from '../core/types.ts';
 import type { BncrInboundParamsInput } from '../messaging/inbound/contracts.ts';
+import type { BncrConversationHistoryMap } from '../messaging/inbound/conversation-history.ts';
 import { dispatchBncrInbound } from '../messaging/inbound/dispatch.ts';
-import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
 import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from '../messaging/outbound/reasons.ts';
@@ -211,7 +211,7 @@ export function createBncrInboundHandlersComponent(runtime: {
   defaultAdminAgentId: Parameters<typeof createBncrInboundHandlers>[0]['defaultAdminAgentId'];
   defaultPublicAgentId: Parameters<typeof createBncrInboundHandlers>[0]['defaultPublicAgentId'];
   sceneRegistry: Parameters<typeof createBncrInboundHandlers>[0]['sceneRegistry'];
-  groupHistories: BncrGroupHistoryMap;
+  conversationHistories: BncrConversationHistoryMap;
   outboundReplayCache: BncrOutboundReplayCache;
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlers
@@ -257,7 +257,7 @@ export function createBncrInboundHandlersComponent(runtime: {
     defaultAdminAgentId: runtime.defaultAdminAgentId,
     defaultPublicAgentId: runtime.defaultPublicAgentId,
     sceneRegistry: runtime.sceneRegistry,
-    groupHistories: runtime.groupHistories,
+    conversationHistories: runtime.conversationHistories,
     outboundReplayCache: runtime.outboundReplayCache,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     formatDisplayScope,
@@ -277,7 +277,7 @@ export function createBncrInboundHandlersComponent(runtime: {
       shouldDispatch,
       shouldAccumulate,
       sceneRegistry,
-      groupHistories,
+      conversationHistories,
       outboundReplayCache,
       defaultAdminAgentId,
       defaultPublicAgentId,
@@ -293,7 +293,7 @@ export function createBncrInboundHandlersComponent(runtime: {
         shouldDispatch,
         shouldAccumulate,
         sceneRegistry,
-        groupHistories,
+        conversationHistories,
         outboundReplayCache,
         defaultAdminAgentId,
         defaultPublicAgentId,

@@ -7,7 +7,7 @@ import type {
   OutboxEntry,
 } from '../core/types.ts';
 import type {
-  BncrPersistedGroupHistoryEntry,
+  BncrPersistedConversationHistoryEntry,
   BncrPersistedOutboundReplayEntry,
   BncrSceneRecord,
 } from './channel-runtime-types.ts';
@@ -37,7 +37,7 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
   maxSessionRouteEntries: number;
   maxAccountActivityEntries: number;
   sceneRegistry: Map<string, BncrSceneRecord>;
-  groupHistories: Map<string, BncrPersistedGroupHistoryEntry[]>;
+  conversationHistories: Map<string, BncrPersistedConversationHistoryEntry[]>;
   outboundReplayCache?: Map<string, BncrPersistedOutboundReplayEntry[]>;
   outbox: Map<string, OutboxEntry>;
   getDeadLetter: () => OutboxEntry[];
@@ -78,7 +78,7 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
     maxSessionRouteEntries: runtime.maxSessionRouteEntries,
     maxAccountActivityEntries: runtime.maxAccountActivityEntries,
     sceneRegistry: runtime.sceneRegistry,
-    groupHistories: runtime.groupHistories,
+    conversationHistories: runtime.conversationHistories,
     outboundReplayCache:
       runtime.outboundReplayCache ?? new Map<string, BncrPersistedOutboundReplayEntry[]>(),
     outbox: runtime.outbox,

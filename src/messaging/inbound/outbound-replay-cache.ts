@@ -4,6 +4,12 @@ import type {
   BncrOutboundReplayStatus,
   OutboxEntry,
 } from '../../core/types.ts';
+import {
+  type BncrConversationHistoryMap,
+  buildBncrConversationHistoryKey,
+  buildBncrConversationHistoryKeyFromRoute,
+  recordBncrBotReply,
+} from './conversation-history.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 
 export type {
@@ -152,6 +158,8 @@ function isAppMsg(type: string | undefined, msg: string): boolean {
 
 export function recordBncrOutboundReplay(args: {
   cache: BncrOutboundReplayCache;
+  conversationHistories?: BncrConversationHistoryMap;
+  historyLimit?: number;
   entry: OutboxEntry;
   sender: string;
   senderId?: string;
@@ -179,6 +187,38 @@ export function recordBncrOutboundReplay(args: {
     ? buildMediaBody('document')
     : normalizeTextBody(rawBody) || (isMedia ? buildMediaBody(kind) : '');
   if (!body) return;
+  const recordTimestamp = args.entry.lastPushAt ?? Date.now();
+
+  if (args.conversationHistories) {
+    const historyKey = buildBncrConversationHistoryKeyFromRoute({
+      platform: args.entry.route?.platform,
+      groupId: args.entry.route?.groupId,
+      userId: args.entry.route?.userId,
+    });
+    if (historyKey) {
+      recordBncrBotReply({
+        historyMap: args.conversationHistories,
+        historyKey,
+        sender: args.sender,
+        senderId: args.senderId,
+        body,
+        timestamp: recordTimestamp,
+        messageId: args.entry.messageId,
+        historyLimit: args.historyLimit,
+        ...(mediaUrl
+          ? {
+              media: [
+                {
+                  path: mediaUrl,
+                  kind,
+                  messageId: args.entry.messageId,
+                },
+              ],
+            }
+          : {}),
+      });
+    }
+  }
 
   recordOutboundReplayEntry({
     cache: args.cache,
@@ -187,7 +227,7 @@ export function recordBncrOutboundReplay(args: {
       sender: args.sender,
       ...(args.senderId ? { senderId: args.senderId } : {}),
       body,
-      timestamp: Date.now(),
+      timestamp: recordTimestamp,
       messageId: args.entry.messageId,
       accountId: args.entry.accountId,
       sessionKey: args.entry.sessionKey,
@@ -213,16 +253,52 @@ export function recordBncrOutboundReplay(args: {
 
 export function readBncrOutboundReplaySnapshot(args: {
   cache: BncrOutboundReplayCache;
+  conversationHistories?: BncrConversationHistoryMap;
   parsed: ParsedInbound;
   accountId: string;
   excludeMessageId?: string | null;
 }): BncrOutboundReplayEntry[] {
-  const cacheKey = buildBncrOutboundReplayKey(args.parsed, args.accountId);
-  if (!cacheKey) return [];
   const excludedMessageId = String(args.excludeMessageId || '').trim();
-  return (args.cache.get(cacheKey) || [])
-    .filter((entry) => !excludedMessageId || entry.messageId !== excludedMessageId)
-    .map(cloneBncrOutboundReplayEntry);
+  const cacheKey = buildBncrOutboundReplayKey(args.parsed, args.accountId);
+  const legacyEntries = cacheKey
+    ? (args.cache.get(cacheKey) || [])
+        .filter((entry) => !excludedMessageId || entry.messageId !== excludedMessageId)
+        .map(cloneBncrOutboundReplayEntry)
+    : [];
+  if (!args.conversationHistories) return legacyEntries;
+
+  const historyKey = buildBncrConversationHistoryKey(args.parsed);
+  const historyEntries = historyKey
+    ? (args.conversationHistories.get(historyKey) || [])
+        .filter((entry) => entry.role === 'assistant')
+        .filter((entry) => !excludedMessageId || entry.messageId !== excludedMessageId)
+        .map((entry) => ({
+          sender: entry.sender,
+          ...(entry.senderId ? { senderId: entry.senderId } : {}),
+          body: entry.body,
+          ...(typeof entry.timestamp === 'number' ? { timestamp: entry.timestamp } : {}),
+          ...(entry.messageId ? { messageId: entry.messageId } : {}),
+          ...(Array.isArray(entry.media)
+            ? {
+                media: entry.media.map((item) => ({
+                  path: item.path,
+                  contentType: item.contentType,
+                  kind: item.kind,
+                  messageId: item.messageId,
+                })),
+              }
+            : {}),
+        }))
+    : [];
+  const knownMessageIds = new Set(
+    historyEntries
+      .map((entry) => entry.messageId)
+      .filter((messageId): messageId is string => Boolean(messageId)),
+  );
+  return [
+    ...historyEntries,
+    ...legacyEntries.filter((entry) => !entry.messageId || !knownMessageIds.has(entry.messageId)),
+  ].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 }
 
 export function clearBncrOutboundReplay(args: {

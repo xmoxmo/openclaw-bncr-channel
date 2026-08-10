@@ -4,6 +4,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
 } from 'openclaw/plugin-sdk/core';
+import { DEFAULT_GROUP_HISTORY_LIMIT as DEFAULT_HISTORY_LIMIT } from 'openclaw/plugin-sdk/reply-history';
 import {
   BNCR_DEFAULT_ACCOUNT_ID,
   CHANNEL_ID,
@@ -43,7 +44,7 @@ import type {
   FileSendTransferState,
   OutboxEntry,
 } from './core/types.ts';
-import type { BncrGroupHistoryMap } from './messaging/inbound/group-history.ts';
+import type { BncrConversationHistoryMap } from './messaging/inbound/conversation-history.ts';
 import type { BncrOutboundReplayCache } from './messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from './messaging/inbound/parse.ts';
 import { buildEnqueueFromReplyDebugInfo } from './messaging/outbound/diagnostics.ts';
@@ -293,7 +294,7 @@ class BncrBridgeRuntime {
   getSceneRegistry(): Map<string, BncrSceneRecord> {
     return this.sceneRegistry;
   }
-  private groupHistories: BncrGroupHistoryMap = new Map();
+  private conversationHistories: BncrConversationHistoryMap = new Map();
   private outboundReplayCache: BncrOutboundReplayCache = new Map();
   private routeAliases = new Map<
     string,
@@ -1901,7 +1902,7 @@ class BncrBridgeRuntime {
     maxSessionRouteEntries: MAX_SESSION_ROUTE_ENTRIES,
     maxAccountActivityEntries: MAX_ACCOUNT_ACTIVITY_ENTRIES,
     sceneRegistry: this.sceneRegistry,
-    groupHistories: this.groupHistories,
+    conversationHistories: this.conversationHistories,
     outboundReplayCache: this.outboundReplayCache,
     outbox: this.outbox,
     getDeadLetter: () => this.deadLetter,
@@ -2168,6 +2169,17 @@ class BncrBridgeRuntime {
     deadLetterSinceStartByAccount: this.deadLetterSinceStartByAccount,
     lastOutboundByAccount: this.lastOutboundByAccount,
     outboundReplayCache: this.outboundReplayCache,
+    conversationHistories: this.conversationHistories,
+    resolveOutboundHistoryLimit: (entry) => {
+      const platform = entry.route?.platform || '';
+      const groupId = entry.route?.groupId || '0';
+      const userId = entry.route?.userId || '0';
+      const sceneKey = groupId !== '0' ? `${platform}:${groupId}` : `${platform}:${userId}`;
+      const sceneLimit = this.sceneRegistry.get(sceneKey)?.historyLimit;
+      return typeof sceneLimit === 'number' && Number.isFinite(sceneLimit) && sceneLimit >= 0
+        ? Math.floor(sceneLimit)
+        : DEFAULT_HISTORY_LIMIT;
+    },
     resolveOutboundSender: (entry) => {
       try {
         const account = resolveAccount(getOpenClawRuntimeConfig(this.api), entry.accountId);
@@ -2893,7 +2905,7 @@ class BncrBridgeRuntime {
       defaultAdminAgentId: (args) => this.defaultAdminAgentId(args),
       defaultPublicAgentId: () => this.defaultPublicAgentId(),
       sceneRegistry: this.sceneRegistry,
-      groupHistories: this.groupHistories,
+      conversationHistories: this.conversationHistories,
       outboundReplayCache: this.outboundReplayCache,
       prepareInboundAcceptance: (args) => this.prepareInboundAcceptance(args),
       logInboundSummary: (args) => this.logInboundSummary(args),

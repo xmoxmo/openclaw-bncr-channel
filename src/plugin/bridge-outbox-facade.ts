@@ -7,6 +7,7 @@ import {
 } from '../core/outbox-queue.ts';
 import { formatDisplayScope } from '../core/targets.ts';
 import type { BncrRecentOutboundEntry, OutboxEntry } from '../core/types.ts';
+import type { BncrConversationHistoryMap } from '../messaging/inbound/conversation-history.ts';
 import {
   type BncrOutboundReplayCache,
   type BncrOutboundReplayEntry,
@@ -42,6 +43,8 @@ export function createBncrBridgeOutboxFacade(runtime: {
   deadLetterSinceStartByAccount: Map<string, number>;
   lastOutboundByAccount: Map<string, number>;
   outboundReplayCache?: BncrOutboundReplayCache;
+  conversationHistories?: BncrConversationHistoryMap;
+  resolveOutboundHistoryLimit?: (entry: OutboxEntry) => number;
   resolveOutboundSender?: (entry: OutboxEntry) => { sender: string; senderId?: string };
   isOutboundAckRequired?: (accountId: string) => boolean;
   scheduleSave: () => void;
@@ -64,6 +67,12 @@ export function createBncrBridgeOutboxFacade(runtime: {
     };
     recordBncrOutboundReplay({
       cache: runtime.outboundReplayCache,
+      ...(runtime.conversationHistories
+        ? { conversationHistories: runtime.conversationHistories }
+        : {}),
+      ...(runtime.resolveOutboundHistoryLimit
+        ? { historyLimit: runtime.resolveOutboundHistoryLimit(entry) }
+        : {}),
       entry,
       sender: senderInfo.sender,
       senderId: senderInfo.senderId,

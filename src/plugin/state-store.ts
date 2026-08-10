@@ -14,9 +14,9 @@ import {
 import type {
   BncrGroupReplyMode,
   BncrPersistedAccountTimestamp,
-  BncrPersistedGroupHistoryBucket,
-  BncrPersistedGroupHistoryEntry,
-  BncrPersistedGroupHistoryMediaEntry,
+  BncrPersistedConversationHistoryBucket,
+  BncrPersistedConversationHistoryEntry,
+  BncrPersistedConversationHistoryMediaEntry,
   BncrPersistedLastSession,
   BncrPersistedOutboundReplayBucket,
   BncrPersistedOutboundReplayEntry,
@@ -26,13 +26,14 @@ import type {
 } from './channel-runtime-types.ts';
 
 const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
-const DEFAULT_PERSISTED_GROUP_HISTORY_LIMIT = 50;
+const DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT = 50;
 
 type BncrPersistedStateStoreInput = {
   outbox?: unknown;
   deadLetter?: unknown;
   sessionRoutes?: unknown;
   sceneRegistry?: unknown;
+  conversationHistories?: unknown;
   groupHistories?: unknown;
   outboundReplayCache?: unknown;
   // Legacy persisted key from before the outboundReplayCache rename.
@@ -48,8 +49,8 @@ type PersistedAccountTimestampInput = Partial<BncrPersistedAccountTimestamp>;
 type PersistedLastSessionInput = Partial<BncrPersistedLastSession>;
 type PersistedSessionRouteInput = Partial<BncrPersistedSessionRoute>;
 type PersistedSceneRecordInput = Partial<BncrSceneRecord>;
-type PersistedGroupHistoryBucketInput = Partial<BncrPersistedGroupHistoryBucket>;
-type PersistedGroupHistoryEntryInput = Partial<BncrPersistedGroupHistoryEntry>;
+type PersistedConversationHistoryBucketInput = Partial<BncrPersistedConversationHistoryBucket>;
+type PersistedConversationHistoryEntryInput = Partial<BncrPersistedConversationHistoryEntry>;
 type PersistedOutboundReplayBucketInput = Partial<BncrPersistedOutboundReplayBucket>;
 type PersistedOutboundReplayEntryInput = Partial<BncrOutboundReplayEntry>;
 
@@ -75,7 +76,7 @@ export function createBncrStateStore(runtime: {
   maxSessionRouteEntries: number;
   maxAccountActivityEntries: number;
   sceneRegistry: Map<string, BncrSceneRecord>;
-  groupHistories: Map<string, BncrPersistedGroupHistoryEntry[]>;
+  conversationHistories: Map<string, BncrPersistedConversationHistoryEntry[]>;
   outboundReplayCache?: Map<string, BncrPersistedOutboundReplayEntry[]>;
   outbox: Map<string, OutboxEntry>;
   getDeadLetter: () => OutboxEntry[];
@@ -92,16 +93,16 @@ export function createBncrStateStore(runtime: {
   const outboundReplayCache =
     runtime.outboundReplayCache ?? new Map<string, BncrPersistedOutboundReplayEntry[]>();
 
-  function resolvePersistedGroupHistoryLimit(key: string): number {
+  function resolvePersistedConversationHistoryLimit(key: string): number {
     const scene = runtime.sceneRegistry.get(key);
-    const sceneLimit = scene?.kind === 'group' ? scene.historyLimit : undefined;
+    const sceneLimit = scene?.historyLimit;
     if (typeof sceneLimit === 'number' && Number.isFinite(sceneLimit) && sceneLimit >= 0) {
       return Math.max(
-        DEFAULT_PERSISTED_GROUP_HISTORY_LIMIT,
+        DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT,
         Math.ceil(Math.floor(sceneLimit) * 1.2),
       );
     }
-    return DEFAULT_PERSISTED_GROUP_HISTORY_LIMIT;
+    return DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT;
   }
 
   function loadPersistedSceneRegistry(persisted: unknown): void {
@@ -165,19 +166,19 @@ export function createBncrStateStore(runtime: {
 
   function loadPersistedHistoryBuckets(
     persisted: unknown,
-    target: Map<string, BncrPersistedGroupHistoryEntry[]>,
+    target: Map<string, BncrPersistedConversationHistoryEntry[]>,
     resolveLimit: (key: string) => number,
   ): void {
     target.clear();
     const buckets = Array.isArray(persisted)
-      ? (persisted as PersistedGroupHistoryBucketInput[])
+      ? (persisted as PersistedConversationHistoryBucketInput[])
       : [];
     for (const bucket of buckets) {
       const key = runtime.asString(bucket?.key || '').trim();
       if (!key) continue;
-      const entries: BncrPersistedGroupHistoryEntry[] = [];
+      const entries: BncrPersistedConversationHistoryEntry[] = [];
       const rawEntries = Array.isArray(bucket?.entries)
-        ? (bucket.entries as PersistedGroupHistoryEntryInput[])
+        ? (bucket.entries as PersistedConversationHistoryEntryInput[])
         : [];
       for (const entry of rawEntries) {
         const sender = runtime.asString(entry?.sender || '').trim();
@@ -186,9 +187,9 @@ export function createBncrStateStore(runtime: {
         const timestamp = runtime.finiteNumberOr(entry?.timestamp, 0);
         const messageId = runtime.asString(entry?.messageId || '').trim();
 
-        const media: BncrPersistedGroupHistoryMediaEntry[] = [];
+        const media: BncrPersistedConversationHistoryMediaEntry[] = [];
         const rawMedia = Array.isArray(entry?.media)
-          ? (entry.media as Partial<BncrPersistedGroupHistoryMediaEntry>[])
+          ? (entry.media as Partial<BncrPersistedConversationHistoryMediaEntry>[])
           : [];
         for (const item of rawMedia) {
           const path = runtime.asString(item?.path || '').trim();
@@ -196,19 +197,22 @@ export function createBncrStateStore(runtime: {
           const contentType = runtime.asString(item?.contentType || '').trim();
           const kind = runtime.asString(item?.kind || '').trim();
           const mediaMessageId = runtime.asString(item?.messageId || '').trim();
-          const normalizedMedia: BncrPersistedGroupHistoryMediaEntry = {
+          const normalizedMedia: BncrPersistedConversationHistoryMediaEntry = {
             path,
             ...(contentType ? { contentType } : {}),
-            ...(kind ? { kind: kind as BncrPersistedGroupHistoryMediaEntry['kind'] } : {}),
+            ...(kind ? { kind: kind as BncrPersistedConversationHistoryMediaEntry['kind'] } : {}),
             ...(mediaMessageId ? { messageId: mediaMessageId } : {}),
           };
           media.push(normalizedMedia);
         }
 
-        const normalizedEntry: BncrPersistedGroupHistoryEntry = {
+        const normalizedEntry: BncrPersistedConversationHistoryEntry = {
           sender,
           ...(runtime.asString(entry?.senderId || '').trim()
             ? { senderId: runtime.asString(entry?.senderId || '').trim() }
+            : {}),
+          ...(entry?.role === 'user' || entry?.role === 'assistant' || entry?.role === 'system'
+            ? { role: entry.role }
             : {}),
           body,
           ...(timestamp > 0 ? { timestamp } : {}),
@@ -224,9 +228,9 @@ export function createBncrStateStore(runtime: {
     }
   }
 
-  function loadPersistedGroupHistories(persisted: unknown): void {
-    loadPersistedHistoryBuckets(persisted, runtime.groupHistories, (key) =>
-      resolvePersistedGroupHistoryLimit(key),
+  function loadPersistedConversationHistories(persisted: unknown): void {
+    loadPersistedHistoryBuckets(persisted, runtime.conversationHistories, (key) =>
+      resolvePersistedConversationHistoryLimit(key),
     );
   }
 
@@ -261,9 +265,9 @@ export function createBncrStateStore(runtime: {
             groupId: entry?.route?.groupId,
             userId: entry?.route?.userId,
           });
-        const media: BncrPersistedGroupHistoryMediaEntry[] = [];
+        const media: BncrPersistedConversationHistoryMediaEntry[] = [];
         const rawMedia = Array.isArray(entry?.media)
-          ? (entry.media as Partial<BncrPersistedGroupHistoryMediaEntry>[])
+          ? (entry.media as Partial<BncrPersistedConversationHistoryMediaEntry>[])
           : [];
         for (const item of rawMedia) {
           const path = runtime.asString(item?.path || '').trim();
@@ -274,7 +278,7 @@ export function createBncrStateStore(runtime: {
           media.push({
             path,
             ...(contentType ? { contentType } : {}),
-            ...(kind ? { kind: kind as BncrPersistedGroupHistoryMediaEntry['kind'] } : {}),
+            ...(kind ? { kind: kind as BncrPersistedConversationHistoryMediaEntry['kind'] } : {}),
             ...(mediaMessageId ? { messageId: mediaMessageId } : {}),
           });
         }
@@ -305,7 +309,7 @@ export function createBncrStateStore(runtime: {
   }
 
   function dumpPersistedHistoryBuckets(
-    source: Map<string, BncrPersistedGroupHistoryEntry[]>,
+    source: Map<string, BncrPersistedConversationHistoryEntry[]>,
     resolveLimit: (key: string) => number,
   ) {
     return Array.from(source.entries()).map(([key, entries]) => ({
@@ -314,9 +318,9 @@ export function createBncrStateStore(runtime: {
     }));
   }
 
-  function dumpPersistedGroupHistories() {
-    return dumpPersistedHistoryBuckets(runtime.groupHistories, (key) =>
-      resolvePersistedGroupHistoryLimit(key),
+  function dumpPersistedConversationHistories() {
+    return dumpPersistedHistoryBuckets(runtime.conversationHistories, (key) =>
+      resolvePersistedConversationHistoryLimit(key),
     );
   }
 
@@ -474,7 +478,7 @@ export function createBncrStateStore(runtime: {
 
     loadPersistedSessionRoutes(data.sessionRoutes);
     loadPersistedSceneRegistry(data.sceneRegistry);
-    loadPersistedGroupHistories(data.groupHistories);
+    loadPersistedConversationHistories(data.conversationHistories ?? data.groupHistories);
     loadPersistedOutboundReplayCache(data.outboundReplayCache ?? data.messageCache);
     loadPersistedLastSessionMap(data.lastSessionByAccount);
     loadPersistedAccountTimestampMap(runtime.lastActivityByAccount, data.lastActivityByAccount);
@@ -494,7 +498,7 @@ export function createBncrStateStore(runtime: {
       deadLetter: runtime.getDeadLetter().slice(-runtime.maxDeadLetterEntries),
       sessionRoutes: dumpPersistedSessionRoutes(),
       sceneRegistry: dumpPersistedSceneRegistry(),
-      groupHistories: dumpPersistedGroupHistories(),
+      conversationHistories: dumpPersistedConversationHistories(),
       outboundReplayCache: dumpPersistedOutboundReplayCache(),
       lastSessionByAccount: dumpPersistedLastSessionMap(),
       lastActivityByAccount: dumpPersistedAccountTimestampMap(runtime.lastActivityByAccount),
@@ -515,8 +519,8 @@ export function createBncrStateStore(runtime: {
     dumpPersistedSessionRoutes,
     loadPersistedSceneRegistry,
     dumpPersistedSceneRegistry,
-    loadPersistedGroupHistories,
-    dumpPersistedGroupHistories,
+    loadPersistedConversationHistories,
+    dumpPersistedConversationHistories,
     loadPersistedOutboundReplayCache,
     dumpPersistedOutboundReplayCache,
     backfillAccountActivityFromSessionRoutes,

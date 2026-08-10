@@ -86,7 +86,9 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     typeof createBncrInboundHandlersComponent
   >[0]['defaultPublicAgentId'];
   sceneRegistry: Parameters<typeof createBncrInboundHandlersComponent>[0]['sceneRegistry'];
-  groupHistories: Parameters<typeof createBncrInboundHandlersComponent>[0]['groupHistories'];
+  conversationHistories: Parameters<
+    typeof createBncrInboundHandlersComponent
+  >[0]['conversationHistories'];
   outboundReplayCache: BncrOutboundReplayCache;
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlersComponent
@@ -153,7 +155,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     defaultAdminAgentId: runtime.defaultAdminAgentId,
     defaultPublicAgentId: runtime.defaultPublicAgentId,
     sceneRegistry: runtime.sceneRegistry,
-    groupHistories: runtime.groupHistories,
+    conversationHistories: runtime.conversationHistories,
     outboundReplayCache: runtime.outboundReplayCache,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     logInboundSummary: runtime.logInboundSummary,

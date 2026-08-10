@@ -63,7 +63,7 @@ const requiredSourceFiles = [
   'src/messaging/inbound/dispatch-prep.ts',
   'src/messaging/inbound/dispatch.ts',
   'src/messaging/inbound/gate.ts',
-  'src/messaging/inbound/group-history.ts',
+  'src/messaging/inbound/conversation-history.ts',
   'src/messaging/inbound/last-route.ts',
   'src/messaging/inbound/media-url-download.ts',
   'src/messaging/inbound/native-command-runtime.ts',

@@ -49,7 +49,7 @@ const MODE_HELP_TEXT = [
 ].join('\n');
 
 export const HISTORY_HELP_TEXT = [
-  '📋 Bncr Group History Configuration',
+  '📋 Bncr Conversation History Configuration',
   '',
   'Commands:',
   '  • /bncr history-limit <number> [<SceneId>]',
@@ -86,6 +86,22 @@ function resolveCurrentGroupSceneKey(parsed: ParsedInbound): string | null {
   const groupId = normalizeToken(parsed.groupId);
   if (!platform || !groupId || groupId === '0') return null;
   return `${platform}:${groupId}`;
+}
+
+function resolveCurrentSceneKey(parsed: ParsedInbound): string | null {
+  const platform = normalizeToken(parsed.platform);
+  if (!platform) return null;
+  if (parsed.peer.kind === 'group') {
+    const groupId = normalizeToken(parsed.groupId);
+    if (!groupId || groupId === '0') return null;
+    return `${platform}:${groupId}`;
+  }
+  if (parsed.peer.kind === 'direct') {
+    const userId = normalizeToken(parsed.userId);
+    if (!userId || userId === '0') return null;
+    return `${platform}:${userId}`;
+  }
+  return null;
 }
 
 export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdminCommand {
@@ -340,8 +356,7 @@ function formatSceneDetailsLine(scene: BncrSceneRecord): string {
   const historyLimitVal = scene.historyLimit;
   const historyForceVal = scene.historyForce;
   const hasNonDefaultHistory =
-    scene.kind === 'group' &&
-    ((typeof historyLimitVal === 'number' && historyLimitVal !== 50) || historyForceVal === false);
+    (typeof historyLimitVal === 'number' && historyLimitVal !== 50) || historyForceVal === false;
   const historyPart = hasNonDefaultHistory
     ? ` historyLimit=${historyLimitVal ?? 50} autoFlush=${historyForceVal !== false ? 'on' : 'off'}`
     : '';
@@ -475,7 +490,7 @@ export function executeSceneAdminCommand(args: {
   }
 
   if (command.kind === 'history-limit-get') {
-    const qSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    const qSceneKey = command.sceneKey || resolveCurrentSceneKey(parsed);
     if (!qSceneKey) {
       return { ok: true, text: 'Default history limit is 50.' };
     }
@@ -485,9 +500,9 @@ export function executeSceneAdminCommand(args: {
   }
 
   if (command.kind === 'history-limit-set') {
-    const sSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    const sSceneKey = command.sceneKey || resolveCurrentSceneKey(parsed);
     if (!sSceneKey) {
-      return { ok: false, text: 'Current group shortcut only works inside a group chat.' };
+      return { ok: false, text: 'Current conversation shortcut requires a valid chat.' };
     }
     const sExisting = sceneRegistry.get(sSceneKey);
     if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
@@ -520,7 +535,7 @@ export function executeSceneAdminCommand(args: {
   }
 
   if (command.kind === 'history-force-get') {
-    const qSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    const qSceneKey = command.sceneKey || resolveCurrentSceneKey(parsed);
     if (!qSceneKey) {
       return { ok: true, text: 'Default history auto flush is on.' };
     }
@@ -534,9 +549,9 @@ export function executeSceneAdminCommand(args: {
   }
 
   if (command.kind === 'history-force-set') {
-    const sSceneKey = command.sceneKey || resolveCurrentGroupSceneKey(parsed);
+    const sSceneKey = command.sceneKey || resolveCurrentSceneKey(parsed);
     if (!sSceneKey) {
-      return { ok: false, text: 'Current group shortcut only works inside a group chat.' };
+      return { ok: false, text: 'Current conversation shortcut requires a valid chat.' };
     }
     const sExisting = sceneRegistry.get(sSceneKey);
     if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };

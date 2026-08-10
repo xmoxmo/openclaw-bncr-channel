@@ -1,5 +1,37 @@
 import path from 'node:path';
 
+type BncrConversationContextMedia = {
+  type?: string;
+  path?: string;
+  contentType?: string;
+  kind?: string;
+  messageId?: string;
+};
+
+type BncrConversationContextEntry = {
+  messageId?: string;
+  timestamp?: number;
+  role?: 'user' | 'assistant' | 'system';
+  sender?: string;
+  senderId?: string;
+  content?: string;
+  media?: BncrConversationContextMedia[];
+};
+
+type BncrParticipantRecord = Record<
+  string,
+  {
+    name: string;
+    username?: string;
+    isBot?: boolean;
+    isAdmin?: boolean;
+    isOwner?: boolean;
+    isAuthorizedSender?: boolean;
+    role?: 'owner' | 'admin' | 'user';
+    displayName?: string;
+  }
+>;
+
 export type BncrStructuredContextFactsInput = {
   channelId: string;
   accountId: string;
@@ -57,18 +89,10 @@ export type BncrStructuredContextFactsInput = {
     kind?: string;
     messageId?: string;
   }>;
-  pendingMediaContext?: Array<{
-    messageId?: string;
-    sender?: string;
-    senderId?: string;
-    body?: string;
-    media?: Array<{
-      path?: string;
-      contentType?: string;
-      kind?: string;
-      messageId?: string;
-    }>;
-  }>;
+  conversationContext?: BncrConversationContextEntry[];
+  participants?: BncrParticipantRecord | null;
+  isGroupChat?: boolean;
+  groupSubject?: string;
 };
 
 function toBncrPromptMediaPath(id: string): string | undefined {
@@ -166,18 +190,24 @@ export function buildBncrStructuredContextFacts(input: BncrStructuredContextFact
       kind: item.kind,
       messageId: item.messageId,
     })),
-    pendingMediaContext: (input.pendingMediaContext || []).map((entry) => ({
+    conversationContext: (input.conversationContext || []).map((entry) => ({
       messageId: entry.messageId,
+      timestamp: entry.timestamp,
+      role: entry.role,
       sender: entry.sender,
       senderId: entry.senderId,
-      body: entry.body,
+      content: entry.content,
       media: (entry.media || []).map((item) => ({
+        type: item.type || item.kind || 'document',
         path: item.path,
         contentType: item.contentType,
-        kind: item.kind,
         messageId: item.messageId,
       })),
     })),
+    participants: input.participants ?? null,
+    isGroupChat: input.isGroupChat,
+    groupSubject: input.groupSubject,
+    accountId: input.accountId,
   };
 }
 
@@ -210,18 +240,11 @@ export function buildBncrPromptVisibleContextFacts(
       kind?: string;
       messageId?: string;
     }>;
-    pendingMediaContext?: Array<{
-      messageId?: string;
-      sender?: string;
-      senderId?: string;
-      body?: string;
-      media?: Array<{
-        path?: string;
-        contentType?: string;
-        kind?: string;
-        messageId?: string;
-      }>;
-    }>;
+    conversation_context?: Array<Record<string, unknown>>;
+    participants?: BncrParticipantRecord;
+    is_group_chat?: boolean;
+    group_subject?: string;
+    account_id?: string;
   } = {};
 
   if (facts.platform) {
@@ -272,27 +295,39 @@ export function buildBncrPromptVisibleContextFacts(
       return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
     });
   }
-  if (facts.pendingMediaContext?.length) {
-    result.pendingMediaContext = facts.pendingMediaContext.flatMap((entry) => {
-      const media = (entry.media || []).flatMap((item) => {
+  if (facts.conversationContext?.length) {
+    result.conversation_context = facts.conversationContext.flatMap((entry) => {
+      const items: Array<Record<string, unknown>> = [];
+      if (entry.content) {
+        items.push({
+          messageId: entry.messageId,
+          timestamp: entry.timestamp,
+          role: entry.role,
+          sender: entry.sender,
+          senderId: entry.senderId,
+          content: entry.content,
+        });
+      }
+      for (const item of entry.media || []) {
         const promptMediaPath = resolveBncrPromptMediaPath(item.path);
         const payload = {
+          messageId: item.messageId ?? entry.messageId,
+          timestamp: entry.timestamp,
+          role: entry.role,
+          sender: entry.sender,
+          senderId: entry.senderId,
+          media_type: item.type || 'document',
           ...(promptMediaPath ? { path: promptMediaPath } : {}),
-          contentType: item.contentType,
-          kind: item.kind,
-          messageId: item.messageId,
+          ...(item.contentType ? { contentType: item.contentType } : {}),
         };
-        return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
-      });
-      const payload = {
-        messageId: entry.messageId,
-        sender: entry.sender,
-        senderId: entry.senderId,
-        body: entry.body,
-        ...(media.length > 0 ? { media } : {}),
-      };
-      return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+        if (Object.values(payload).some((field) => field !== undefined)) items.push(payload);
+      }
+      return items;
     });
+    if (facts.participants) result.participants = facts.participants;
+    if (facts.isGroupChat !== undefined) result.is_group_chat = facts.isGroupChat;
+    if (facts.groupSubject) result.group_subject = facts.groupSubject;
+    if (facts.accountId) result.account_id = facts.accountId;
   }
 
   return result;
@@ -358,25 +393,17 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
   bridgeSenderName?: string;
   senderIsOwner?: boolean;
   senderIsAuthorized?: boolean;
-  pendingHistoryContext?: Array<{
-    messageId?: string;
-    sender?: string;
-    senderId?: string;
-    body?: string;
-    media?: Array<{
-      path?: string;
-      contentType?: string;
-      kind?: string;
-      messageId?: string;
-    }>;
-  }>;
+  conversationHistoryContext?: BncrConversationContextEntry[];
+  participants?: BncrParticipantRecord | null;
+  isGroupChat?: boolean;
+  groupSubject?: string;
 };
 export function buildBncrStructuredContextFactsFromInboundParts(
   input: BncrStructuredContextFactsFromInboundPartsInput,
 ) {
   const mediaItems = Array.isArray(input.prepared.mediaItems) ? input.prepared.mediaItems : [];
-  const pendingHistoryContext = Array.isArray(input.pendingHistoryContext)
-    ? input.pendingHistoryContext
+  const conversationHistoryContext = Array.isArray(input.conversationHistoryContext)
+    ? input.conversationHistoryContext
     : [];
   return buildBncrStructuredContextFacts({
     channelId: input.channelId,
@@ -435,6 +462,9 @@ export function buildBncrStructuredContextFactsFromInboundParts(
       kind: item.kind || inferBncrStructuredMediaKind(item.contentType),
       messageId: input.parsed.msgId,
     })),
-    pendingMediaContext: pendingHistoryContext,
+    conversationContext: conversationHistoryContext,
+    participants: input.participants ?? null,
+    isGroupChat: input.isGroupChat,
+    groupSubject: input.groupSubject,
   });
 }

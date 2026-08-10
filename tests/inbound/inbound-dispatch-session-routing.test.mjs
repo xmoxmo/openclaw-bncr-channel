@@ -24,6 +24,29 @@ function createDeferred() {
   return { promise, resolve, reject };
 }
 
+function makeOutboundReplayEntry(messageId, route, overrides = {}) {
+  const message = {
+    type: overrides.type ?? 'text',
+    msg: overrides.msg ?? 'bot reply',
+    ...(overrides.mediaUrl ? { mediaUrl: overrides.mediaUrl } : {}),
+  };
+  return {
+    messageId,
+    accountId: 'Primary',
+    sessionKey: `agent:public:bncr:${route.groupId === '0' ? 'direct' : 'group'}:demo`,
+    route,
+    payload: {
+      type: 'message.outbound',
+      messageId,
+      message,
+    },
+    createdAt: 1,
+    retryCount: 0,
+    nextAttemptAt: 1,
+    ...(overrides.lastPushAt ? { lastPushAt: overrides.lastPushAt } : {}),
+  };
+}
+
 test('resolveChatType distinguishes direct and explicit group inbound scenes', () => {
   assert.equal(
     resolveChatType({ platform: 'tgBot', groupId: '0', userId: '10001' }, false),
@@ -223,7 +246,29 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
       envelopeBody: 'ENV:hello inbound',
     },
     media: [],
-    pendingMediaContext: [],
+    conversationContext: [
+      {
+        messageId: 'inbound-1',
+        timestamp: calls.builtContexts[0].StructuredContextFacts.conversationContext[0].timestamp,
+        role: 'user',
+        sender: 'xmo',
+        senderId: '10001',
+        content: 'hello inbound',
+        media: [],
+      },
+    ],
+    participants: {
+      10001: {
+        name: 'xmo',
+        username: 'xmo',
+        isBot: false,
+        role: 'user',
+        displayName: 'xmo',
+      },
+    },
+    isGroupChat: true,
+    groupSubject: '',
+    accountId: 'Primary',
   });
   assert.equal(calls.builtContexts[0].To, 'Bncr:tgBot:-1001:0');
   assert.equal(calls.builtContexts[0].OriginatingTo, 'Bncr:tgBot:-1001:0');
@@ -308,11 +353,13 @@ test('dispatchBncrInbound routes non-admin direct sessions to public when resolv
 test('dispatchBncrInbound replays acknowledged outbound messages into direct context', async () => {
   const { api, calls } = createInboundApiStub();
   const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
   const sessionKey = 'agent:public:bncr:direct:7467426f743a3130303031';
   const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
 
   recordBncrOutboundReplay({
     cache: outboundReplayCache,
+    conversationHistories,
     entry: {
       messageId: 'out-direct-history-1',
       accountId: 'Primary',
@@ -359,6 +406,7 @@ test('dispatchBncrInbound replays acknowledged outbound messages into direct con
     canonicalAgentId: 'orion',
     resolvedAgentId: 'public',
     outboundReplayCache,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -367,29 +415,37 @@ test('dispatchBncrInbound replays acknowledged outbound messages into direct con
 
   const ctx = calls.builtContextArgs.at(-1);
   assert.ok(ctx);
-  assert.match(ctx.message.bodyForAgent, /my previous outbound message/);
-  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.pendingMediaContext;
-  assert.equal(historyFacts?.[0]?.messageId, 'out-direct-history-1');
-  assert.equal(historyFacts?.[0]?.sender, 'OpenClaw');
-  assert.equal(historyFacts?.[0]?.senderId, 'Primary');
+  assert.equal(ctx.message.bodyForAgent, 'ENV:hello after my message');
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.conversationContext;
+  const assistant = historyFacts?.find((entry) => entry.messageId === 'out-direct-history-1');
+  assert.equal(assistant?.sender, 'OpenClaw');
+  assert.equal(assistant?.senderId, 'Primary');
+  assert.equal(assistant?.role, 'assistant');
+  assert.equal(assistant?.content, 'my previous outbound message');
+  const current = historyFacts?.find((entry) => entry.messageId === 'direct-after-outbound-1');
+  assert.equal(current?.role, 'user');
+  assert.equal(current?.content, 'hello after my message');
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
 });
 
 test('dispatchBncrInbound replays acknowledged outbound messages into group context', async () => {
   const { api, calls } = createInboundApiStub();
   const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
   const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
 
   recordBncrOutboundReplay({
     cache: outboundReplayCache,
+    conversationHistories,
     entry: {
-      messageId: 'out-group-history-1',
+      messageId: 'out-conversation-history-1',
       accountId: 'Primary',
       sessionKey: 'agent:public:bncr:group:7467426f743a2d31303031',
       route,
       payload: {
         type: 'message.outbound',
-        messageId: 'out-group-history-1',
+        messageId: 'out-conversation-history-1',
         message: {
           type: 'text',
           msg: 'my previous group outbound message',
@@ -429,6 +485,7 @@ test('dispatchBncrInbound replays acknowledged outbound messages into group cont
     canonicalAgentId: 'orion',
     resolvedAgentId: 'public',
     outboundReplayCache,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -437,20 +494,25 @@ test('dispatchBncrInbound replays acknowledged outbound messages into group cont
 
   const ctx = calls.builtContextArgs.at(-1);
   assert.ok(ctx);
-  assert.match(ctx.message.bodyForAgent, /my previous group outbound message/);
-  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.pendingMediaContext;
-  assert.equal(historyFacts?.[0]?.messageId, 'out-group-history-1');
-  assert.equal(historyFacts?.[0]?.sender, 'OpenClaw');
+  assert.equal(ctx.message.bodyForAgent, 'ENV:@bot hello after my message');
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.conversationContext;
+  const assistant = historyFacts?.find((entry) => entry.messageId === 'out-conversation-history-1');
+  assert.equal(assistant?.sender, 'OpenClaw');
+  assert.equal(assistant?.role, 'assistant');
+  assert.equal(assistant?.content, 'my previous group outbound message');
   assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
 });
 
 test('dispatchBncrInbound replays all cached outbound messages and clears cache', async () => {
   const { api, calls } = createInboundApiStub();
   const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
   const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
   for (let index = 0; index < 12; index += 1) {
     recordBncrOutboundReplay({
       cache: outboundReplayCache,
+      conversationHistories,
       entry: {
         messageId: `out-full-${index}`,
         accountId: 'Primary',
@@ -498,6 +560,7 @@ test('dispatchBncrInbound replays all cached outbound messages and clears cache'
     canonicalAgentId: 'orion',
     resolvedAgentId: 'public',
     outboundReplayCache,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -506,13 +569,131 @@ test('dispatchBncrInbound replays all cached outbound messages and clears cache'
 
   const ctx = calls.builtContextArgs.at(-1);
   assert.ok(ctx);
-  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.pendingMediaContext;
-  assert.equal(historyFacts?.length, 12);
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.conversationContext;
+  assert.equal(historyFacts?.length, 13);
   for (let index = 0; index < 12; index += 1) {
-    assert.match(ctx.message.bodyForAgent, new RegExp(`outbound message ${index}`));
-    assert.equal(historyFacts[index]?.messageId, `out-full-${index}`);
+    const assistant = historyFacts?.find((entry) => entry.messageId === `out-full-${index}`);
+    assert.equal(assistant?.role, 'assistant');
+    assert.equal(assistant?.content, `outbound message ${index}`);
   }
   assert.equal(outboundReplayCache.size, 0);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+});
+
+test('dispatchBncrInbound interleaves private user history and bot replies in conversation_context', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  const firstPending = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    shouldRespond: false,
+    type: 'text',
+    msg: 'private first',
+    mimeType: 'text/plain',
+    msgId: 'private-pending-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: firstPending,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    shouldDispatch: false,
+    shouldAccumulate: true,
+    conversationHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    entry: {
+      messageId: 'private-bot-1',
+      accountId: 'Primary',
+      sessionKey: 'agent:public:bncr:direct:7467426f743a3130303031',
+      route,
+      payload: {
+        type: 'message.outbound',
+        messageId: 'private-bot-1',
+        message: {
+          type: 'text',
+          msg: 'private bot reply',
+          path: '',
+          base64: '',
+          fileName: '',
+        },
+      },
+      createdAt: 1,
+      retryCount: 0,
+      nextAttemptAt: 1,
+    },
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const trigger = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    shouldRespond: true,
+    type: 'text',
+    msg: 'private trigger',
+    mimeType: 'text/plain',
+    msgId: 'private-trigger-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: trigger,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  assert.equal(ctx.message.bodyForAgent, 'ENV:private trigger');
+  const context = ctx.extra?.BncrStructuredContextFacts?.conversationContext;
+  assert.deepEqual(
+    context?.map((entry) => ({
+      messageId: entry.messageId,
+      role: entry.role,
+      content: entry.content,
+    })),
+    [
+      { messageId: 'private-pending-1', role: 'user', content: 'private first' },
+      { messageId: 'private-bot-1', role: 'assistant', content: 'private bot reply' },
+      { messageId: 'private-trigger-1', role: 'user', content: 'private trigger' },
+    ],
+  );
+  assert.deepEqual(ctx.extra?.BncrStructuredContextFacts?.participants, null);
+  assert.equal(ctx.extra?.BncrStructuredContextFacts?.isGroupChat, false);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
 });
 
 test('dispatchBncrInbound preserves explicit custom agent for non-admin direct sessions', async () => {
@@ -776,7 +957,7 @@ test('dispatchBncrInbound ingests group context without replying when shouldDisp
 
 test('dispatchBncrInbound drops non-accumulating group turns without writing pending history', async () => {
   const { api, calls } = createInboundApiStub();
-  const groupHistories = new Map();
+  const conversationHistories = new Map();
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -800,7 +981,7 @@ test('dispatchBncrInbound drops non-accumulating group turns without writing pen
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: false,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -810,12 +991,12 @@ test('dispatchBncrInbound drops non-accumulating group turns without writing pen
   assert.equal(calls.builtContexts.length, 1);
   assert.equal(calls.recorded.length, 1);
   assert.equal(calls.delivered.length, 0);
-  assert.equal(groupHistories.size, 0);
+  assert.equal(conversationHistories.size, 0);
 });
 
 test('dispatchBncrInbound replays pending group text and image history on later dispatched turn and clears window', async () => {
   const { api, calls } = createInboundApiStub();
-  const groupHistories = new Map();
+  const conversationHistories = new Map();
 
   const pendingText = parseBncrInboundParams({
     accountId: 'Primary',
@@ -840,7 +1021,7 @@ test('dispatchBncrInbound replays pending group text and image history on later 
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -872,7 +1053,7 @@ test('dispatchBncrInbound replays pending group text and image history on later 
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -901,7 +1082,7 @@ test('dispatchBncrInbound replays pending group text and image history on later 
     parsed: trigger,
     canonicalAgentId: 'public',
     shouldDispatch: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -910,23 +1091,32 @@ test('dispatchBncrInbound replays pending group text and image history on later 
 
   const triggeredCtx = calls.builtContextArgs.at(-1);
   assert.ok(triggeredCtx);
-  assert.match(triggeredCtx.message.bodyForAgent, /ENV:silent text/);
-  assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image>/);
-  assert.match(
-    triggeredCtx.message.bodyForAgent,
-    /\[Current message - respond to this]ENV:@bot summarize/,
+  assert.equal(triggeredCtx.message.bodyForAgent, 'ENV:@bot summarize');
+  const historyFacts = triggeredCtx.extra?.BncrStructuredContextFacts?.conversationContext;
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'pending-text-1')?.content,
+    'silent text',
   );
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'pending-image-1')?.content,
+    '<media:image>',
+  );
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'trigger-1')?.content,
+    '@bot summarize',
+  );
+  assert.equal(historyFacts?.find((entry) => entry.messageId === 'pending-text-1')?.role, 'user');
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
   assert.equal(
     calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
     'bncr.inbound_context',
   );
-  assert.deepEqual(groupHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
 });
 
 test('dispatchBncrInbound retains all pending group images from one mediaList turn for later replay', async () => {
   const { api, calls } = createInboundApiStub();
-  const groupHistories = new Map();
+  const conversationHistories = new Map();
 
   const pendingAlbum = parseBncrInboundParams({
     accountId: 'Primary',
@@ -964,7 +1154,7 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -993,7 +1183,7 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
     parsed: trigger,
     canonicalAgentId: 'public',
     shouldDispatch: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -1002,10 +1192,15 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
 
   const triggeredCtx = calls.builtContextArgs.at(-1);
   assert.ok(triggeredCtx);
-  assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image> \(2 images\)/);
-  assert.match(
-    triggeredCtx.message.bodyForAgent,
-    /\[Current message - respond to this]ENV:@bot summarize album/,
+  assert.equal(triggeredCtx.message.bodyForAgent, 'ENV:@bot summarize album');
+  const historyFacts = triggeredCtx.extra?.BncrStructuredContextFacts?.conversationContext;
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'pending-album-1')?.content,
+    '<media:image> (2 images)',
+  );
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'trigger-album-1')?.content,
+    '@bot summarize album',
   );
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
   assert.deepEqual(triggeredCtx.media, [
@@ -1030,7 +1225,7 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
 
 test('dispatchBncrInbound merges pending group media into a later text trigger turn', async () => {
   const { api, calls } = createInboundApiStub();
-  const groupHistories = new Map();
+  const conversationHistories = new Map();
 
   const pendingImage = parseBncrInboundParams({
     accountId: 'Primary',
@@ -1057,7 +1252,7 @@ test('dispatchBncrInbound merges pending group media into a later text trigger t
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -1086,7 +1281,7 @@ test('dispatchBncrInbound merges pending group media into a later text trigger t
     parsed: trigger,
     canonicalAgentId: 'public',
     shouldDispatch: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -1104,7 +1299,16 @@ test('dispatchBncrInbound merges pending group media into a later text trigger t
     },
   ]);
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
-  assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:image>/);
+  assert.equal(triggeredCtx.message.bodyForAgent, 'ENV:@bot 这张图是什么');
+  const historyFacts = triggeredCtx.extra?.BncrStructuredContextFacts?.conversationContext;
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'pending-image-later-1')?.content,
+    '<media:image>',
+  );
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'trigger-text-after-image-1')?.content,
+    '@bot 这张图是什么',
+  );
   assert.equal(
     calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
     'bncr.inbound_context',
@@ -1113,7 +1317,7 @@ test('dispatchBncrInbound merges pending group media into a later text trigger t
 
 test('dispatchBncrInbound flushes pending group history silently at the limit and keeps prior flushes readable later', async () => {
   const { api, calls } = createInboundApiStub();
-  const groupHistories = new Map();
+  const conversationHistories = new Map();
   const enqueueCalls = [];
   const sceneRegistry = new Map([
     [
@@ -1158,7 +1362,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
       shouldDispatch: false,
       shouldAccumulate: true,
       sceneRegistry,
-      groupHistories,
+      conversationHistories,
       rememberSessionRoute() {},
       enqueueFromReply: async (args) => {
         enqueueCalls.push(args);
@@ -1170,19 +1374,19 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
 
   assert.equal(calls.turnRuns.length, 1);
   assert.equal(enqueueCalls.length, 0);
-  assert.equal(groupHistories.get('tgBot:-1001')?.length, 2);
+  assert.equal(conversationHistories.get('tgBot:-1001')?.length, 2);
   assert.deepEqual(
-    groupHistories.get('tgBot:-1001')?.map((entry) => entry.body),
+    conversationHistories.get('tgBot:-1001')?.map((entry) => entry.body),
     ['测试4', '测试5'],
   );
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
   assert.match(String(calls.turnRuns[0].ctxPayload.RawBody || ''), /Output exactly NO_REPLY\./);
-  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /测试1/);
-  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /测试2/);
-  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /测试3/);
-  assert.match(
-    calls.turnRuns[0].ctxPayload.BodyForAgent,
-    /\[Current message - respond to this]ENV:This message was automatically generated by the system for group context accumulation\./,
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /Output exactly NO_REPLY\./);
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.content,
+    ),
+    ['测试1', '测试2', '测试3'],
   );
 
   const trigger = parseBncrInboundParams({
@@ -1208,7 +1412,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
     canonicalAgentId: 'public',
     shouldDispatch: true,
     sceneRegistry,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async (args) => {
       enqueueCalls.push(args);
@@ -1218,18 +1422,21 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
   });
 
   assert.equal(calls.turnRuns.length, 2);
-  assert.equal(enqueueCalls.length, 1);
-  assert.equal(enqueueCalls[0]?.payload?.text, 'reply from agent');
-  assert.match(calls.turnRuns[1].ctxPayload.BodyForAgent, /测试4/);
-  assert.match(calls.turnRuns[1].ctxPayload.BodyForAgent, /测试5/);
-  assert.match(calls.turnRuns[1].ctxPayload.BodyForAgent, /@bot 测试6/);
+  assert.equal(enqueueCalls.length, 0);
+  assert.equal(calls.turnRuns[1].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[1].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.content,
+    ),
+    ['测试4', '测试5', '@bot 测试6'],
+  );
   assert.equal(
     calls.turnRuns[1].ctxPayload.UntrustedStructuredContext?.some(
       (entry) => entry?.type === 'bncr.history_window',
     ),
     false,
   );
-  assert.deepEqual(groupHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
 
   const carry = ['测试6', '测试7', '测试8'];
   for (const [index, text] of carry.entries()) {
@@ -1257,7 +1464,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
       shouldDispatch: false,
       shouldAccumulate: true,
       sceneRegistry,
-      groupHistories,
+      conversationHistories,
       rememberSessionRoute() {},
       enqueueFromReply: async (args) => {
         enqueueCalls.push(args);
@@ -1268,11 +1475,14 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
   }
 
   assert.equal(calls.turnRuns.length, 3);
-  assert.equal(enqueueCalls.length, 1);
-  assert.deepEqual(groupHistories.get('tgBot:-1001'), []);
-  assert.match(calls.turnRuns[2].ctxPayload.BodyForAgent, /测试6/);
-  assert.match(calls.turnRuns[2].ctxPayload.BodyForAgent, /测试7/);
-  assert.match(calls.turnRuns[2].ctxPayload.BodyForAgent, /测试8/);
+  assert.equal(enqueueCalls.length, 0);
+  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(
+    calls.turnRuns[2].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.content,
+    ),
+    ['测试6', '测试7', '测试8'],
+  );
 
   const finalTrigger = parseBncrInboundParams({
     accountId: 'Primary',
@@ -1297,7 +1507,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
     canonicalAgentId: 'public',
     shouldDispatch: true,
     sceneRegistry,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async (args) => {
       enqueueCalls.push(args);
@@ -1307,8 +1517,14 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
   });
 
   assert.equal(calls.turnRuns.length, 4);
-  assert.equal(enqueueCalls.length, 2);
+  assert.equal(enqueueCalls.length, 1);
   assert.equal(calls.turnRuns[3].ctxPayload.SenderId, '10001');
+  assert.deepEqual(
+    calls.turnRuns[3].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.content,
+    ),
+    ['@bot 请复述之前的测试消息'],
+  );
   assert.equal(
     calls.turnRuns[3].ctxPayload.UntrustedStructuredContext?.find(
       (entry) => entry?.type === 'bncr.history_window',
@@ -1319,7 +1535,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
 
 test('dispatchBncrInbound honors scene history limit from the first accumulated group message', async () => {
   const { api, calls } = createInboundApiStub();
-  const groupHistories = new Map();
+  const conversationHistories = new Map();
   const sceneRegistry = new Map([
     [
       'tgBot:-1002',
@@ -1361,7 +1577,7 @@ test('dispatchBncrInbound honors scene history limit from the first accumulated 
       shouldDispatch: false,
       shouldAccumulate: true,
       sceneRegistry,
-      groupHistories,
+      conversationHistories,
       rememberSessionRoute() {},
       enqueueFromReply: async () => {},
       setInboundActivity() {},
@@ -1371,15 +1587,465 @@ test('dispatchBncrInbound honors scene history limit from the first accumulated 
 
   assert.equal(calls.turnRuns.length, 1);
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
-  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /首1/);
-  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /首2/);
-  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /首3/);
-  assert.deepEqual(groupHistories.get('tgBot:-1002'), []);
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.content,
+    ),
+    ['首1', '首2', '首3'],
+  );
+  assert.deepEqual(conversationHistories.get('tgBot:-1002'), []);
+});
+
+test('dispatchBncrInbound flushes pending direct history at the direct scene history limit', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+
+  for (const [index, text] of ['私聊1', '私聊2', '私聊3', '私聊4', '私聊5'].entries()) {
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed: parseBncrInboundParams({
+        accountId: 'Primary',
+        clientId: 'client-1',
+        platform: 'tgBot',
+        groupId: '0',
+        userId: '10001',
+        userName: 'xmo',
+        isGroup: false,
+        shouldRespond: false,
+        type: 'text',
+        msg: text,
+        mimeType: 'text/plain',
+        msgId: `direct-overflow-${index + 1}`,
+      }),
+      canonicalAgentId: 'public',
+      shouldDispatch: false,
+      shouldAccumulate: true,
+      sceneRegistry,
+      conversationHistories,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+  }
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.content,
+    ),
+    ['私聊1', '私聊2', '私聊3'],
+  );
+  assert.deepEqual(
+    conversationHistories.get('tgBot:10001')?.map((entry) => entry.body),
+    ['私聊4', '私聊5'],
+  );
+});
+
+test('dispatchBncrInbound force-flushes a dispatched direct message when accumulated history reaches the limit', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: false,
+      shouldRespond: false,
+      type: 'text',
+      msg: 'direct-1',
+      mimeType: 'text/plain',
+      msgId: 'direct-dispatched-limit-1',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: false,
+    shouldAccumulate: true,
+    sceneRegistry,
+    conversationHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  recordBncrOutboundReplay({
+    cache: new Map(),
+    conversationHistories,
+    historyLimit: 3,
+    entry: makeOutboundReplayEntry('direct-dispatched-limit-bot-1', {
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: false,
+      shouldRespond: false,
+      type: 'text',
+      msg: 'direct-2',
+      mimeType: 'text/plain',
+      msgId: 'direct-dispatched-limit-2',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    sceneRegistry,
+    conversationHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(enqueueCalls.length, 0);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['direct-dispatched-limit-1', 'direct-dispatched-limit-bot-1', 'direct-dispatched-limit-2'],
+  );
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+});
+
+test('dispatchBncrInbound does not force-flush bot replies until the next inbound message', async () => {
+  const { calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  for (let index = 1; index <= 3; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundReplayEntry(`bot-only-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(conversationHistories.get('tgBot:10001')?.length, 3);
+  assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.length, 3);
+});
+
+test('dispatchBncrInbound clears legacy outbound replay on silent overflow to avoid duplicate bot replies', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  const dispatchDirect = async (msgId, text, shouldDispatch) =>
+    dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed: parseBncrInboundParams({
+        accountId: 'Primary',
+        clientId: 'client-1',
+        platform: 'tgBot',
+        groupId: '0',
+        userId: '10001',
+        userName: 'xmo',
+        isGroup: false,
+        shouldRespond: false,
+        type: 'text',
+        msg: text,
+        mimeType: 'text/plain',
+        msgId,
+      }),
+      canonicalAgentId: 'public',
+      shouldDispatch,
+      shouldAccumulate: true,
+      sceneRegistry,
+      conversationHistories,
+      outboundReplayCache,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+
+  await dispatchDirect('silent-overflow-user-1', 'first', false);
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 3,
+    entry: makeOutboundReplayEntry('silent-overflow-bot-1', route),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  await dispatchDirect('silent-overflow-user-2', 'second', false);
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['silent-overflow-user-1', 'silent-overflow-bot-1', 'silent-overflow-user-2'],
+  );
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+
+  await dispatchDirect('silent-overflow-user-3', 'third', true);
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  assert.deepEqual(
+    ctx.extra?.BncrStructuredContextFacts?.conversationContext.map((entry) => entry.messageId),
+    ['silent-overflow-user-3'],
+  );
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+});
+
+test('dispatchBncrInbound clears group legacy outbound replay on silent overflow to avoid duplicate bot replies', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        agentId: 'public',
+        groupReplyMode: 'mention',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
+
+  const dispatchGroup = async (msgId, text, shouldDispatch) =>
+    dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed: parseBncrInboundParams({
+        accountId: 'Primary',
+        clientId: 'client-1',
+        platform: 'tgBot',
+        groupId: '-1001',
+        userId: '10001',
+        userName: 'xmo',
+        isGroup: true,
+        shouldRespond: false,
+        type: 'text',
+        msg: text,
+        mimeType: 'text/plain',
+        msgId,
+      }),
+      canonicalAgentId: 'public',
+      shouldDispatch,
+      shouldAccumulate: true,
+      sceneRegistry,
+      conversationHistories,
+      outboundReplayCache,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+
+  await dispatchGroup('group-silent-overflow-user-1', 'first', false);
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 3,
+    entry: makeOutboundReplayEntry('group-silent-overflow-bot-1', route),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  await dispatchGroup('group-silent-overflow-user-2', 'second', false);
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['group-silent-overflow-user-1', 'group-silent-overflow-bot-1', 'group-silent-overflow-user-2'],
+  );
+  assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+
+  await dispatchGroup('group-silent-overflow-user-3', 'third', true);
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  assert.deepEqual(
+    ctx.extra?.BncrStructuredContextFacts?.conversationContext.map((entry) => entry.messageId),
+    ['group-silent-overflow-user-3'],
+  );
+  assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+});
+
+test('dispatchBncrInbound truncates merged assistant history to the limit and keeps the current message', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  for (let index = 1; index <= 8; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundReplayEntry(`merged-bot-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: false,
+      shouldRespond: false,
+      type: 'text',
+      msg: 'current after many replies',
+      mimeType: 'text/plain',
+      msgId: 'merged-current-1',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['merged-bot-7', 'merged-bot-8', 'merged-current-1'],
+  );
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
 });
 
 test('dispatchBncrInbound records video, audio, and document group history markers for later replay', async () => {
   const { api, calls } = createInboundApiStub();
-  const groupHistories = new Map();
+  const conversationHistories = new Map();
 
   const pendingVideo = parseBncrInboundParams({
     accountId: 'Primary',
@@ -1406,7 +2072,7 @@ test('dispatchBncrInbound records video, audio, and document group history marke
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -1438,7 +2104,7 @@ test('dispatchBncrInbound records video, audio, and document group history marke
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -1470,7 +2136,7 @@ test('dispatchBncrInbound records video, audio, and document group history marke
     canonicalAgentId: 'public',
     shouldDispatch: false,
     shouldAccumulate: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -1499,7 +2165,7 @@ test('dispatchBncrInbound records video, audio, and document group history marke
     parsed: trigger,
     canonicalAgentId: 'public',
     shouldDispatch: true,
-    groupHistories,
+    conversationHistories,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
     setInboundActivity() {},
@@ -1508,12 +2174,23 @@ test('dispatchBncrInbound records video, audio, and document group history marke
 
   const triggeredCtx = calls.builtContextArgs.at(-1);
   assert.ok(triggeredCtx);
-  assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:video>/);
-  assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:audio>/);
-  assert.match(triggeredCtx.message.bodyForAgent, /ENV:<media:document>/);
-  assert.match(
-    triggeredCtx.message.bodyForAgent,
-    /\[Current message - respond to this]ENV:@bot summarize all media/,
+  assert.equal(triggeredCtx.message.bodyForAgent, 'ENV:@bot summarize all media');
+  const historyFacts = triggeredCtx.extra?.BncrStructuredContextFacts?.conversationContext;
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'pending-video-1')?.content,
+    '<media:video>',
+  );
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'pending-audio-1')?.content,
+    '<media:audio>',
+  );
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'pending-file-1')?.content,
+    '<media:document>',
+  );
+  assert.equal(
+    historyFacts?.find((entry) => entry.messageId === 'trigger-media-1')?.content,
+    '@bot summarize all media',
   );
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
   assert.deepEqual(triggeredCtx.media, [
@@ -1689,6 +2366,27 @@ test('dispatchBncrInbound carries provided originating target into built inbound
       type: 'bncr.inbound_context',
       payload: {
         platform: 'bncr/tgBot',
+        conversation_context: [
+          {
+            messageId: 'inbound-3',
+            timestamp:
+              calls.builtContexts[0].StructuredContextFacts.conversationContext[0].timestamp,
+            role: 'user',
+            sender: 'Bncr:tgBot:-1001:0',
+            senderId: '10001',
+            content: 'hello inbound',
+          },
+        ],
+        participants: {
+          10001: {
+            name: 'Bncr:tgBot:-1001:0',
+            isBot: false,
+            role: 'user',
+            displayName: 'Bncr:tgBot:-1001:0',
+          },
+        },
+        is_group_chat: true,
+        account_id: 'Primary',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'BncrRaw:tgBot:-1001:10001',

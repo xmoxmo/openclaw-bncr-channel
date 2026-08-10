@@ -44,6 +44,7 @@ test('handleInbound async dispatch path reaches built inbound context instead of
     assert.equal(calls.recorded.length, 1);
     assert.equal(calls.builtContexts[0].MediaType, undefined);
     assert.equal(calls.builtContexts[0].ChatType, 'group');
+    const structuredFacts = calls.builtContexts[0].StructuredContextFacts;
     assert.deepEqual(calls.builtContexts[0].UntrustedStructuredContext, [
       {
         label: 'Bncr inbound context',
@@ -62,6 +63,19 @@ test('handleInbound async dispatch path reaches built inbound context instead of
             originatingTo: 'Bncr:tgBot:-1001:0',
             rawTo: 'Bncr:tgBot:-1001:10001',
           },
+          conversation_context: [
+            {
+              messageId: 'inbound-async-1',
+              timestamp: structuredFacts.conversationContext[0].timestamp,
+              role: 'user',
+              sender: 'Bncr:tgBot:-1001:0',
+              senderId: '10001',
+              content: 'hello inbound',
+            },
+          ],
+          participants: structuredFacts.participants,
+          is_group_chat: true,
+          account_id: 'Primary',
         },
       },
     ]);

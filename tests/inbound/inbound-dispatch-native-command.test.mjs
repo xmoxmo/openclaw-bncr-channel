@@ -2036,6 +2036,27 @@ test('slash command with no native reply falls back to normal bncr agent inbound
       type: 'bncr.inbound_context',
       payload: {
         platform: 'bncr/tgBot',
+        conversation_context: [
+          {
+            messageId: 'slash-fallback-1',
+            timestamp:
+              calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext[0].timestamp,
+            role: 'user',
+            sender: 'Bncr:tgBot:-1001:0',
+            senderId: '10001',
+            content: '/unknown-native-command',
+          },
+        ],
+        participants: {
+          10001: {
+            name: 'Bncr:tgBot:-1001:0',
+            isBot: false,
+            role: 'user',
+            displayName: 'Bncr:tgBot:-1001:0',
+          },
+        },
+        is_group_chat: true,
+        account_id: 'Primary',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'Bncr:tgBot:-1001:0',
@@ -2201,6 +2222,27 @@ test('slash command without clientId still falls back to normal bncr agent inbou
       type: 'bncr.inbound_context',
       payload: {
         platform: 'bncr/tgBot',
+        conversation_context: [
+          {
+            messageId: 'slash-fallback-no-client',
+            timestamp:
+              calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext[0].timestamp,
+            role: 'user',
+            sender: 'Bncr:tgBot:-1001:0',
+            senderId: '10001',
+            content: '/unknown-native-command',
+          },
+        ],
+        participants: {
+          10001: {
+            name: 'Bncr:tgBot:-1001:0',
+            isBot: false,
+            role: 'user',
+            displayName: 'Bncr:tgBot:-1001:0',
+          },
+        },
+        is_group_chat: true,
+        account_id: 'Primary',
         reply: {
           to: 'Bncr:tgBot:-1001:0',
           originatingTo: 'Bncr:tgBot:-1001:0',

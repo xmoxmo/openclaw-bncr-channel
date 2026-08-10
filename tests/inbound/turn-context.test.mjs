@@ -107,18 +107,40 @@ test('buildBncrInboundTurnContext replays pending group text and image history i
       body: 'ENV:@bot summarize',
       mediaItems: [],
     },
-    groupHistories: new Map([['tgBot:-1001', historyEntries1]]),
+    conversationHistories: new Map([['tgBot:-1001', historyEntries1]]),
     pendingHistoryEntries: historyEntries1,
     shouldDispatch: true,
   });
 
   assert.equal(calls.length, 1);
-  assert.match(calls[0].message.bodyForAgent, /ENV:first text/);
-  assert.match(calls[0].message.bodyForAgent, /ENV:<media:image>/);
-  assert.match(
-    calls[0].message.bodyForAgent,
-    /\[Current message - respond to this\]ENV:@bot summarize/,
-  );
+  assert.equal(calls[0].message.bodyForAgent, 'ENV:@bot summarize');
+  assert.deepEqual(calls[0].extra.BncrStructuredContextFacts.conversationContext, [
+    {
+      messageId: 'msg-history-1',
+      timestamp: 1,
+      role: 'user',
+      sender: 'alice',
+      senderId: '10002',
+      content: 'first text',
+      media: [],
+    },
+    {
+      messageId: 'msg-history-2',
+      timestamp: 2,
+      role: 'user',
+      sender: 'bob',
+      senderId: '10003',
+      content: '<media:image>',
+      media: [
+        {
+          type: 'image',
+          path: '/tmp/history-image.png',
+          contentType: 'image/png',
+          messageId: 'msg-history-2',
+        },
+      ],
+    },
+  ]);
   assert.equal(calls[0].message.inboundHistory, undefined);
   assert.equal(calls[0].supplemental.untrustedContext?.[0]?.type, 'bncr.inbound_context');
 });
@@ -190,14 +212,33 @@ test('buildBncrInboundTurnContext replays pending non-image media markers withou
       body: 'ENV:@bot summarize media',
       mediaItems: [],
     },
-    groupHistories: new Map([['tgBot:-1001', historyEntries2]]),
+    conversationHistories: new Map([['tgBot:-1001', historyEntries2]]),
     pendingHistoryEntries: historyEntries2,
     shouldDispatch: true,
   });
 
   assert.equal(calls.length, 1);
-  assert.match(calls[0].message.bodyForAgent, /ENV:<media:video>/);
-  assert.match(calls[0].message.bodyForAgent, /ENV:<media:audio>/);
+  assert.equal(calls[0].message.bodyForAgent, 'ENV:@bot summarize media');
+  assert.deepEqual(calls[0].extra.BncrStructuredContextFacts.conversationContext, [
+    {
+      messageId: 'msg-history-4',
+      timestamp: 3,
+      role: 'user',
+      sender: 'alice',
+      senderId: '10002',
+      content: '<media:video>',
+      media: [],
+    },
+    {
+      messageId: 'msg-history-5',
+      timestamp: 4,
+      role: 'user',
+      sender: 'bob',
+      senderId: '10003',
+      content: '<media:audio>',
+      media: [],
+    },
+  ]);
   assert.equal(calls[0].message.inboundHistory, undefined);
   assert.equal(calls[0].supplemental.untrustedContext?.[0]?.type, 'bncr.inbound_context');
 });

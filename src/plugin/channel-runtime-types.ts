@@ -73,29 +73,30 @@ export type BncrSceneRecord = {
   lastSeenAt: number;
 };
 
-export type BncrPersistedGroupHistoryEntry = {
+export type BncrPersistedConversationHistoryEntry = {
   sender: string;
   senderId?: string;
+  role?: 'user' | 'assistant' | 'system';
   body: string;
   timestamp?: number;
   messageId?: string;
-  media?: BncrPersistedGroupHistoryMediaEntry[];
+  media?: BncrPersistedConversationHistoryMediaEntry[];
 };
 
-export type BncrPersistedGroupHistoryMediaEntry = {
+export type BncrPersistedConversationHistoryMediaEntry = {
   path?: string;
   contentType?: string;
   kind?: 'image' | 'video' | 'audio' | 'document' | 'unknown';
   messageId?: string;
 };
 
-export type BncrPersistedGroupHistoryBucket = {
+export type BncrPersistedConversationHistoryBucket = {
   key: string;
-  entries: BncrPersistedGroupHistoryEntry[];
+  entries: BncrPersistedConversationHistoryEntry[];
 };
 
 export type BncrPersistedOutboundReplayEntry = BncrOutboundReplayEntry;
-export type BncrPersistedOutboundReplayMediaEntry = BncrPersistedGroupHistoryMediaEntry;
+export type BncrPersistedOutboundReplayMediaEntry = BncrPersistedConversationHistoryMediaEntry;
 export type BncrPersistedOutboundReplayBucket = {
   key: string;
   entries: BncrPersistedOutboundReplayEntry[];
@@ -186,7 +187,8 @@ export type PersistedState = {
   deadLetter: OutboxEntry[];
   sessionRoutes: BncrPersistedSessionRoute[];
   sceneRegistry?: BncrSceneRecord[];
-  groupHistories?: BncrPersistedGroupHistoryBucket[];
+  conversationHistories?: BncrPersistedConversationHistoryBucket[];
+  groupHistories?: BncrPersistedConversationHistoryBucket[];
   outboundReplayCache?: BncrPersistedOutboundReplayBucket[];
   lastSessionByAccount?: BncrPersistedLastSession[];
   lastActivityByAccount?: BncrPersistedAccountTimestamp[];

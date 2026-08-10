@@ -1,7 +1,7 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import { buildCanonicalBncrSessionKey } from '../core/targets.ts';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
-import type { BncrGroupHistoryMap } from '../messaging/inbound/group-history.ts';
+import type { BncrConversationHistoryMap } from '../messaging/inbound/conversation-history.ts';
 import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
@@ -134,7 +134,7 @@ export type BncrInboundHandlersRuntime = {
   }) => string;
   defaultPublicAgentId: () => string;
   sceneRegistry: Map<string, BncrSceneRecord>;
-  groupHistories: BncrGroupHistoryMap;
+  conversationHistories: BncrConversationHistoryMap;
   outboundReplayCache: BncrOutboundReplayCache;
   prepareInboundAcceptance: (args: {
     parsed: ParsedInboundParams;
@@ -165,7 +165,7 @@ export type BncrInboundHandlersRuntime = {
     shouldDispatch: boolean;
     shouldAccumulate: boolean;
     sceneRegistry: Map<string, BncrSceneRecord>;
-    groupHistories: BncrGroupHistoryMap;
+    conversationHistories: BncrConversationHistoryMap;
     outboundReplayCache: BncrOutboundReplayCache;
     defaultAdminAgentId: string;
     defaultPublicAgentId: string;
@@ -335,7 +335,7 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           shouldDispatch,
           shouldAccumulate,
           sceneRegistry: runtime.sceneRegistry,
-          groupHistories: runtime.groupHistories,
+          conversationHistories: runtime.conversationHistories,
           outboundReplayCache: runtime.outboundReplayCache,
           defaultAdminAgentId,
           defaultPublicAgentId: runtime.defaultPublicAgentId(),

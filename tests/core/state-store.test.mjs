@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { createBncrStateStore } from '../../src/plugin/state-store.ts';
@@ -31,7 +34,7 @@ function createStore() {
     maxSessionRouteEntries: 100,
     maxAccountActivityEntries: 100,
     sceneRegistry: new Map(),
-    groupHistories: new Map(),
+    conversationHistories: new Map(),
     outboundReplayCache: new Map(),
     outbox: new Map(),
     getDeadLetter: () => [],
@@ -192,7 +195,7 @@ test('createBncrStateStore restores valid persisted scene registry entries and s
   ]);
 });
 
-test('createBncrStateStore preserves senderId in persisted group histories', () => {
+test('createBncrStateStore preserves senderId in persisted conversation histories', () => {
   const { runtime, store } = createStore();
   runtime.sceneRegistry.set('tgBot:-1001', {
     sceneKey: 'tgBot:-1001',
@@ -205,13 +208,14 @@ test('createBncrStateStore preserves senderId in persisted group histories', () 
     lastSeenAt: 1,
   });
 
-  store.loadPersistedGroupHistories([
+  store.loadPersistedConversationHistories([
     {
       key: 'tgBot:-1001',
       entries: [
         {
           sender: 'alice',
           senderId: '10001',
+          role: 'user',
           body: 'hello',
           timestamp: 10,
           messageId: 'm1',
@@ -220,22 +224,24 @@ test('createBncrStateStore preserves senderId in persisted group histories', () 
     },
   ]);
 
-  assert.deepEqual(runtime.groupHistories.get('tgBot:-1001'), [
+  assert.deepEqual(runtime.conversationHistories.get('tgBot:-1001'), [
     {
       sender: 'alice',
       senderId: '10001',
+      role: 'user',
       body: 'hello',
       timestamp: 10,
       messageId: 'm1',
     },
   ]);
-  assert.deepEqual(store.dumpPersistedGroupHistories(), [
+  assert.deepEqual(store.dumpPersistedConversationHistories(), [
     {
       key: 'tgBot:-1001',
       entries: [
         {
           sender: 'alice',
           senderId: '10001',
+          role: 'user',
           body: 'hello',
           timestamp: 10,
           messageId: 'm1',
@@ -245,7 +251,152 @@ test('createBncrStateStore preserves senderId in persisted group histories', () 
   ]);
 });
 
-test('createBncrStateStore persists group histories up to 1.2x configured scene history limit', () => {
+test('createBncrStateStore preserves role in unified direct conversation histories', () => {
+  const { runtime, store } = createStore();
+
+  store.loadPersistedConversationHistories([
+    {
+      key: 'tgBot:10001',
+      entries: [
+        {
+          sender: 'OpenClaw',
+          senderId: 'Primary',
+          role: 'assistant',
+          body: 'hello from bot',
+          timestamp: 10,
+          messageId: 'direct-m1',
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(runtime.conversationHistories.get('tgBot:10001'), [
+    {
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+      role: 'assistant',
+      body: 'hello from bot',
+      timestamp: 10,
+      messageId: 'direct-m1',
+    },
+  ]);
+  assert.deepEqual(store.dumpPersistedConversationHistories(), [
+    {
+      key: 'tgBot:10001',
+      entries: [
+        {
+          sender: 'OpenClaw',
+          senderId: 'Primary',
+          role: 'assistant',
+          body: 'hello from bot',
+          timestamp: 10,
+          messageId: 'direct-m1',
+        },
+      ],
+    },
+  ]);
+});
+
+test('createBncrStateStore applies configured direct scene history caps when persisting conversation histories', () => {
+  const { runtime, store } = createStore();
+  runtime.sceneRegistry.set('tgBot:10001', {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    historyLimit: 80,
+    historyForce: true,
+    lastSeenAt: 1,
+  });
+
+  const entries = Array.from({ length: 120 }, (_, index) => ({
+    sender: 'alice',
+    senderId: '10001',
+    body: `direct-${index + 1}`,
+    timestamp: index + 1,
+    messageId: `direct-mid-${index + 1}`,
+  }));
+
+  store.loadPersistedConversationHistories([
+    {
+      key: 'tgBot:10001',
+      entries,
+    },
+  ]);
+
+  assert.equal(runtime.conversationHistories.get('tgBot:10001')?.length, 96);
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries.length, 96);
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[0]?.body, 'direct-25');
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[95]?.body, 'direct-120');
+});
+
+test('createBncrStateStore migrates legacy groupHistories state into conversationHistories', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-'));
+  const statePath = join(dir, 'state.json');
+  const { runtime, store } = createStore();
+  runtime.getStatePath = () => statePath;
+
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      outbox: [],
+      deadLetter: [],
+      sessionRoutes: [],
+      groupHistories: [
+        {
+          key: 'tgBot:10001',
+          entries: [
+            {
+              sender: 'alice',
+              senderId: '10001',
+              role: 'user',
+              body: 'legacy private chat',
+              timestamp: 10,
+              messageId: 'legacy-m1',
+            },
+          ],
+        },
+      ],
+    }),
+    'utf8',
+  );
+
+  await store.loadState();
+  assert.deepEqual(runtime.conversationHistories.get('tgBot:10001'), [
+    {
+      sender: 'alice',
+      senderId: '10001',
+      role: 'user',
+      body: 'legacy private chat',
+      timestamp: 10,
+      messageId: 'legacy-m1',
+    },
+  ]);
+
+  await store.flushState();
+  const persisted = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.deepEqual(persisted.conversationHistories, [
+    {
+      key: 'tgBot:10001',
+      entries: [
+        {
+          sender: 'alice',
+          senderId: '10001',
+          role: 'user',
+          body: 'legacy private chat',
+          timestamp: 10,
+          messageId: 'legacy-m1',
+        },
+      ],
+    },
+  ]);
+  assert.equal(persisted.groupHistories, undefined);
+
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('createBncrStateStore persists conversation histories up to 1.2x configured scene history limit', () => {
   const { runtime, store } = createStore();
   runtime.sceneRegistry.set('tgBot:-1002', {
     sceneKey: 'tgBot:-1002',
@@ -266,20 +417,20 @@ test('createBncrStateStore persists group histories up to 1.2x configured scene 
     messageId: `mid-${index + 1}`,
   }));
 
-  store.loadPersistedGroupHistories([
+  store.loadPersistedConversationHistories([
     {
       key: 'tgBot:-1002',
       entries,
     },
   ]);
 
-  assert.equal(runtime.groupHistories.get('tgBot:-1002')?.length, 96);
-  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries.length, 96);
-  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[0]?.body, 'm25');
-  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[95]?.body, 'm120');
+  assert.equal(runtime.conversationHistories.get('tgBot:-1002')?.length, 96);
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries.length, 96);
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[0]?.body, 'm25');
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[95]?.body, 'm120');
 });
 
-test('createBncrStateStore uses a minimum persisted group history cap of 60 for default 50-limit groups', () => {
+test('createBncrStateStore uses a minimum persisted conversation history cap of 60 for default 50-limit conversations', () => {
   const { runtime, store } = createStore();
   runtime.sceneRegistry.set('tgBot:-1003', {
     sceneKey: 'tgBot:-1003',
@@ -300,17 +451,17 @@ test('createBncrStateStore uses a minimum persisted group history cap of 60 for 
     messageId: `default-mid-${index + 1}`,
   }));
 
-  store.loadPersistedGroupHistories([
+  store.loadPersistedConversationHistories([
     {
       key: 'tgBot:-1003',
       entries,
     },
   ]);
 
-  assert.equal(runtime.groupHistories.get('tgBot:-1003')?.length, 60);
-  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries.length, 60);
-  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[0]?.body, 'd11');
-  assert.equal(store.dumpPersistedGroupHistories()[0]?.entries[59]?.body, 'd70');
+  assert.equal(runtime.conversationHistories.get('tgBot:-1003')?.length, 60);
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries.length, 60);
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[0]?.body, 'd11');
+  assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[59]?.body, 'd70');
 });
 
 test('createBncrStateStore persists outbound replay buckets without truncation', () => {

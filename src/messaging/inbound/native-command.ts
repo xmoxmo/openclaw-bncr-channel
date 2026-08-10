@@ -55,7 +55,7 @@ const BNCR_HELP_TEXT = [
   '  • /bncr list pending [filters...]',
   '  • /bncr list scenes [filters...]',
   '',
-  '📋 Group history',
+  '📋 Conversation history',
   '  • /bncr history-help',
   '  • /bncr history-limit [<number>|clear] [<SceneId>]',
   '  • /bncr history-force on|off|clear [<SceneId>]',

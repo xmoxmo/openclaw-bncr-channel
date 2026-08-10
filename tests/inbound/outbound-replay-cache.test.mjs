@@ -101,6 +101,123 @@ test('outbound messages are readable by the next direct turn and stay cached', (
   assert.equal(cache.get('Primary:tgBot:10001')?.length, 1);
 });
 
+test('outbound messages write assistant entries into unified private history', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache,
+    conversationHistories,
+    entry: makeOutboundEntry('out-private-history-1', route, {
+      type: 'image',
+      msg: 'see this image',
+      mediaUrl: 'https://cdn.example.com/image.png',
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), [
+    {
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+      body: 'see this image',
+      timestamp: conversationHistories.get('tgBot:10001')[0].timestamp,
+      messageId: 'out-private-history-1',
+      role: 'assistant',
+      media: [
+        {
+          path: 'https://cdn.example.com/image.png',
+          kind: 'image',
+          messageId: 'out-private-history-1',
+        },
+      ],
+    },
+  ]);
+
+  const parsed = makeParsed(route);
+  const entries = readBncrOutboundReplaySnapshot({
+    cache,
+    conversationHistories,
+    parsed,
+    accountId: 'Primary',
+  });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].messageId, 'out-private-history-1');
+  assert.equal(entries[0].sender, 'OpenClaw');
+  assert.equal(entries[0].senderId, 'Primary');
+  assert.equal(entries[0].body, 'see this image');
+  assert.equal(entries[0].media?.[0]?.kind, 'image');
+});
+
+test('outbound message history timestamps prefer the actual push time', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  const entry = {
+    ...makeOutboundEntry('out-timestamp-1', route),
+    lastPushAt: 42,
+  };
+
+  recordBncrOutboundReplay({
+    cache,
+    conversationHistories,
+    entry,
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.timestamp, 42);
+  assert.equal(cache.get('Primary:tgBot:10001')?.[0]?.timestamp, 42);
+});
+
+test('read outbound replay falls back to legacy cache while unified history is empty', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache,
+    entry: makeOutboundEntry('out-legacy-only-1', route),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const entries = readBncrOutboundReplaySnapshot({
+    cache,
+    conversationHistories,
+    parsed: makeParsed(route),
+    accountId: 'Primary',
+  });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].messageId, 'out-legacy-only-1');
+  assert.equal(entries[0].sessionKey, 'agent:orion:bncr:direct:demo');
+});
+
+test('read outbound replay deduplicates unified history and legacy cache', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
+
+  recordBncrOutboundReplay({
+    cache,
+    conversationHistories,
+    entry: makeOutboundEntry('out-shared-1', route),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const entries = readBncrOutboundReplaySnapshot({
+    cache,
+    conversationHistories,
+    parsed: makeParsed(route),
+    accountId: 'Primary',
+  });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].messageId, 'out-shared-1');
+});
+
 test('outbound messages deduplicate by outbox message id', () => {
   const cache = new Map();
   const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
