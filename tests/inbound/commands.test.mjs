@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { parseBncrNativeCommand } from '../../src/messaging/inbound/commands.ts';
 import {
+  isBncrStopCommandText,
   parseBncrUnsupportedDirectCommand,
   resolveBncrNativeHelpCommand,
   resolveBncrNativeSessionResetCommand,
@@ -29,12 +30,7 @@ test('parseBncrNativeCommand only recognizes bncr builtin /bncr subcommands, wit
     body: '/commands',
     argsText: '',
   });
-  assert.deepEqual(parseBncrNativeCommand('/bncr@AixmoClaw_bot help'), {
-    command: 'help',
-    raw: '/bncr@AixmoClaw_bot help',
-    body: '/commands',
-    argsText: '',
-  });
+  assert.equal(parseBncrNativeCommand('/bncr@AixmoClaw_bot help'), null);
   assert.deepEqual(parseBncrNativeCommand('/bncr whoami'), {
     command: 'whoami',
     raw: '/bncr whoami',
@@ -84,6 +80,7 @@ test('parseBncrNativeCommand ignores non-slash text', () => {
   assert.equal(parseBncrNativeCommand('/new'), null);
   assert.equal(parseBncrNativeCommand('/reset'), null);
   assert.equal(parseBncrNativeCommand('/whoami@AixmoClaw_bot'), null);
+  assert.equal(parseBncrNativeCommand('/bncr@AixmoClaw_bot help'), null);
   assert.equal(parseBncrNativeCommand('/bncrstatus'), null);
   assert.equal(parseBncrNativeCommand('/bncr@'), null);
   assert.deepEqual(parseBncrNativeCommand('/bncr status'), {
@@ -112,6 +109,7 @@ test('parseBncrUnsupportedDirectCommand detects unsupported direct slash command
     command: 'model',
     raw: '/model gpt-5',
   });
+  assert.equal(parseBncrUnsupportedDirectCommand('/model@AixmoClaw_bot'), null);
   assert.deepEqual(parseBncrUnsupportedDirectCommand('/bncr verbose on'), {
     command: 'bncr verbose',
     raw: '/bncr verbose on',
@@ -129,27 +127,86 @@ test('parseBncrUnsupportedDirectCommand detects unsupported direct slash command
   assert.equal(parseBncrUnsupportedDirectCommand('hello'), null);
 });
 
-test('resolveBncrNativeHelpCommand returns builtin bncr help text', () => {
-  const helpText = resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr help')).text;
+test('isBncrStopCommandText only recognizes exact /stop', () => {
+  assert.equal(isBncrStopCommandText('/stop'), true);
+  assert.equal(isBncrStopCommandText('/STOP'), true);
+  assert.equal(isBncrStopCommandText('/stop please'), false);
+  assert.equal(isBncrStopCommandText('/stop@AixmoClaw_bot'), false);
+  assert.equal(isBncrStopCommandText('/bncr stop'), false);
+});
+
+test('resolveBncrNativeHelpCommand returns full help for admin callers', () => {
+  const helpText = resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr help'), {
+    isAdmin: true,
+    peerKind: 'group',
+  }).text;
   assert.match(helpText, /🦞 Bncr command usage/);
   assert.match(helpText, /\/bncr whoami/);
+  assert.match(helpText, /\/bncr status/);
+  assert.match(helpText, /\/bncr new/);
+  assert.match(helpText, /\/bncr reset/);
   assert.match(helpText, /\/bncr verbose on\|off\|full/);
   assert.match(helpText, /\/bncr allow \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr deny \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr bind <agentId> \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr mode help/);
   assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all\|clear> \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr revoke \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr list pending/);
-  assert.match(helpText, /\/bncr list scenes/);
-  assert.match(helpText, /\/bncr download-media on\|off\|clear\|default on\|off/);
   assert.match(helpText, /\/bncr history-limit \[<number>\|clear\] \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr history-force on\|off\|clear \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr download-media on\|off\|clear\|default on\|off/);
   assert.match(helpText, /📋 Conversation history/);
   assert.doesNotMatch(helpText, /📋 Group history/);
   assert.doesNotMatch(helpText, /💬 Group reply modes/);
+});
+
+test('resolveBncrNativeHelpCommand returns full management help for direct admin callers', () => {
+  const helpText = resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr help'), {
+    isAdmin: true,
+    peerKind: 'direct',
+  }).text;
+  assert.match(helpText, /\/bncr whoami/);
+  assert.match(helpText, /\/bncr new/);
+  assert.match(helpText, /\/bncr verbose on\|off\|full/);
+  assert.match(helpText, /\/bncr allow \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all\|clear> \[<SceneId>\]/);
+  assert.match(helpText, /📋 Conversation history/);
+});
+
+test('resolveBncrNativeHelpCommand returns direct non-admin help with only available builtins', () => {
+  const helpText = resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr help'), {
+    isAdmin: false,
+    peerKind: 'direct',
+  }).text;
+  assert.match(helpText, /🦞 Bncr command usage/);
+  assert.match(helpText, /\/bncr whoami/);
+  assert.match(helpText, /\/bncr status/);
+  assert.match(helpText, /\/bncr new/);
+  assert.match(helpText, /\/bncr reset/);
+  assert.doesNotMatch(helpText, /\/bncr verbose on\|off\|full/);
+  assert.doesNotMatch(helpText, /\/bncr allow \[<SceneId>\]/);
+  assert.doesNotMatch(helpText, /\/bncr mode /);
+  assert.doesNotMatch(helpText, /📋 Conversation history/);
+  assert.doesNotMatch(helpText, /🌐 Remote media/);
   assert.doesNotMatch(helpText, /\/status/);
   assert.doesNotMatch(helpText, /\/whoami/);
+});
+
+test('resolveBncrNativeHelpCommand returns group non-admin help with only available builtins', () => {
+  const helpText = resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr help'), {
+    isAdmin: false,
+    peerKind: 'group',
+  }).text;
+  assert.match(helpText, /🦞 Bncr command usage/);
+  assert.match(helpText, /\/bncr whoami/);
+  assert.match(helpText, /\/bncr status/);
+  assert.doesNotMatch(helpText, /\/bncr new/);
+  assert.doesNotMatch(helpText, /\/bncr reset/);
+  assert.doesNotMatch(helpText, /\/bncr verbose on\|off\|full/);
+  assert.doesNotMatch(helpText, /\/bncr allow \[<SceneId>\]/);
+  assert.doesNotMatch(helpText, /\/bncr mode /);
+  assert.doesNotMatch(helpText, /📋 Conversation history/);
+  assert.doesNotMatch(helpText, /🌐 Remote media/);
+  assert.doesNotMatch(helpText, /\/status/);
+  assert.doesNotMatch(helpText, /\/whoami/);
+});
+
+test('resolveBncrNativeHelpCommand rejects non-help commands', () => {
   assert.equal(resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr verbose')), null);
 });
 
@@ -212,6 +269,7 @@ test('resolveBncrNativeSessionResetCommand returns direct-session reset intents'
   assert.deepEqual(
     resolveBncrNativeSessionResetCommand({
       command: parseBncrNativeCommand('/new', { allowBareSessionReset: true }),
+      peerKind: 'direct',
     }),
     {
       handled: true,
@@ -220,7 +278,10 @@ test('resolveBncrNativeSessionResetCommand returns direct-session reset intents'
     },
   );
   assert.deepEqual(
-    resolveBncrNativeSessionResetCommand({ command: parseBncrNativeCommand('/bncr reset') }),
+    resolveBncrNativeSessionResetCommand({
+      command: parseBncrNativeCommand('/bncr reset'),
+      peerKind: 'direct',
+    }),
     {
       handled: true,
       reason: 'reset',
@@ -228,8 +289,36 @@ test('resolveBncrNativeSessionResetCommand returns direct-session reset intents'
     },
   );
   assert.equal(
-    resolveBncrNativeSessionResetCommand({ command: parseBncrNativeCommand('/bncr whoami') }),
+    resolveBncrNativeSessionResetCommand({
+      command: parseBncrNativeCommand('/bncr whoami'),
+      peerKind: 'direct',
+    }),
     null,
+  );
+});
+
+test('resolveBncrNativeSessionResetCommand returns group-session reset intents', () => {
+  assert.deepEqual(
+    resolveBncrNativeSessionResetCommand({
+      command: parseBncrNativeCommand('/bncr new'),
+      peerKind: 'group',
+    }),
+    {
+      handled: true,
+      reason: 'new',
+      text: 'Started a new session for this group chat.',
+    },
+  );
+  assert.deepEqual(
+    resolveBncrNativeSessionResetCommand({
+      command: parseBncrNativeCommand('/bncr reset'),
+      peerKind: 'group',
+    }),
+    {
+      handled: true,
+      reason: 'reset',
+      text: 'Reset the current session for this group chat.',
+    },
   );
 });
 
@@ -501,7 +590,7 @@ test('parseSceneAdminCommand parses history-limit and history-force commands', (
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit x y z')), {
     matched: true,
     valid: false,
-    text: 'Usage: /bncr history-limit [<number>] [<sceneKey>]',
+    text: 'Usage: /bncr history-limit [<number>|clear] [<sceneKey>]',
   });
 
   // history-force with 0 args → get
@@ -581,6 +670,8 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: true, text: HISTORY_HELP_TEXT },
   );
+  assert.match(HISTORY_HELP_TEXT, /\/bncr history-limit \[<number>\|clear\]/);
+  assert.match(HISTORY_HELP_TEXT, /\/bncr history-force on\|off\|clear/);
 
   // history-limit-get returns current value
   assert.deepEqual(
@@ -636,29 +727,28 @@ test('executeSceneAdminCommand handles history commands', () => {
   );
   assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 10);
 
-  // history-limit-set with too-small positive value (50) → error
+  // history-limit-set with the minimum accepted value
   assert.deepEqual(
     executeSceneAdminCommand({
       parsed,
-      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 50 },
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 2 },
       sceneRegistry,
       defaultAdminAgentId: 'main',
       defaultPublicAgentId: 'public',
       now: () => 5,
     }),
     {
-      ok: false,
-      text: 'Value too small, must be >= 51, or use negative number (abs >= 3) for hidden override.',
+      ok: true,
+      text: 'Set tgBot:-1001 history limit to 2.',
     },
   );
-  // Value should not have been updated
-  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 10);
+  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 2);
 
-  // history-limit-set with negative too small (abs < 3) → error
+  // history-limit-set with negative too small (abs < 2) → error
   assert.deepEqual(
     executeSceneAdminCommand({
       parsed,
-      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: -2 },
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: -1 },
       sceneRegistry,
       defaultAdminAgentId: 'main',
       defaultPublicAgentId: 'public',
@@ -666,9 +756,23 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     {
       ok: false,
-      text: 'Value too small, must be >= 51, or use negative number (abs >= 3) for hidden override.',
+      text: 'Value too small, must be >= 2, or use negative number (abs >= 2) for hidden override.',
     },
   );
+
+  // history-limit-set with hidden -2 stores the accepted minimum
+  assert.deepEqual(
+    executeSceneAdminCommand({
+      parsed,
+      command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: -2 },
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 7,
+    }),
+    { ok: true, text: 'Set tgBot:-1001 history limit to 2.' },
+  );
+  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 2);
 
   // history-limit-set with large positive value is capped
   assert.deepEqual(
@@ -678,7 +782,7 @@ test('executeSceneAdminCommand handles history commands', () => {
       sceneRegistry,
       defaultAdminAgentId: 'main',
       defaultPublicAgentId: 'public',
-      now: () => 7,
+      now: () => 8,
     }),
     { ok: true, text: 'Set tgBot:-1001 history limit to 10000.' },
   );

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   createChannelHistoryWindow,
   DEFAULT_GROUP_HISTORY_LIMIT as DEFAULT_HISTORY_LIMIT,
@@ -17,10 +18,73 @@ export type BncrConversationHistoryMap = Map<string, BncrHistoryEntry[]>;
 
 type BncrHistoryMediaKind = NonNullable<HistoryMediaEntry['kind']>;
 
+const conversationHistoryVersions = new WeakMap<BncrConversationHistoryMap, Map<string, number>>();
+
+function buildSyntheticHistoryMessageId(seed: string): string {
+  const digest = createHash('sha1').update(seed).digest('hex').slice(0, 24);
+  return `bncr-synthetic:${digest}`;
+}
+
+export function buildBncrBotReplyMessageId(args: {
+  historyKey: string;
+  sender: string;
+  senderId?: string;
+  body: string;
+  timestamp?: number;
+  messageId?: string;
+  media?: HistoryMediaEntry[];
+}): string {
+  const provided = String(args.messageId || '').trim();
+  if (provided) return provided;
+  return buildSyntheticHistoryMessageId(
+    JSON.stringify({
+      historyKey: args.historyKey,
+      sender: args.sender,
+      senderId: args.senderId,
+      body: args.body,
+      timestamp: args.timestamp,
+      media: args.media?.map((item) => [item.path, item.contentType, item.kind, item.messageId]),
+    }),
+  );
+}
+
+function bumpConversationHistoryVersion(
+  historyMap: BncrConversationHistoryMap,
+  historyKey: string,
+): number {
+  let versions = conversationHistoryVersions.get(historyMap);
+  if (!versions) {
+    versions = new Map();
+    conversationHistoryVersions.set(historyMap, versions);
+  }
+  const next = (versions.get(historyKey) || 0) + 1;
+  versions.set(historyKey, next);
+  return next;
+}
+
+export function readConversationHistoryVersion(
+  historyMap: BncrConversationHistoryMap,
+  historyKey: string,
+): number {
+  return conversationHistoryVersions.get(historyMap)?.get(historyKey) ?? 0;
+}
+
+export function resetConversationHistoryVersions(historyMap: BncrConversationHistoryMap): void {
+  conversationHistoryVersions.delete(historyMap);
+}
+
 function normalizeTextBody(value: string): string {
   return String(value || '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function resolveBncrHistoryLimit(historyLimit?: number): number {
+  if (typeof historyLimit !== 'number' || !Number.isFinite(historyLimit)) {
+    return DEFAULT_HISTORY_LIMIT;
+  }
+  const resolved = Math.floor(historyLimit);
+  return resolved >= 2 ? resolved : DEFAULT_HISTORY_LIMIT;
 }
 
 export function buildBncrConversationHistoryKey(parsed: ParsedInbound): string | null {
@@ -50,6 +114,11 @@ export function buildBncrConversationHistoryKeyFromRoute(args: {
   return null;
 }
 
+export function resolveBncrConversationHistoryMessageId(parsed: ParsedInbound): string | undefined {
+  const msgId = String(parsed.msgId || '').trim();
+  return msgId || undefined;
+}
+
 export function recordBncrPendingConversationText(args: {
   historyMap: BncrConversationHistoryMap;
   parsed: ParsedInbound;
@@ -58,19 +127,14 @@ export function recordBncrPendingConversationText(args: {
   bodyText: string;
   historyLimit?: number;
 }) {
-  const limit =
-    typeof args.historyLimit === 'number' &&
-    Number.isFinite(args.historyLimit) &&
-    args.historyLimit >= 0
-      ? Math.floor(args.historyLimit)
-      : DEFAULT_HISTORY_LIMIT;
+  const limit = resolveBncrHistoryLimit(args.historyLimit);
   const historyKey = buildBncrConversationHistoryKey(args.parsed);
   const body = normalizeTextBody(args.bodyText);
   if (!historyKey || !body || args.parsed.msgType !== 'text') return;
-  const msgId = String(args.parsed.msgId || '').trim();
-  if (msgId) {
+  const messageId = resolveBncrConversationHistoryMessageId(args.parsed);
+  if (messageId) {
     const existing = args.historyMap.get(historyKey) || [];
-    if (existing.some((e) => e.messageId === msgId)) return;
+    if (existing.some((e) => e.messageId === messageId)) return;
   }
   createChannelHistoryWindow({ historyMap: args.historyMap }).record({
     historyKey,
@@ -80,10 +144,11 @@ export function recordBncrPendingConversationText(args: {
       senderId: args.senderId,
       body,
       timestamp: Date.now(),
-      messageId: args.parsed.msgId,
+      ...(messageId ? { messageId } : {}),
       role: 'user',
     },
   });
+  bumpConversationHistoryVersion(args.historyMap, historyKey);
 }
 
 function inferBncrHistoryMediaKind(args: {
@@ -109,7 +174,7 @@ function buildBncrHistoryMediaBody(kind: BncrHistoryMediaKind): string {
   return `<media:${kind}>`;
 }
 
-export async function recordBncrPendingConversationMedia(args: {
+export function recordBncrPendingConversationMedia(args: {
   historyMap: BncrConversationHistoryMap;
   parsed: ParsedInbound;
   senderDisplayName: string;
@@ -123,12 +188,7 @@ export async function recordBncrPendingConversationMedia(args: {
   mediaContentType?: string;
   historyLimit?: number;
 }) {
-  const limit =
-    typeof args.historyLimit === 'number' &&
-    Number.isFinite(args.historyLimit) &&
-    args.historyLimit >= 0
-      ? Math.floor(args.historyLimit)
-      : DEFAULT_HISTORY_LIMIT;
+  const limit = resolveBncrHistoryLimit(args.historyLimit);
   const historyKey = buildBncrConversationHistoryKey(args.parsed);
   if (!historyKey || args.parsed.msgType === 'text') return;
   const normalizedMediaItems = Array.isArray(args.mediaItems) ? args.mediaItems : [];
@@ -149,10 +209,10 @@ export async function recordBncrPendingConversationMedia(args: {
       });
   const body = normalizeTextBody(args.bodyText) || buildBncrHistoryMediaBody(kind);
   if (normalizedMediaItems.length === 0) {
-    const msgId = String(args.parsed.msgId || '').trim();
-    if (msgId) {
+    const messageId = resolveBncrConversationHistoryMessageId(args.parsed);
+    if (messageId) {
       const existing = args.historyMap.get(historyKey) || [];
-      if (existing.some((e) => e.messageId === msgId)) return;
+      if (existing.some((e) => e.messageId === messageId)) return;
     }
     createChannelHistoryWindow({ historyMap: args.historyMap }).record({
       historyKey,
@@ -162,16 +222,17 @@ export async function recordBncrPendingConversationMedia(args: {
         senderId: args.senderId,
         body,
         timestamp: Date.now(),
-        messageId: args.parsed.msgId,
+        ...(messageId ? { messageId } : {}),
         role: 'user',
       },
     });
+    bumpConversationHistoryVersion(args.historyMap, historyKey);
     return;
   }
-  const msgId = String(args.parsed.msgId || '').trim();
-  if (msgId) {
+  const messageId = resolveBncrConversationHistoryMessageId(args.parsed);
+  if (messageId) {
     const existing = args.historyMap.get(historyKey) || [];
-    if (existing.some((e) => e.messageId === msgId)) return;
+    if (existing.some((e) => e.messageId === messageId)) return;
   }
   createChannelHistoryWindow({ historyMap: args.historyMap }).record({
     historyKey,
@@ -181,7 +242,7 @@ export async function recordBncrPendingConversationMedia(args: {
       senderId: args.senderId,
       body,
       timestamp: Date.now(),
-      messageId: args.parsed.msgId,
+      ...(messageId ? { messageId } : {}),
       role: 'user',
       media: normalizedMediaItems.map(
         (item) =>
@@ -189,11 +250,12 @@ export async function recordBncrPendingConversationMedia(args: {
             path: item.path,
             contentType: item.contentType || args.mediaContentType,
             kind: item.kind || kind,
-            messageId: args.parsed.msgId,
+            messageId,
           }) satisfies HistoryMediaEntry,
       ),
     },
   });
+  bumpConversationHistoryVersion(args.historyMap, historyKey);
 }
 
 export function recordBncrBotReply(args: {
@@ -206,20 +268,21 @@ export function recordBncrBotReply(args: {
   messageId?: string;
   media?: HistoryMediaEntry[];
   historyLimit?: number;
-}) {
-  const limit =
-    typeof args.historyLimit === 'number' &&
-    Number.isFinite(args.historyLimit) &&
-    args.historyLimit >= 0
-      ? Math.floor(args.historyLimit)
-      : DEFAULT_HISTORY_LIMIT;
+}): boolean {
+  const limit = resolveBncrHistoryLimit(args.historyLimit);
   const body = normalizeTextBody(args.body);
-  if (!body) return;
-  const msgId = String(args.messageId || '').trim();
-  if (msgId) {
-    const existing = args.historyMap.get(args.historyKey) || [];
-    if (existing.some((e) => e.messageId === msgId)) return;
-  }
+  if (!body) return false;
+  const msgId = buildBncrBotReplyMessageId({
+    historyKey: args.historyKey,
+    sender: args.sender,
+    senderId: args.senderId,
+    body,
+    timestamp: args.timestamp,
+    messageId: args.messageId,
+    media: args.media,
+  });
+  const existing = args.historyMap.get(args.historyKey) || [];
+  if (existing.some((e) => e.messageId === msgId)) return false;
   createChannelHistoryWindow({ historyMap: args.historyMap }).record({
     historyKey: args.historyKey,
     limit,
@@ -228,11 +291,22 @@ export function recordBncrBotReply(args: {
       ...(args.senderId ? { senderId: args.senderId } : {}),
       body,
       timestamp: args.timestamp ?? Date.now(),
-      ...(args.messageId ? { messageId: args.messageId } : {}),
+      messageId: msgId,
       role: 'assistant',
-      ...(Array.isArray(args.media) && args.media.length > 0 ? { media: args.media } : {}),
+      ...(Array.isArray(args.media) && args.media.length > 0
+        ? {
+            media: args.media.map((item) => ({
+              ...(item?.path ? { path: item.path } : {}),
+              ...(item?.contentType ? { contentType: item.contentType } : {}),
+              ...(item?.kind ? { kind: item.kind } : {}),
+              messageId: item?.messageId || msgId,
+            })),
+          }
+        : {}),
     },
   });
+  bumpConversationHistoryVersion(args.historyMap, args.historyKey);
+  return true;
 }
 
 function cloneBncrHistoryEntry(entry: BncrHistoryEntry): BncrHistoryEntry {
@@ -261,16 +335,41 @@ export function readBncrPendingConversationHistorySnapshot(args: {
   parsed: ParsedInbound;
   historyLimit?: number;
 }): BncrHistoryEntry[] {
-  const limit =
-    typeof args.historyLimit === 'number' &&
-    Number.isFinite(args.historyLimit) &&
-    args.historyLimit >= 0
-      ? Math.floor(args.historyLimit)
-      : DEFAULT_HISTORY_LIMIT;
+  const limit = resolveBncrHistoryLimit(args.historyLimit);
   const historyKey = buildBncrConversationHistoryKey(args.parsed);
   if (!historyKey) return [];
-  const entries = args.historyMap.get(historyKey) || [];
-  if (entries.length === 0) return [];
+  const rawEntries = args.historyMap.get(historyKey) || [];
+  if (rawEntries.length === 0) return [];
+  let normalized = false;
+  const entries = rawEntries.map((entry, entryIndex) => {
+    const messageId =
+      String(entry.messageId || '').trim() ||
+      buildSyntheticHistoryMessageId(
+        JSON.stringify({
+          historyKey,
+          entryIndex,
+          sender: entry.sender,
+          senderId: entry.senderId,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }),
+      );
+    if (messageId === entry.messageId) return entry;
+    normalized = true;
+    return {
+      ...entry,
+      messageId,
+      ...(Array.isArray(entry.media)
+        ? {
+            media: entry.media.map((item) => ({
+              ...item,
+              messageId: item.messageId || messageId,
+            })),
+          }
+        : {}),
+    };
+  });
+  if (normalized) args.historyMap.set(historyKey, entries);
   return entries
     .slice()
     .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
@@ -316,16 +415,36 @@ export function clearBncrPendingConversationHistory(args: {
   parsed: ParsedInbound;
   historyLimit?: number;
 }) {
-  const limit =
-    typeof args.historyLimit === 'number' &&
-    Number.isFinite(args.historyLimit) &&
-    args.historyLimit >= 0
-      ? Math.floor(args.historyLimit)
-      : DEFAULT_HISTORY_LIMIT;
+  const limit = resolveBncrHistoryLimit(args.historyLimit);
   const historyKey = buildBncrConversationHistoryKey(args.parsed);
   if (!historyKey) return;
   createChannelHistoryWindow({ historyMap: args.historyMap }).clear({
     historyKey,
     limit: limit,
   });
+  bumpConversationHistoryVersion(args.historyMap, historyKey);
+}
+
+export function removeBncrConversationHistoryMessageIds(args: {
+  historyMap: BncrConversationHistoryMap;
+  historyKey: string;
+  messageIds: ReadonlyArray<string | undefined | null>;
+}): number {
+  const messageIds = new Set(
+    args.messageIds
+      .map((messageId) => String(messageId || '').trim())
+      .filter((messageId) => Boolean(messageId)),
+  );
+  if (messageIds.size === 0) return 0;
+  const current = args.historyMap.get(args.historyKey) || [];
+  if (current.length === 0) return 0;
+  const next = current.filter(
+    (entry) =>
+      !String(entry.messageId || '').trim() || !messageIds.has(String(entry.messageId).trim()),
+  );
+  if (next.length === current.length) return 0;
+  args.historyMap.set(args.historyKey, next);
+  // Snapshot cleanup must not invalidate flushes queued from replies written
+  // while the earlier snapshot was uploading.
+  return current.length - next.length;
 }

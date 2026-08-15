@@ -21,6 +21,7 @@ export function createInboundApiStub(options = {}) {
     replyDispatchStarts: [],
     replyDispatchCompletions: [],
     requests: [],
+    ingested: [],
   };
 
   const restoreSessionRuntime = setBncrInboundSessionRuntimeForTest({
@@ -187,6 +188,7 @@ export function createInboundApiStub(options = {}) {
           },
           async run({ adapter }) {
             const input = adapter.ingest();
+            calls.ingested.push(input);
             const preflight = await adapter.preflight?.(input);
             const turn = adapter.resolveTurn(input, { kind: 'message' }, preflight);
             calls.turnRuns.push(turn);

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type { RegisterDriftSnapshot } from '../core/register-trace.ts';
 import type {
   BncrConnection,
@@ -16,6 +18,13 @@ import { createBncrTransientStateRuntime } from './transient-state-runtime.ts';
 
 type StoredRouteRecord = { accountId: string; route: BncrRoute; updatedAt: number };
 type StoredLastSessionRecord = { sessionKey: string; scope: string; updatedAt: number };
+
+export function shouldEnableBncrSqliteState(statePath: string | null): boolean {
+  if (!statePath) return false;
+  if (process.env.BNCR_SQLITE_STORE === '0') return false;
+  if (process.env.BNCR_SQLITE_STORE === '1') return true;
+  return existsSync(path.join(path.dirname(statePath), 'bncr.sqlite3'));
+}
 
 export function createBncrStateTransientRuntimeGroup(runtime: {
   bridgeId: string;
@@ -92,6 +101,11 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
     lastOutboundByAccount: runtime.lastOutboundByAccount,
     getLastDriftSnapshot: runtime.getLastDriftSnapshot,
     setLastDriftSnapshot: runtime.setLastDriftSnapshot,
+    createSqliteState: async (statePath) => {
+      if (!statePath || !shouldEnableBncrSqliteState(statePath)) return null;
+      const { createBncrSqliteStateDatabase } = await import('./sqlite-state.ts');
+      return createBncrSqliteStateDatabase(path.join(path.dirname(statePath), 'bncr.sqlite3'));
+    },
   });
 
   const transientStateRuntime = createBncrTransientStateRuntime({

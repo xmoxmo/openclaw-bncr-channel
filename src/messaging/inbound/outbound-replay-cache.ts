@@ -6,9 +6,12 @@ import type {
 } from '../../core/types.ts';
 import {
   type BncrConversationHistoryMap,
+  buildBncrBotReplyMessageId,
   buildBncrConversationHistoryKey,
   buildBncrConversationHistoryKeyFromRoute,
+  readConversationHistoryVersion,
   recordBncrBotReply,
+  resolveBncrHistoryLimit,
 } from './conversation-history.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 
@@ -89,19 +92,21 @@ function recordOutboundReplayEntry(args: {
   cache: BncrOutboundReplayCache;
   cacheKey: string;
   entry: BncrOutboundReplayEntry;
-}) {
+  historyLimit?: number;
+}): boolean {
   const msgId = String(args.entry.messageId || '').trim();
   const existing = args.cache.get(args.cacheKey) || [];
-  if (msgId && existing.some((entry) => entry.messageId === msgId)) return;
+  if (msgId && existing.some((entry) => entry.messageId === msgId)) return false;
 
-  const next = [...existing, cloneBncrOutboundReplayEntry(args.entry)].sort(
-    (a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0),
-  );
+  const next = [...existing, cloneBncrOutboundReplayEntry(args.entry)]
+    .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+    .slice(-resolveBncrHistoryLimit(args.historyLimit));
 
   if (args.cache.has(args.cacheKey)) {
     args.cache.delete(args.cacheKey);
   }
   args.cache.set(args.cacheKey, next);
+  return true;
 }
 
 function inferMediaKind(args: {
@@ -156,6 +161,12 @@ function isAppMsg(type: string | undefined, msg: string): boolean {
   );
 }
 
+export type BncrOutboundReplayRecordResult = {
+  recorded: boolean;
+  historyOverflow: boolean;
+  historyVersion?: number;
+};
+
 export function recordBncrOutboundReplay(args: {
   cache: BncrOutboundReplayCache;
   conversationHistories?: BncrConversationHistoryMap;
@@ -164,14 +175,14 @@ export function recordBncrOutboundReplay(args: {
   sender: string;
   senderId?: string;
   status?: BncrOutboundReplayStatus;
-}) {
+}): BncrOutboundReplayRecordResult {
   const cacheKey = buildBncrOutboundReplayKeyFromRoute({
     accountId: args.entry.accountId,
     platform: args.entry.route?.platform,
     groupId: args.entry.route?.groupId,
     userId: args.entry.route?.userId,
   });
-  if (!cacheKey) return;
+  if (!cacheKey) return { recorded: false, historyOverflow: false };
 
   const message =
     args.entry.payload?.message && typeof args.entry.payload.message === 'object'
@@ -186,15 +197,36 @@ export function recordBncrOutboundReplay(args: {
   const body = isAppMsg(type, rawBody)
     ? buildMediaBody('document')
     : normalizeTextBody(rawBody) || (isMedia ? buildMediaBody(kind) : '');
-  if (!body) return;
+  if (!body) return { recorded: false, historyOverflow: false };
   const recordTimestamp = args.entry.lastPushAt ?? Date.now();
+  const historyKey = buildBncrConversationHistoryKeyFromRoute({
+    platform: args.entry.route?.platform,
+    groupId: args.entry.route?.groupId,
+    userId: args.entry.route?.userId,
+  });
+  const messageId = historyKey
+    ? buildBncrBotReplyMessageId({
+        historyKey,
+        sender: args.sender,
+        senderId: args.senderId,
+        body,
+        timestamp: recordTimestamp,
+        messageId: args.entry.messageId,
+        media: mediaUrl
+          ? [
+              {
+                path: mediaUrl,
+                kind,
+                messageId: args.entry.messageId,
+              },
+            ]
+          : undefined,
+      })
+    : undefined;
+  let historyOverflow = false;
+  let historyVersion: number | undefined;
 
   if (args.conversationHistories) {
-    const historyKey = buildBncrConversationHistoryKeyFromRoute({
-      platform: args.entry.route?.platform,
-      groupId: args.entry.route?.groupId,
-      userId: args.entry.route?.userId,
-    });
     if (historyKey) {
       recordBncrBotReply({
         historyMap: args.conversationHistories,
@@ -203,7 +235,7 @@ export function recordBncrOutboundReplay(args: {
         senderId: args.senderId,
         body,
         timestamp: recordTimestamp,
-        messageId: args.entry.messageId,
+        messageId,
         historyLimit: args.historyLimit,
         ...(mediaUrl
           ? {
@@ -211,24 +243,68 @@ export function recordBncrOutboundReplay(args: {
                 {
                   path: mediaUrl,
                   kind,
-                  messageId: args.entry.messageId,
+                  messageId,
                 },
               ],
             }
           : {}),
       });
+      const entries = args.conversationHistories.get(historyKey) || [];
+      const limit = resolveBncrHistoryLimit(args.historyLimit);
+      // Overflow is decided by the current active window after the outbound
+      // event, not by whether this call newly wrote a row. A restored or
+      // repeated ack must still be able to force a flush.
+      historyOverflow = entries.length >= limit;
+      if (historyOverflow) {
+        historyVersion = readConversationHistoryVersion(args.conversationHistories, historyKey);
+      }
+      const cacheRecorded = recordOutboundReplayEntry({
+        cache: args.cache,
+        cacheKey,
+        historyLimit: args.historyLimit,
+        entry: {
+          sender: args.sender,
+          ...(args.senderId ? { senderId: args.senderId } : {}),
+          body,
+          timestamp: recordTimestamp,
+          messageId,
+          accountId: args.entry.accountId,
+          sessionKey: args.entry.sessionKey,
+          route: { ...args.entry.route },
+          ...(type ? { type } : {}),
+          ...(mediaUrl ? { mediaUrl } : {}),
+          createdAt: args.entry.createdAt,
+          ...(args.status ? { status: args.status } : {}),
+          ...(mediaUrl
+            ? {
+                media: [
+                  {
+                    path: mediaUrl,
+                    kind,
+                    messageId,
+                  },
+                ],
+              }
+            : {}),
+        },
+      });
+      return {
+        recorded: cacheRecorded,
+        historyOverflow,
+        ...(historyOverflow && historyVersion !== undefined ? { historyVersion } : {}),
+      };
     }
   }
-
-  recordOutboundReplayEntry({
+  const cacheRecorded = recordOutboundReplayEntry({
     cache: args.cache,
     cacheKey,
+    historyLimit: args.historyLimit,
     entry: {
       sender: args.sender,
       ...(args.senderId ? { senderId: args.senderId } : {}),
       body,
       timestamp: recordTimestamp,
-      messageId: args.entry.messageId,
+      messageId: messageId || args.entry.messageId,
       accountId: args.entry.accountId,
       sessionKey: args.entry.sessionKey,
       route: { ...args.entry.route },
@@ -242,13 +318,17 @@ export function recordBncrOutboundReplay(args: {
               {
                 path: mediaUrl,
                 kind,
-                messageId: args.entry.messageId,
+                messageId: messageId || args.entry.messageId,
               },
             ],
           }
         : {}),
     },
   });
+  return {
+    recorded: cacheRecorded,
+    historyOverflow: false,
+  };
 }
 
 export function readBncrOutboundReplaySnapshot(args: {
@@ -309,4 +389,33 @@ export function clearBncrOutboundReplay(args: {
   const cacheKey = buildBncrOutboundReplayKey(args.parsed, args.accountId);
   if (!cacheKey) return;
   args.cache.delete(cacheKey);
+}
+
+export function removeBncrOutboundReplayMessageIds(args: {
+  cache: BncrOutboundReplayCache;
+  parsed: ParsedInbound;
+  accountId: string;
+  messageIds: ReadonlyArray<string | undefined | null>;
+}): number {
+  const cacheKey = buildBncrOutboundReplayKey(args.parsed, args.accountId);
+  if (!cacheKey) return 0;
+  const messageIds = new Set(
+    args.messageIds
+      .map((messageId) => String(messageId || '').trim())
+      .filter((messageId) => Boolean(messageId)),
+  );
+  if (messageIds.size === 0) return 0;
+  const current = args.cache.get(cacheKey) || [];
+  if (current.length === 0) return 0;
+  const next = current.filter(
+    (entry) =>
+      !String(entry.messageId || '').trim() || !messageIds.has(String(entry.messageId).trim()),
+  );
+  if (next.length === current.length) return 0;
+  if (next.length === 0) {
+    args.cache.delete(cacheKey);
+  } else {
+    args.cache.set(cacheKey, next);
+  }
+  return current.length - next.length;
 }

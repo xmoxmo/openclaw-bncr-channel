@@ -18,7 +18,7 @@ import type {
   ParsedInbound,
 } from './dispatch-prep.ts';
 import { buildBncrInboundRecordUpdateLastRoute } from './last-route.ts';
-import { parseBncrNativeCommand } from './native-command.ts';
+import { isBncrStopCommandText, parseBncrNativeCommand } from './native-command.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { runBncrReplyDispatchSerial } from './reply-dispatch-serial.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
@@ -126,6 +126,7 @@ export async function runBncrInboundReplyDispatch(args: {
   senderDisplayName: string;
   shouldDispatch: boolean;
   silentHistoryFlush?: boolean;
+  deliveryId?: string;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
   enqueueFromReply: BncrEnqueueFromReply;
@@ -145,6 +146,7 @@ export async function runBncrInboundReplyDispatch(args: {
     senderIdForContext,
     shouldDispatch,
     silentHistoryFlush = false,
+    deliveryId,
     setInboundActivity,
     scheduleSave,
     enqueueFromReply,
@@ -210,10 +212,9 @@ export async function runBncrInboundReplyDispatch(args: {
     return;
   }
 
-  // Stop commands should bypass the serial chain so they can interrupt a running agent.
-  const rawTrimmed = (rawBody || '').trim();
-  const isStopCommand =
-    rawTrimmed === '/stop' || rawTrimmed.startsWith('/stop ') || rawTrimmed.startsWith('/stop@');
+  // Stop commands also bypass the reply serial chain; the inbound history serial
+  // bypass is handled before this function runs so they can interrupt an agent.
+  const isStopCommand = isBncrStopCommandText(rawBody);
   const dispatchSessionKey = resolution.dispatchSessionKey;
 
   const runStopOrSerial = () => {
@@ -225,7 +226,7 @@ export async function runBncrInboundReplyDispatch(args: {
           raw: parsed,
           adapter: {
             ingest: () => ({
-              id: msgId ?? `${resolution.canonicalTo}:${Date.now()}`,
+              id: deliveryId || msgId || `${resolution.canonicalTo}:${Date.now()}`,
               timestamp: Date.now(),
               rawText: rawBody,
               textForAgent: ctxPayload.BodyForAgent,

@@ -3,6 +3,7 @@ import type {
   BncrSceneRecord,
   BncrSceneStatus,
 } from '../../plugin/channel-runtime-types.ts';
+import { resolveBncrHistoryLimit } from './conversation-history.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 import type { NativeCommand } from './native-command.ts';
 
@@ -52,9 +53,9 @@ export const HISTORY_HELP_TEXT = [
   '📋 Bncr Conversation History Configuration',
   '',
   'Commands:',
-  '  • /bncr history-limit <number> [<SceneId>]',
-  '    Set history limit (default: 50)',
-  '  • /bncr history-force on|off [<SceneId>]',
+  '  • /bncr history-limit [<number>|clear] [<SceneId>]',
+  '    Set history limit (default: 50, minimum: 2)',
+  '  • /bncr history-force on|off|clear [<SceneId>]',
   '    When on, overflow triggers auto context at limit (default: on)',
   '    When off, oldest messages trim silently without context',
 ].join('\n');
@@ -258,7 +259,7 @@ export function parseSceneAdminCommand(command: NativeCommand): ParsedSceneAdmin
       return {
         matched: true,
         valid: false,
-        text: 'Usage: /bncr history-limit [<number>] [<sceneKey>]',
+        text: 'Usage: /bncr history-limit [<number>|clear] [<sceneKey>]',
       };
     case 'history-force':
       if (args.length === 0) {
@@ -353,12 +354,11 @@ function formatSceneDetailsLine(scene: BncrSceneRecord): string {
     scene.kind === 'group' ? scene.groupId || scene.sceneKey : scene.userId || scene.sceneKey;
   const namePart = scene.kind === 'group' ? scene.groupName || '' : scene.userName || '';
   const labelPart = namePart ? ` name=${namePart}` : '';
-  const historyLimitVal = scene.historyLimit;
+  const historyLimitVal = resolveBncrHistoryLimit(scene.historyLimit);
   const historyForceVal = scene.historyForce;
-  const hasNonDefaultHistory =
-    (typeof historyLimitVal === 'number' && historyLimitVal !== 50) || historyForceVal === false;
+  const hasNonDefaultHistory = historyLimitVal !== 50 || historyForceVal === false;
   const historyPart = hasNonDefaultHistory
-    ? ` historyLimit=${historyLimitVal ?? 50} autoFlush=${historyForceVal !== false ? 'on' : 'off'}`
+    ? ` historyLimit=${historyLimitVal} autoFlush=${historyForceVal !== false ? 'on' : 'off'}`
     : '';
   return `  Details: status=${scene.status} id=${idPart}${labelPart}${historyPart}`;
 }
@@ -496,7 +496,10 @@ export function executeSceneAdminCommand(args: {
     }
     const s = sceneRegistry.get(qSceneKey);
     if (!s) return { ok: true, text: 'Default history limit is 50.' };
-    return { ok: true, text: `Current ${qSceneKey} history limit is ${s.historyLimit ?? 50}.` };
+    return {
+      ok: true,
+      text: `Current ${qSceneKey} history limit is ${resolveBncrHistoryLimit(s.historyLimit)}.`,
+    };
   }
 
   if (command.kind === 'history-limit-set') {
@@ -518,12 +521,14 @@ export function executeSceneAdminCommand(args: {
     let resolvedLimit = rawLimit;
     if (resolvedLimit >= 51) {
       resolvedLimit = Math.min(Math.floor(resolvedLimit), 10000);
-    } else if (resolvedLimit < 0 && Math.abs(resolvedLimit) >= 3) {
-      resolvedLimit = Math.floor(Math.abs(resolvedLimit));
+    } else if (resolvedLimit >= 2) {
+      resolvedLimit = Math.floor(resolvedLimit);
+    } else if (resolvedLimit < 0 && Math.abs(resolvedLimit) >= 2) {
+      resolvedLimit = Math.min(Math.floor(Math.abs(resolvedLimit)), 10000);
     } else {
       return {
         ok: false,
-        text: `Value too small, must be >= 51, or use negative number (abs >= 3) for hidden override.`,
+        text: `Value too small, must be >= 2, or use negative number (abs >= 2) for hidden override.`,
       };
     }
     sceneRegistry.set(sSceneKey, {

@@ -93,8 +93,72 @@ openclaw devices approve --latest
 - 入站会话按正式 scene / route 语义接入 OpenClaw，区分私聊与群聊会话。
 - 非管理员私聊支持受控的本地命令能力：`/whoami`、`/status`、`/new`、`/reset`，以及对应的 `/bncr ...` 入口。
 - 非管理员私聊中，不在支持范围内的 slash 命令会由 bncr 直接拒绝，不再 fallback 到 agent。
-- 群聊里的管理型 / 控制型命令对非管理员按静默拒绝处理，不给用户可见回复。
+- 群聊非管理员执行场景管理命令（`mode` / `allow` / `deny` / `bind` / `revoke` / `list` / `history-*` / `download-media`）时，统一返回 `Admin permission required.`，不再附带用法提示。
+- 群聊非管理员执行 `/bncr new`、`/bncr reset`、`/bncr verbose` 时仍按静默拒绝处理。
 - `/bncr list pending` 与 `/bncr list scenes` 采用按私聊 / 群聊分组的摘要展示格式，便于现场排查 scene 状态。
+
+### `/bncr help` 权限过滤
+
+`/bncr help` 现在按当前身份动态展示：
+
+- 管理员：展示全部命令
+- 私聊非管理员：展示当前可用命令，不展示管理类命令
+- 群聊非管理员：仅展示基础命令，不展示 `mode`、`history-*`、`download-media` 等管理命令
+
+示例：
+
+管理员：
+
+```text
+🦞 Bncr command usage
+
+📌 Bncr builtins
+  • /bncr whoami
+  • /bncr status
+  • /bncr new
+  • /bncr reset
+  • /bncr verbose on|off|full
+
+🛡 Scene approval
+  • /bncr allow [<SceneId>]
+  • /bncr deny [<SceneId>]
+  • /bncr bind <agentId> [<SceneId>]
+  • /bncr mode help
+  • /bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]
+  • /bncr revoke [<SceneId>]
+  • /bncr list pending [filters...]
+  • /bncr list scenes [filters...]
+
+📋 Conversation history
+  • /bncr history-help
+  • /bncr history-limit [<number>|clear] [<SceneId>]
+  • /bncr history-force on|off|clear [<SceneId>]
+
+🌐 Remote media
+  • /bncr download-media on|off|clear|default on|off [<SceneId>]
+```
+
+私聊非管理员：
+
+```text
+🦞 Bncr command usage
+
+📌 Bncr builtins
+  • /bncr whoami
+  • /bncr status
+  • /bncr new
+  • /bncr reset
+```
+
+群聊非管理员：
+
+```text
+🦞 Bncr command usage
+
+📌 Bncr builtins
+  • /bncr whoami
+  • /bncr status
+```
 
 ---
 

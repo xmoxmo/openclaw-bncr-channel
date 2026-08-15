@@ -117,6 +117,64 @@ test('bridge lifecycle service helpers preserve startup stop and shutdown sequen
   assert.deepEqual(shutdownCalls, ['shutdown']);
 });
 
+test('bridge lifecycle service runs sqlite cutover when maintenance env is set', async () => {
+  const originalCutoverEnv = process.env.BNCR_SQLITE_CUTOVER;
+  process.env.BNCR_SQLITE_CUTOVER = '1';
+  const calls = [];
+  let statePath = null;
+  const runtime = {
+    bridgeId: 'bridge-sqlite',
+    setStopped() {},
+    setStatePath(value) {
+      statePath = value;
+    },
+    getRuntimeConfig() {
+      return { channels: { bncr: { enabled: true } } };
+    },
+    initializeCanonicalAgentId() {},
+    logWarn() {},
+    async loadState() {
+      calls.push(['loadState']);
+    },
+    async cutoverToSqlite() {
+      calls.push(['cutoverToSqlite']);
+      return { backupPath: '/tmp/state.pre-sqlite.json', storeMode: 'sqlite' };
+    },
+    setDebugFlag() {},
+    async refreshDebugFlagFromConfig() {},
+    buildIntegratedDiagnostics() {
+      return {
+        regression: { totalKnownRoutes: 0, ok: true },
+        health: { pending: 0, deadLetter: 0 },
+      };
+    },
+    logInfo(scope, message) {
+      calls.push(['logInfo', scope, message]);
+    },
+    getChannelConfigRoot(cfg) {
+      return cfg.channels.bncr;
+    },
+  };
+
+  try {
+    await startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, false);
+  } finally {
+    if (originalCutoverEnv === undefined) delete process.env.BNCR_SQLITE_CUTOVER;
+    else process.env.BNCR_SQLITE_CUTOVER = originalCutoverEnv;
+  }
+
+  assert.deepEqual(calls.slice(0, 3), [
+    ['loadState'],
+    ['cutoverToSqlite'],
+    ['logInfo', 'sqlite', 'cutover completed backup=/tmp/state.pre-sqlite.json storeMode=sqlite'],
+  ]);
+  assert.equal(
+    calls.some((call) => call[0] === 'logInfo' && call[1] === 'startup'),
+    true,
+  );
+  assert.match(statePath, /bncr-bridge-state\.json$/);
+});
+
 test('bridge lifecycle cleanup clears timers waiters and workers through one boundary', () => {
   const calls = [];
   cleanupBncrBridgeRuntime(

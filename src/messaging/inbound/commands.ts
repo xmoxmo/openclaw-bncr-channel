@@ -224,7 +224,10 @@ export async function handleBncrNativeCommand(params: {
   });
 
   const nativeVerbose = resolveBncrNativeVerboseCommand(command);
-  const nativeHelp = resolveBncrNativeHelpCommand(command);
+  const nativeHelp = resolveBncrNativeHelpCommand(command, {
+    isAdmin: parsed.isAdmin,
+    peerKind: parsed.peer.kind as 'direct' | 'group',
+  });
   const nativeWhoami = resolveBncrNativeWhoamiCommand({
     command,
     platform: parsed.platform,
@@ -244,7 +247,10 @@ export async function handleBncrNativeCommand(params: {
     resolvedAgentId: resolvedRoute.agentId || canonicalAgentId,
     sessionKey,
   });
-  const nativeSessionReset = resolveBncrNativeSessionResetCommand({ command });
+  const nativeSessionReset = resolveBncrNativeSessionResetCommand({
+    command,
+    peerKind: parsed.peer.kind as 'direct' | 'group',
+  });
   if (nativeHelp) {
     logBncrNativeCommandSummary(
       buildBncrNativeCommandSummary({
@@ -336,7 +342,7 @@ export async function handleBncrNativeCommand(params: {
   }
 
   if (nativeSessionReset) {
-    const allowLocalSessionReset = parsed.peer.kind === 'direct';
+    const allowLocalSessionReset = parsed.peer.kind === 'direct' || parsed.isAdmin;
     if (!allowLocalSessionReset) {
       logBncrNativeCommandSummary(
         buildBncrNativeCommandSummary({
@@ -481,7 +487,35 @@ export async function handleBncrNativeCommand(params: {
 
   const sceneAdmin = parseSceneAdminCommand(command);
   if (sceneAdmin.matched) {
-    const silentNonAdminGroupReject = !parsed.isAdmin && parsed.peer.kind === 'group';
+    if (!parsed.isAdmin) {
+      logBncrNativeCommandSummary(
+        buildBncrNativeCommandSummary({
+          kind: 'scene-admin',
+          command: command.command,
+          accountId,
+          to: displayTo,
+          msgId: msgId ?? null,
+          result: 'rejected',
+        }),
+      );
+      await recordAndPatchBncrInboundSessionEntry({
+        storePath,
+        sessionKey,
+        ctx: ctxPayload,
+        patch: sessionIdentityPatch,
+      });
+      await enqueueFromReply({
+        accountId,
+        sessionKey,
+        route,
+        payload: {
+          text: 'Admin permission required.',
+          replyToId: msgId || undefined,
+        },
+      });
+      return { handled: true, command: command.command, sessionKey };
+    }
+
     if (!sceneAdmin.valid) {
       logBncrNativeCommandSummary(
         buildBncrNativeCommandSummary({
@@ -493,17 +527,21 @@ export async function handleBncrNativeCommand(params: {
           result: 'rejected',
         }),
       );
-      if (!silentNonAdminGroupReject) {
-        await enqueueFromReply({
-          accountId,
-          sessionKey,
-          route,
-          payload: {
-            text: sceneAdmin.text,
-            replyToId: msgId || undefined,
-          },
-        });
-      }
+      await recordAndPatchBncrInboundSessionEntry({
+        storePath,
+        sessionKey,
+        ctx: ctxPayload,
+        patch: sessionIdentityPatch,
+      });
+      await enqueueFromReply({
+        accountId,
+        sessionKey,
+        route,
+        payload: {
+          text: sceneAdmin.text,
+          replyToId: msgId || undefined,
+        },
+      });
       return { handled: true, command: command.command, sessionKey };
     }
 
@@ -531,17 +569,15 @@ export async function handleBncrNativeCommand(params: {
       ctx: ctxPayload,
       patch: sessionIdentityPatch,
     });
-    if (!(silentNonAdminGroupReject && !outcome.ok)) {
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: outcome.text,
-          replyToId: msgId || undefined,
-        },
-      });
-    }
+    await enqueueFromReply({
+      accountId,
+      sessionKey,
+      route,
+      payload: {
+        text: outcome.text,
+        replyToId: msgId || undefined,
+      },
+    });
     return { handled: true, command: command.command, sessionKey };
   }
 

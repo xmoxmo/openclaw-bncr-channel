@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveCommandAuthorization } from 'openclaw/plugin-sdk/command-auth-native';
 import {
+  clearConversationHistorySerialLocks,
+  readConversationHistorySerialStates,
+  resetConversationHistorySerialForTest,
+  runConversationHistorySerial,
+} from '../../src/messaging/inbound/conversation-history-serial.ts';
+import {
   dispatchBncrInbound,
+  dispatchBncrOutboundHistoryFlush,
   resolveBncrInboundConversation,
 } from '../../src/messaging/inbound/dispatch.ts';
 import { prepareBncrInboundSessionContext } from '../../src/messaging/inbound/dispatch-prep.ts';
@@ -994,6 +1001,103 @@ test('dispatchBncrInbound drops non-accumulating group turns without writing pen
   assert.equal(conversationHistories.size, 0);
 });
 
+test('admin mode drops non-admin inbound but still accumulates bot replies for outbound history flush', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        agentId: 'public',
+        groupReplyMode: 'admin',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '-1001',
+      userId: '10002',
+      userName: 'bob',
+      isGroup: true,
+      shouldRespond: false,
+      type: 'text',
+      msg: 'non-admin silent',
+      mimeType: 'text/plain',
+      msgId: 'admin-mode-non-admin-1',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: false,
+    shouldAccumulate: false,
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  assert.equal(conversationHistories.size, 0);
+
+  const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
+  for (let index = 1; index <= 3; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundReplayEntry(`admin-mode-bot-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  await dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('admin-mode-bot-3', route),
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['admin-mode-bot-1', 'admin-mode-bot-2', 'admin-mode-bot-3'],
+  );
+  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
+});
+
 test('dispatchBncrInbound replays pending group text and image history on later dispatched turn and clears window', async () => {
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
@@ -1768,14 +1872,15 @@ test('dispatchBncrInbound force-flushes a dispatched direct message when accumul
   assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
 });
 
-test('dispatchBncrInbound does not force-flush bot replies until the next inbound message', async () => {
+test('raw outbound replay recording does not dispatch history flush by itself', async () => {
   const { calls } = createInboundApiStub();
   const conversationHistories = new Map();
   const outboundReplayCache = new Map();
   const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  let lastResult;
 
   for (let index = 1; index <= 3; index += 1) {
-    recordBncrOutboundReplay({
+    lastResult = recordBncrOutboundReplay({
       cache: outboundReplayCache,
       conversationHistories,
       historyLimit: 3,
@@ -1790,6 +1895,1179 @@ test('dispatchBncrInbound does not force-flush bot replies until the next inboun
   assert.equal(calls.turnRuns.length, 0);
   assert.equal(conversationHistories.get('tgBot:10001')?.length, 3);
   assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.length, 3);
+  assert.equal(lastResult.historyOverflow, true);
+});
+
+test('dispatch marks the history shard failed when upload throws', async () => {
+  resetConversationHistorySerialForTest();
+  const { api } = createInboundApiStub({
+    onReplyDispatchStart() {
+      throw new Error('upload failed');
+    },
+  });
+  const conversationHistories = new Map();
+  const failedMarks = [];
+  const historyShardQueue = {
+    createHistoryShard: () => ({ shardId: 99, created: true }),
+    markHistoryShardProcessing: () => {},
+    markHistoryShardFailed: (shardId, error) => failedMarks.push({ shardId, error }),
+    markHistoryShardCompleted: () => {},
+    completeHistoryShard: () => {},
+  };
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'trigger upload failure',
+    mimeType: 'text/plain',
+    msgId: 'upload-failure-1',
+  });
+
+  await assert.rejects(
+    dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'orion',
+      conversationHistories,
+      historyShardQueue,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    }),
+    /upload failed/,
+  );
+
+  assert.equal(failedMarks.length, 1);
+  assert.equal(failedMarks[0].shardId, 99);
+  assert.match(String(failedMarks[0].error), /upload failed/);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatch reconciles consumed memory before building the snapshot payload', async () => {
+  resetConversationHistorySerialForTest();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map([
+    [
+      'tgBot:10001',
+      [
+        {
+          sender: 'alice',
+          senderId: '10001',
+          role: 'user',
+          body: 'already consumed',
+          timestamp: 100,
+          messageId: 'consumed-1',
+        },
+        {
+          sender: 'alice',
+          senderId: '10001',
+          role: 'user',
+          body: 'still active',
+          timestamp: 200,
+          messageId: 'active-1',
+        },
+      ],
+    ],
+  ]);
+  const reconcileCalls = [];
+  const historyShardQueue = {
+    createHistoryShard: () => ({ shardId: 90, created: true }),
+    reconcileHistoryMemory: async (historyKey) => {
+      reconcileCalls.push(historyKey);
+      const entries = conversationHistories.get(historyKey) || [];
+      conversationHistories.set(
+        historyKey,
+        entries.filter((entry) => entry.messageId !== 'consumed-1'),
+      );
+    },
+    markHistoryShardProcessing: () => {},
+    markHistoryShardFailed: () => {},
+    markHistoryShardCompleted: () => {},
+    renewHistoryShardLease: () => true,
+    completeHistoryShard: () => {},
+  };
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'current message',
+    mimeType: 'text/plain',
+    msgId: 'current-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    shouldAccumulate: true,
+    conversationHistories,
+    historyShardQueue,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.deepEqual(reconcileCalls, ['tgBot:10001']);
+  assert.equal(calls.turnRuns.length, 1);
+  const messageIds = calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+    (entry) => entry.messageId,
+  );
+  assert.equal(messageIds.includes('consumed-1'), false);
+  assert.equal(messageIds.includes('active-1'), true);
+  assert.equal(messageIds.includes('current-1'), true);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatch does not fall back to direct upload when shard activation fails', async () => {
+  resetConversationHistorySerialForTest();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const historyShardQueue = {
+    createHistoryShard: () => ({ shardId: 98, created: true }),
+    markHistoryShardProcessing: () => {
+      throw new Error('activate failed');
+    },
+    markHistoryShardFailed: () => {},
+    markHistoryShardCompleted: () => {},
+    renewHistoryShardLease: () => true,
+    completeHistoryShard: () => {},
+  };
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'activation failure',
+    mimeType: 'text/plain',
+    msgId: 'activation-failure-1',
+  });
+
+  await assert.rejects(
+    dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'public',
+      shouldDispatch: true,
+      shouldAccumulate: true,
+      conversationHistories,
+      historyShardQueue,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    }),
+    /activate failed/,
+  );
+
+  assert.equal(calls.turnRuns.length, 0);
+  // The shard owns the snapshot in SQLite, so the local window is disconnected
+  // even if marking the shard as processing fails before direct upload.
+  assert.equal(conversationHistories.get('tgBot:10001')?.length, 0);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatch aborts direct upload when shard activation ownership is lost', async () => {
+  resetConversationHistorySerialForTest();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const historyShardQueue = {
+    createHistoryShard: () => ({ shardId: 96, created: true }),
+    markHistoryShardProcessing: () => false,
+    markHistoryShardFailed: () => {},
+    markHistoryShardCompleted: () => {},
+    renewHistoryShardLease: () => false,
+    completeHistoryShard: () => {},
+  };
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'activation ownership lost',
+    mimeType: 'text/plain',
+    msgId: 'activation-ownership-lost-1',
+  });
+
+  await assert.rejects(
+    dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'public',
+      shouldDispatch: true,
+      shouldAccumulate: true,
+      conversationHistories,
+      historyShardQueue,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    }),
+    /history shard activation lost/,
+  );
+
+  assert.equal(calls.turnRuns.length, 0);
+  // SQLite owns the snapshot and the real worker will retain the claim, so the
+  // local window is intentionally disconnected before the direct attempt stops.
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatch reuses an existing shard delivery id and activates its claim', async () => {
+  resetConversationHistorySerialForTest();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const queueCalls = [];
+  const historyShardQueue = {
+    createHistoryShard: () => {
+      queueCalls.push('create');
+      return { shardId: 55, created: false };
+    },
+    markHistoryShardProcessing: () => queueCalls.push('processing'),
+    markHistoryShardFailed: () => queueCalls.push('failed'),
+    markHistoryShardCompleted: () => queueCalls.push('completed'),
+    renewHistoryShardLease: () => queueCalls.push('renew'),
+    completeHistoryShard: () => queueCalls.push('complete'),
+  };
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'existing shard direct dispatch',
+    mimeType: 'text/plain',
+    msgId: 'existing-shard-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    shouldAccumulate: true,
+    conversationHistories,
+    historyShardQueue,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.ingested[0].id, 'bncr-history-shard:55');
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(queueCalls, ['create', 'processing', 'completed', 'complete']);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatch aborts direct upload when an existing shard claim is owned elsewhere', async () => {
+  resetConversationHistorySerialForTest();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const queueCalls = [];
+  const historyShardQueue = {
+    createHistoryShard: () => {
+      queueCalls.push('create');
+      return { shardId: 56, created: false };
+    },
+    markHistoryShardProcessing: () => {
+      queueCalls.push('processing');
+      return false;
+    },
+    markHistoryShardFailed: () => queueCalls.push('failed'),
+    markHistoryShardCompleted: () => queueCalls.push('completed'),
+    renewHistoryShardLease: () => queueCalls.push('renew'),
+    completeHistoryShard: () => queueCalls.push('complete'),
+  };
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'existing shard owned elsewhere',
+    mimeType: 'text/plain',
+    msgId: 'existing-shard-2',
+  });
+
+  await assert.rejects(
+    dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'public',
+      shouldDispatch: true,
+      shouldAccumulate: true,
+      conversationHistories,
+      historyShardQueue,
+      rememberSessionRoute() {},
+      enqueueFromReply: async () => {},
+      setInboundActivity() {},
+      scheduleSave() {},
+    }),
+    /history shard activation lost/,
+  );
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(queueCalls, ['create', 'processing']);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatch clears local history even when shard completion marking fails', async () => {
+  resetConversationHistorySerialForTest();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const completedShardIds = [];
+  const historyShardQueue = {
+    createHistoryShard: () => ({ shardId: 97, created: true }),
+    markHistoryShardProcessing: () => {},
+    markHistoryShardFailed: () => {},
+    markHistoryShardCompleted: () => {
+      throw new Error('mark complete failed');
+    },
+    renewHistoryShardLease: () => true,
+    completeHistoryShard: (shardId) => completedShardIds.push(shardId),
+  };
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'complete mark failure',
+    mimeType: 'text/plain',
+    msgId: 'complete-mark-failure-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    shouldAccumulate: true,
+    conversationHistories,
+    outboundReplayCache,
+    historyShardQueue,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  assert.deepEqual(completedShardIds, [97]);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatchBncrOutboundHistoryFlush force-flushes bot-only history when an outbound reaches the limit', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  for (let index = 1; index <= 3; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundReplayEntry(`outbound-flush-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  await dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('outbound-flush-3', route),
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['outbound-flush-1', 'outbound-flush-2', 'outbound-flush-3'],
+  );
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+});
+
+test('dispatchBncrOutboundHistoryFlush does not run an empty system flush', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  await dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('outbound-empty-flush-1', route),
+    canonicalAgentId: 'public',
+    sceneRegistry: new Map(),
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(calls.builtContexts.length, 0);
+});
+
+test('dispatchBncrOutboundHistoryFlush keeps the triggering bot reply on out-of-order timestamps', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 2,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('out-of-order-bot-1', route, {
+      lastPushAt: 1000,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('out-of-order-bot-2', route, {
+      lastPushAt: 2000,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('out-of-order-bot-3', route, {
+      lastPushAt: 500,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  await dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('out-of-order-bot-3', route, {
+      lastPushAt: 500,
+    }),
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.deepEqual(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['out-of-order-bot-3', 'out-of-order-bot-2'],
+  );
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+});
+
+test('dispatchBncrOutboundHistoryFlush serializes snapshots and skips redundant flushes', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  for (let index = 1; index <= 3; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundReplayEntry(`serial-outbound-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const first = dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('serial-outbound-3', route),
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  const second = dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('serial-outbound-3', route),
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.turnRuns.length, 0);
+  gate.resolve();
+  await Promise.all([lock, first, second]);
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatchBncrOutboundHistoryFlush skips a stale snapshot when history changes while waiting', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  let flushVersion;
+
+  for (let index = 1; index <= 3; index += 1) {
+    const replay = recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundReplayEntry(`stale-flush-bot-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+    if (replay.historyOverflow) flushVersion = replay.historyVersion;
+  }
+  assert.equal(flushVersion, 3);
+
+  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const staleFlush = dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('stale-flush-bot-3', route),
+    historyVersion: flushVersion,
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 3,
+    entry: makeOutboundReplayEntry('stale-flush-bot-4', route, {
+      lastPushAt: 1004,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  gate.resolve();
+  await Promise.all([lock, staleFlush]);
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(
+    conversationHistories
+      .get('tgBot:10001')
+      ?.some((entry) => entry.messageId === 'stale-flush-bot-4'),
+    true,
+  );
+  assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.length, 3);
+  assert.equal(
+    outboundReplayCache
+      .get('Primary:tgBot:10001')
+      ?.some((entry) => entry.messageId === 'stale-flush-bot-4'),
+    true,
+  );
+  resetConversationHistorySerialForTest();
+});
+
+test('stop command bypasses conversation history serial and does not accumulate', async () => {
+  resetConversationHistorySerialForTest();
+  resetBncrReplyDispatchSerialForTest();
+  const gate = createDeferred();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+
+  const stop = dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: false,
+      type: 'text',
+      msg: '/stop',
+      mimeType: 'text/plain',
+      msgId: 'stop-bypass-serial-1',
+    }),
+    canonicalAgentId: 'orion',
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const outcome = await Promise.race([
+    stop.then(() => 'bypassed'),
+    new Promise((resolve) => setTimeout(() => resolve('blocked'), 1500)),
+  ]);
+  assert.equal(outcome, 'bypassed');
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(conversationHistories.has('tgBot:10001'), false);
+  assert.equal(outboundReplayCache.size, 0);
+
+  gate.resolve();
+  await lock;
+  resetBncrReplyDispatchSerialForTest();
+  resetConversationHistorySerialForTest();
+});
+
+test('dispatch outbound flush queued during an upload is not invalidated by that upload cleanup', async () => {
+  resetConversationHistorySerialForTest();
+  resetBncrReplyDispatchSerialForTest();
+  const started = createDeferred();
+  const gate = createDeferred();
+  let gatedOnce = false;
+  const { api, calls } = createInboundApiStub({
+    onReplyDispatchStart: async () => {
+      if (!gatedOnce) {
+        gatedOnce = true;
+        started.resolve();
+        await gate.promise;
+      }
+    },
+  });
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 2,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('upload-flush-bot-1', route, {
+      lastPushAt: 1001,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('upload-flush-bot-2', route, {
+      lastPushAt: 1002,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const run = dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: false,
+      type: 'text',
+      msg: 'current during upload flush',
+      mimeType: 'text/plain',
+      msgId: 'upload-flush-current-1',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    shouldAccumulate: true,
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  await started.promise;
+  const replay = recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('upload-flush-bot-3', route, {
+      lastPushAt: 1003,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  assert.equal(replay.historyOverflow, true);
+  const flush = dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('upload-flush-bot-3', route, {
+      lastPushAt: 1003,
+    }),
+    historyVersion: replay.historyVersion,
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  gate.resolve();
+  await Promise.all([run, flush]);
+
+  assert.equal(calls.turnRuns.length, 2);
+  assert.ok(calls.turnRuns.some((turn) => turn.ctxPayload.SenderId === 'bncr-history-system'));
+  assert.deepEqual(conversationHistories.get('tgBot:10001') || [], []);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  resetConversationHistorySerialForTest();
+  resetBncrReplyDispatchSerialForTest();
+});
+
+test('dispatchBncrInbound waits for the conversation history snapshot lock', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    shouldRespond: false,
+    type: 'text',
+    msg: 'serial inbound',
+    mimeType: 'text/plain',
+    msgId: 'history-serial-inbound-1',
+  });
+  const run = dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    shouldAccumulate: true,
+    conversationHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(conversationHistories.size, 0);
+  assert.equal(calls.turnRuns.length, 0);
+  gate.resolve();
+  await Promise.all([lock, run]);
+
+  assert.equal(calls.builtContexts.length, 1);
+  assert.deepEqual(
+    calls.builtContexts[0].StructuredContextFacts.conversationContext.map(
+      (entry) => entry.messageId,
+    ),
+    ['history-serial-inbound-1'],
+  );
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  resetConversationHistorySerialForTest();
+});
+
+test('clearConversationHistorySerialLocks keeps a stale started chain as a barrier', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  const staleLock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(clearConversationHistorySerialLocks(), 1);
+  let ran = false;
+  const next = runConversationHistorySerial('tgBot:10001', async () => {
+    ran = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ran, false);
+
+  gate.resolve();
+  await Promise.all([staleLock, next]);
+  assert.equal(ran, true);
+
+  resetConversationHistorySerialForTest();
+});
+
+test('clearConversationHistorySerialLocks keeps queued serial work behind the old started lock', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  const staleLock = runConversationHistorySerial('tgBot:queued-clear', () => gate.promise);
+  let ran = false;
+  const queued = runConversationHistorySerial('tgBot:queued-clear', async () => {
+    ran = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(ran, false);
+  assert.equal(clearConversationHistorySerialLocks(), 2);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ran, false);
+
+  gate.resolve();
+  await Promise.all([staleLock, queued]);
+  assert.equal(ran, true);
+  resetConversationHistorySerialForTest();
+});
+
+test('clearConversationHistorySerialLocks keeps queued serial work in front of new tasks', async () => {
+  resetConversationHistorySerialForTest();
+  const staleGate = createDeferred();
+  const queuedGate = createDeferred();
+  const staleLock = runConversationHistorySerial('tgBot:queued-front', () => staleGate.promise);
+  let queuedRan = false;
+  const queued = runConversationHistorySerial('tgBot:queued-front', async () => {
+    queuedRan = true;
+    await queuedGate.promise;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(queuedRan, false);
+  assert.equal(clearConversationHistorySerialLocks(), 2);
+
+  let newRan = false;
+  const next = runConversationHistorySerial('tgBot:queued-front', async () => {
+    newRan = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(newRan, false);
+
+  staleGate.resolve();
+  await staleLock;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queuedRan, true);
+  queuedGate.resolve();
+  await Promise.all([queued, next]);
+  assert.equal(newRan, true);
+  resetConversationHistorySerialForTest();
+});
+
+test('runConversationHistorySerial continues after a rejected task', async () => {
+  resetConversationHistorySerialForTest();
+  let ran = false;
+
+  await assert.rejects(
+    runConversationHistorySerial('tgBot:rejected-chain', () => Promise.reject(new Error('boom'))),
+    /boom/,
+  );
+  await runConversationHistorySerial('tgBot:rejected-chain', async () => {
+    ran = true;
+  });
+
+  assert.equal(ran, true);
+  resetConversationHistorySerialForTest();
+});
+
+test('conversation history serial records upload, cache-delete, and lock-clear phases', async () => {
+  resetConversationHistorySerialForTest();
+  let observed;
+  let uploadCompletedState;
+  const gate = createDeferred();
+  const run = runConversationHistorySerial('tgBot:phase-state', async (handle) => {
+    handle.phase('snapshot');
+    handle.setCleanup(() => {});
+    handle.phase('upload_start', {
+      snapshotMessageIds: ['phase-m1'],
+      cacheKey: 'Primary:tgBot:phase-state',
+    });
+    observed = readConversationHistorySerialStates().find(
+      (state) => state.historyKey === 'tgBot:phase-state',
+    );
+    handle.phase('upload_end');
+    uploadCompletedState = readConversationHistorySerialStates().find(
+      (state) => state.historyKey === 'tgBot:phase-state',
+    );
+    handle.phase('cache_delete_start');
+    handle.phase('cache_delete_done');
+    gate.resolve();
+  });
+
+  await gate.promise;
+  assert.equal(observed?.phase, 'upload_start');
+  assert.deepEqual(observed?.snapshotMessageIds, ['phase-m1']);
+  assert.equal(observed?.cacheKey, 'Primary:tgBot:phase-state');
+  assert.equal(observed?.uploadCompleted, false);
+  assert.equal(observed?.abandoned, false);
+  assert.equal(uploadCompletedState?.uploadCompleted, true);
+  await run;
+  resetConversationHistorySerialForTest();
+});
+
+test('clear stale conversation history lock during upload preserves local cache', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  let cleanupCalls = 0;
+  const run = runConversationHistorySerial('tgBot:stale-upload', async (handle) => {
+    handle.setCleanup(() => {
+      cleanupCalls += 1;
+    });
+    handle.phase('upload_start', {
+      snapshotMessageIds: ['stale-upload-m1'],
+      cacheKey: 'Primary:tgBot:stale-upload',
+    });
+    await gate.promise;
+    assert.equal(handle.isAbandoned(), true);
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    readConversationHistorySerialStates().find((state) => state.historyKey === 'tgBot:stale-upload')
+      ?.phase,
+    'upload_start',
+  );
+  assert.equal(clearConversationHistorySerialLocks(), 1);
+  assert.equal(cleanupCalls, 0);
+  gate.resolve();
+  await run;
+  assert.equal(cleanupCalls, 0);
+  resetConversationHistorySerialForTest();
+});
+
+test('clear stale conversation history lock after upload completes finishes cache cleanup', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  let cleanupCalls = 0;
+  const run = runConversationHistorySerial('tgBot:stale-upload-end', async (handle) => {
+    handle.setCleanup(() => {
+      cleanupCalls += 1;
+    });
+    handle.phase('upload_start', {
+      snapshotMessageIds: ['stale-upload-end-m1'],
+      cacheKey: 'Primary:tgBot:stale-upload-end',
+    });
+    handle.phase('upload_end');
+    await gate.promise;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(clearConversationHistorySerialLocks(), 1);
+  assert.equal(cleanupCalls, 1);
+  gate.resolve();
+  await run;
+  assert.equal(cleanupCalls, 1);
+  resetConversationHistorySerialForTest();
 });
 
 test('dispatchBncrInbound clears legacy outbound replay on silent overflow to avoid duplicate bot replies', async () => {
@@ -2041,6 +3319,273 @@ test('dispatchBncrInbound truncates merged assistant history to the limit and ke
   );
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
   assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+});
+
+test('dispatchBncrInbound keeps the current synthetic message when history overflows without a platform id', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  const future = Date.now() + 60_000;
+
+  for (let index = 1; index <= 4; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      entry: makeOutboundReplayEntry(`synthetic-current-bot-${index}`, route, {
+        lastPushAt: future + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  const parsedWithoutPlatformId = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    shouldRespond: false,
+    type: 'text',
+    msg: 'current without platform id',
+    mimeType: 'text/plain',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parsedWithoutPlatformId,
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    shouldAccumulate: true,
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  const currentContextEntry =
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.find((entry) =>
+      entry.content.includes('current without platform id'),
+    );
+  assert.ok(
+    currentContextEntry?.messageId,
+    'current message without a platform id must be preserved with a synthetic id',
+  );
+  assert.equal(calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.length, 3);
+  assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+});
+
+test('dispatch cache cleanup after upload preserves bot replies written during the turn', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('pre-upload-bot-1', route, {
+      lastPushAt: 1001,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('pre-upload-bot-2', route, {
+      lastPushAt: 1002,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: false,
+      type: 'text',
+      msg: 'current after replies',
+      mimeType: 'text/plain',
+      msgId: 'pre-upload-current-1',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    sceneRegistry: new Map(),
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {
+      recordBncrOutboundReplay({
+        cache: outboundReplayCache,
+        conversationHistories,
+        historyLimit: 2,
+        entry: makeOutboundReplayEntry('new-during-upload', route, {
+          lastPushAt: 1003,
+        }),
+        sender: 'OpenClaw',
+        senderId: 'Primary',
+      });
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.deepEqual(
+    conversationHistories.get('tgBot:10001')?.map((entry) => entry.messageId),
+    ['new-during-upload'],
+  );
+  assert.deepEqual(
+    outboundReplayCache.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
+    ['new-during-upload'],
+  );
+});
+
+test('dispatch cache cleanup preserves bot replies written while context is being built', async () => {
+  resetConversationHistorySerialForTest();
+  const gate = createDeferred();
+  const buildStarted = createDeferred();
+  const { api, calls } = createInboundApiStub();
+  const originalBuildContext = api.runtime.channel.inbound.buildContext;
+  let gatedOnce = false;
+  api.runtime.channel.inbound.buildContext = async (args) => {
+    if (!gatedOnce) {
+      gatedOnce = true;
+      buildStarted.resolve();
+      await gate.promise;
+    }
+    return originalBuildContext(args);
+  };
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        agentId: 'public',
+        historyLimit: 2,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('before-context-bot-1', route, {
+      lastPushAt: 1001,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('before-context-bot-2', route, {
+      lastPushAt: 1002,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const run = dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: false,
+      type: 'text',
+      msg: 'current before context build',
+      mimeType: 'text/plain',
+      msgId: 'before-context-current-1',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  await buildStarted.promise;
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundReplayEntry('during-context-bot', route, {
+      lastPushAt: 1003,
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  gate.resolve();
+  await run;
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.deepEqual(
+    conversationHistories.get('tgBot:10001')?.map((entry) => entry.messageId),
+    ['during-context-bot'],
+  );
+  assert.deepEqual(
+    outboundReplayCache.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
+    ['during-context-bot'],
+  );
+  resetConversationHistorySerialForTest();
 });
 
 test('dispatchBncrInbound records video, audio, and document group history markers for later replay', async () => {

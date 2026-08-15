@@ -90,6 +90,50 @@ test('flushPushQueue does not wait for ack or degrade when no-ack pushed entry l
   }
 });
 
+test('flushPushQueue removes an online no-ack entry after successful push', async () => {
+  const bridge = createBridge();
+  const scheduled = [];
+  const pushed = [];
+  let waited = false;
+
+  try {
+    const entry = makeEntry('msg-no-ack-online-final', 'no ack online final');
+    entry.lastPushConnId = 'conn-no-ack-online';
+    entry.lastPushClientId = 'client-no-ack-online';
+    bridge.outbox.set(entry.messageId, entry);
+
+    bridge.tryPushEntry = async (pushedEntry) => {
+      pushed.push(pushedEntry.messageId);
+      return true;
+    };
+    bridge.waitForMessageAck = async () => {
+      waited = true;
+      return 'timeout';
+    };
+    bridge.isOnline = () => true;
+    bridge.isOutboundAckRequired = () => false;
+    bridge.sleepMs = async () => {};
+    bridge.schedulePushDrain = (delayMs = 0) => {
+      scheduled.push(delayMs);
+    };
+
+    await bridge.flushPushQueue({
+      accountId: 'Primary',
+      trigger: 'test',
+      reason: 'no-ack-online-final',
+    });
+
+    assert.deepEqual(pushed, [entry.messageId]);
+    assert.equal(waited, false);
+    assert.equal(bridge.outbox.has(entry.messageId), false);
+    assert.equal(bridge.messageAckWaiters.size, 0);
+    assert.equal(bridge.deadLetter.length, 0);
+    assert.deepEqual(scheduled, []);
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
 test('flushPushQueue marks no-ack offline pushes as unconfirmed retry without waiting for ack', async () => {
   const bridge = createBridge();
   const scheduled = [];

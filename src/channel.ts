@@ -4,7 +4,6 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
 } from 'openclaw/plugin-sdk/core';
-import { DEFAULT_GROUP_HISTORY_LIMIT as DEFAULT_HISTORY_LIMIT } from 'openclaw/plugin-sdk/reply-history';
 import {
   BNCR_DEFAULT_ACCOUNT_ID,
   CHANNEL_ID,
@@ -44,9 +43,22 @@ import type {
   FileSendTransferState,
   OutboxEntry,
 } from './core/types.ts';
-import type { BncrConversationHistoryMap } from './messaging/inbound/conversation-history.ts';
+import {
+  type BncrConversationHistoryMap,
+  resolveBncrHistoryLimit,
+} from './messaging/inbound/conversation-history.ts';
+import {
+  clearConversationHistorySerialLocks,
+  readConversationHistorySerialHistoryKeys,
+} from './messaging/inbound/conversation-history-serial.ts';
+import { dispatchBncrOutboundHistoryFlush } from './messaging/inbound/dispatch.ts';
+import {
+  type BncrHistoryShardDispatchPayload,
+  processBncrHistoryShardSlot,
+} from './messaging/inbound/history-shard-worker.ts';
 import type { BncrOutboundReplayCache } from './messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from './messaging/inbound/parse.ts';
+import { runBncrInboundReplyDispatch } from './messaging/inbound/reply-dispatch.ts';
 import { buildEnqueueFromReplyDebugInfo } from './messaging/outbound/diagnostics.ts';
 import { buildBncrMediaOutboundFrame } from './messaging/outbound/media.ts';
 import {
@@ -127,6 +139,8 @@ import {
   FILE_TRANSFER_ACK_TTL_MS,
   FILE_TRANSFER_KEEP_MS,
   FILE_TRANSFER_TERMINAL_KEEP_MS,
+  HISTORY_SHARD_WORKER_BATCH_LIMIT,
+  HISTORY_SHARD_WORKER_INTERVAL_MS,
   INBOUND_FILE_TRANSFER_MAX_BYTES,
   INBOUND_FILE_TRANSFER_MAX_CHUNKS,
   MAX_ACCOUNT_ACTIVITY_ENTRIES,
@@ -188,6 +202,7 @@ import {
   createBncrRuntimeAckObservabilityBuilder,
 } from './plugin/runtime-diagnostics-snapshot.ts';
 import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
+import type { BncrHistoryShardRow } from './plugin/sqlite-state.ts';
 import { createBncrStateTransientRuntimeGroup } from './plugin/state-transient-runtime-group.ts';
 import { createBncrTargetStatusRuntimeGroup } from './plugin/target-status-runtime-group.ts';
 import { shouldEmitDedupLog as shouldEmitDedupLogFromRuntime } from './runtime/log-dedupe.ts';
@@ -341,6 +356,8 @@ class BncrBridgeRuntime {
   // Timers / background workers ---------------------------------------------
   private saveTimer: NodeJS.Timeout | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
+  private historyShardWorkerTimer: NodeJS.Timeout | null = null;
+  private historyShardWorkerRunning = false;
   private pushDrainRunningAccounts = new Set<string>();
   private pushDrainRunningSinceByAccount = new Map<string, number>();
   private pushDrainStuckWarnedAtByAccount = new Map<string, number>();
@@ -837,6 +854,7 @@ class BncrBridgeRuntime {
         initializeCanonicalAgentId: (cfg) => this.initializeCanonicalAgentId(cfg),
         logWarn: (scope, message, options) => this.logWarn(scope, message, options),
         loadState: () => this.loadState(),
+        cutoverToSqlite: () => this.stateStore.cutoverToSqlite(),
         setDebugFlag: (value) => {
           BNCR_DEBUG_VERBOSE = value;
         },
@@ -851,6 +869,7 @@ class BncrBridgeRuntime {
       ctx,
       debug,
     );
+    this.startHistoryShardWorker();
   };
 
   stopService = async () => {
@@ -868,6 +887,7 @@ class BncrBridgeRuntime {
   }
 
   private cleanupRuntimeWaitersAndTimers(reason: string) {
+    this.stopHistoryShardWorker(reason);
     this.clientRpcRuntime.shutdown();
     cleanupBncrBridgeRuntime(
       {
@@ -1078,11 +1098,83 @@ class BncrBridgeRuntime {
   }
 
   private async loadState() {
-    await this.stateStore.loadState();
+    // A hot bridge rebuild must not recover shards whose old serial task is
+    // still uploading in this process. Normal process restarts have no active
+    // keys and therefore recover every in-flight shard.
+    const activeHistoryKeys = readConversationHistorySerialHistoryKeys();
+    clearConversationHistorySerialLocks(
+      'runtime-restart',
+      `${this.bridgeId}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`,
+    );
+    await this.stateStore.recoverInFlightHistoryShards(activeHistoryKeys);
+    await this.stateStore.loadState(activeHistoryKeys);
   }
 
   private async flushState() {
     await this.stateStore.flushState();
+  }
+
+  private startHistoryShardWorker() {
+    if (this.historyShardWorkerTimer) {
+      clearInterval(this.historyShardWorkerTimer);
+      this.historyShardWorkerTimer = null;
+    }
+    if (this.stopped) return;
+    this.historyShardWorkerTimer = setInterval(() => {
+      void this.tickHistoryShardWorker();
+    }, HISTORY_SHARD_WORKER_INTERVAL_MS);
+    this.historyShardWorkerTimer.unref?.();
+  }
+
+  private stopHistoryShardWorker(reason: string) {
+    if (this.historyShardWorkerTimer) {
+      clearInterval(this.historyShardWorkerTimer);
+      this.historyShardWorkerTimer = null;
+    }
+    this.logInfo(
+      'history-shard',
+      `history-shard worker stopped|bridge=${this.bridgeId}|reason=${reason}`,
+      { debugOnly: true },
+    );
+  }
+
+  private async tickHistoryShardWorker() {
+    if (this.historyShardWorkerRunning || this.stopped) return;
+    this.historyShardWorkerRunning = true;
+    try {
+      for (let i = 0; i < HISTORY_SHARD_WORKER_BATCH_LIMIT; i += 1) {
+        const shard = this.stateStore.historyShardQueue.claimNextHistoryShard();
+        if (!shard) break;
+        await this.processHistoryShard(shard);
+      }
+    } catch (error) {
+      this.logWarn('inbound', `history shard worker tick failed: ${String(error)}`);
+    } finally {
+      this.historyShardWorkerRunning = false;
+    }
+  }
+
+  private async processHistoryShard(shard: BncrHistoryShardRow) {
+    const cfg = getOpenClawRuntimeConfig(this.api);
+    await processBncrHistoryShardSlot({
+      shard,
+      historyShardQueue: this.stateStore.historyShardQueue,
+      conversationHistories: this.conversationHistories,
+      outboundReplayCache: this.outboundReplayCache,
+      runDispatch: (payload: BncrHistoryShardDispatchPayload) =>
+        runBncrInboundReplyDispatch({
+          api: this.api,
+          channelId: CHANNEL_ID,
+          cfg,
+          ...payload,
+          setInboundActivity: (accountId, at) => {
+            this.lastInboundByAccount.set(accountId, at);
+            this.markActivity(accountId, at);
+          },
+          scheduleSave: () => this.scheduleSave(),
+          enqueueFromReply: (args) => this.enqueueFromReply(args),
+        }),
+    });
   }
 
   private resolveMessageAck(messageId: string, result: 'acked' | 'timeout' = 'acked') {
@@ -2175,10 +2267,14 @@ class BncrBridgeRuntime {
       const groupId = entry.route?.groupId || '0';
       const userId = entry.route?.userId || '0';
       const sceneKey = groupId !== '0' ? `${platform}:${groupId}` : `${platform}:${userId}`;
-      const sceneLimit = this.sceneRegistry.get(sceneKey)?.historyLimit;
-      return typeof sceneLimit === 'number' && Number.isFinite(sceneLimit) && sceneLimit >= 0
-        ? Math.floor(sceneLimit)
-        : DEFAULT_HISTORY_LIMIT;
+      return resolveBncrHistoryLimit(this.sceneRegistry.get(sceneKey)?.historyLimit);
+    },
+    resolveOutboundHistoryForce: (entry) => {
+      const platform = entry.route?.platform || '';
+      const groupId = entry.route?.groupId || '0';
+      const userId = entry.route?.userId || '0';
+      const sceneKey = groupId !== '0' ? `${platform}:${groupId}` : `${platform}:${userId}`;
+      return this.sceneRegistry.get(sceneKey)?.historyForce !== false;
     },
     resolveOutboundSender: (entry) => {
       try {
@@ -2188,6 +2284,8 @@ class BncrBridgeRuntime {
         return { sender: 'OpenClaw', senderId: entry.accountId };
       }
     },
+    onConversationHistoryOverflow: (entry, historyVersion) =>
+      this.flushConversationHistoryFromOutbound(entry, historyVersion),
     isOutboundAckRequired: (accountId) => this.isOutboundAckRequired(accountId),
     scheduleSave: () => this.scheduleSave(),
     flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
@@ -2773,6 +2871,35 @@ class BncrBridgeRuntime {
 
   private markRecentOutboundAcked(entry: OutboxEntry) {
     this.bridgeOutboxFacade.markRecentOutboundAcked(entry);
+  }
+
+  private flushConversationHistoryFromOutbound(entry: OutboxEntry, historyVersion?: number) {
+    const cfg = getOpenClawRuntimeConfig(this.api);
+    const canonicalAgentId = this.canonicalAgentId || 'main';
+    void dispatchBncrOutboundHistoryFlush({
+      api: this.api,
+      channelId: CHANNEL_ID,
+      cfg,
+      entry,
+      ...(historyVersion !== undefined ? { historyVersion } : {}),
+      canonicalAgentId,
+      sceneRegistry: this.sceneRegistry,
+      conversationHistories: this.conversationHistories,
+      outboundReplayCache: this.outboundReplayCache,
+      defaultAdminAgentId: canonicalAgentId,
+      defaultPublicAgentId: this.defaultPublicAgentId(),
+      now,
+      rememberSessionRoute: (sessionKey, accountId, route) =>
+        this.rememberSessionRoute(sessionKey, accountId, route),
+      enqueueFromReply: (args) => this.enqueueFromReply(args),
+      setInboundActivity: (accountId, at) => {
+        this.lastInboundByAccount.set(accountId, at);
+        this.markActivity(accountId, at);
+      },
+      scheduleSave: () => this.scheduleSave(),
+    }).catch((err) => {
+      this.logWarn('inbound', `outbound history flush failed: ${String(err)}`);
+    });
   }
 
   private logEnqueueFromReply(args: {

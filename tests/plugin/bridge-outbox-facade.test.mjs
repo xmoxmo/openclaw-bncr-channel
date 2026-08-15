@@ -120,3 +120,134 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
     true,
   );
 });
+
+test('bridge outbox facade triggers history flush when an outbound reaches the limit', () => {
+  const outbox = new Map();
+  let deadLetter = [];
+  const resolved = [];
+  const flushes = [];
+  const enqueueCount = new Map();
+  const lastEnqueue = new Map();
+  const deadLetterSinceStart = new Map();
+  const lastOutboundByAccount = new Map();
+  const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
+  const overflows = [];
+
+  const facade = createBncrBridgeOutboxFacade({
+    bridgeId: 'bridge-1',
+    normalizeAccountId: (accountId) => String(accountId || '').trim(),
+    asString: (value, fallback = '') =>
+      typeof value === 'string' ? value : value == null ? fallback : String(value),
+    now: () => 10,
+    backoffMs: () => 100,
+    maxRetry: 1,
+    maxDeadLetterEntries: 5,
+    outbox,
+    getDeadLetter: () => deadLetter,
+    setDeadLetter: (entries) => {
+      deadLetter = entries;
+    },
+    incrementCounter: (map, accountId) => map.set(accountId, (map.get(accountId) || 0) + 1),
+    outboundEnqueueCountByAccount: enqueueCount,
+    lastOutboundEnqueueAtByAccount: lastEnqueue,
+    prePushGuardSkipCountByAccount: new Map(),
+    lastPrePushGuardSkipAtByAccount: new Map(),
+    lastPrePushGuardSkipReasonByAccount: new Map(),
+    deadLetterSinceStartByAccount: deadLetterSinceStart,
+    lastOutboundByAccount,
+    outboundReplayCache,
+    conversationHistories,
+    resolveOutboundHistoryLimit: () => 3,
+    resolveOutboundHistoryForce: () => true,
+    onConversationHistoryOverflow: (entry, historyVersion) =>
+      overflows.push({ entry, historyVersion }),
+    isOutboundAckRequired: () => true,
+    scheduleSave() {},
+    flushPushQueueBestEffort: (args) => flushes.push(args),
+    logInfo() {},
+    logOutboundSummary() {},
+    logDeadLetterSummary() {},
+    resolveMessageAck: (messageId, result = 'acked') => {
+      resolved.push([messageId, result]);
+      return true;
+    },
+    markActivity: (accountId, at) => lastOutboundByAccount.set(`${accountId}:activity`, at),
+  });
+
+  for (let index = 1; index <= 3; index += 1) {
+    facade.markRecentOutboundAcked(makeEntry(`out-overflow-${index}`));
+  }
+  facade.markRecentOutboundAcked(makeEntry('out-overflow-3'));
+
+  assert.deepEqual(
+    overflows.map(({ entry }) => entry.messageId),
+    ['out-overflow-3', 'out-overflow-3'],
+  );
+  assert.deepEqual(
+    overflows.map(({ historyVersion }) => historyVersion),
+    [3, 3],
+  );
+  assert.equal(conversationHistories.get('tgBot:10001')?.length, 3);
+});
+
+test('bridge outbox facade does not trigger history flush when auto flush is off', () => {
+  const outbox = new Map();
+  let deadLetter = [];
+  const resolved = [];
+  const flushes = [];
+  const enqueueCount = new Map();
+  const lastEnqueue = new Map();
+  const deadLetterSinceStart = new Map();
+  const lastOutboundByAccount = new Map();
+  const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
+  const overflows = [];
+
+  const facade = createBncrBridgeOutboxFacade({
+    bridgeId: 'bridge-1',
+    normalizeAccountId: (accountId) => String(accountId || '').trim(),
+    asString: (value, fallback = '') =>
+      typeof value === 'string' ? value : value == null ? fallback : String(value),
+    now: () => 10,
+    backoffMs: () => 100,
+    maxRetry: 1,
+    maxDeadLetterEntries: 5,
+    outbox,
+    getDeadLetter: () => deadLetter,
+    setDeadLetter: (entries) => {
+      deadLetter = entries;
+    },
+    incrementCounter: (map, accountId) => map.set(accountId, (map.get(accountId) || 0) + 1),
+    outboundEnqueueCountByAccount: enqueueCount,
+    lastOutboundEnqueueAtByAccount: lastEnqueue,
+    prePushGuardSkipCountByAccount: new Map(),
+    lastPrePushGuardSkipAtByAccount: new Map(),
+    lastPrePushGuardSkipReasonByAccount: new Map(),
+    deadLetterSinceStartByAccount: deadLetterSinceStart,
+    lastOutboundByAccount,
+    outboundReplayCache,
+    conversationHistories,
+    resolveOutboundHistoryLimit: () => 3,
+    resolveOutboundHistoryForce: () => false,
+    onConversationHistoryOverflow: (entry) => overflows.push(entry),
+    isOutboundAckRequired: () => true,
+    scheduleSave() {},
+    flushPushQueueBestEffort: (args) => flushes.push(args),
+    logInfo() {},
+    logOutboundSummary() {},
+    logDeadLetterSummary() {},
+    resolveMessageAck: (messageId, result = 'acked') => {
+      resolved.push([messageId, result]);
+      return true;
+    },
+    markActivity: (accountId, at) => lastOutboundByAccount.set(`${accountId}:activity`, at),
+  });
+
+  for (let index = 1; index <= 3; index += 1) {
+    facade.markRecentOutboundAcked(makeEntry(`out-off-${index}`));
+  }
+
+  assert.deepEqual(overflows, []);
+  assert.equal(conversationHistories.get('tgBot:10001')?.length, 3);
+});

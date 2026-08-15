@@ -11,10 +11,22 @@ export type ParseBncrNativeCommandOptions = {
   allowBareSessionReset?: boolean;
 };
 
+export function isBncrStopCommandText(rawBody: string): boolean {
+  const raw = String(rawBody || '')
+    .trim()
+    .toLowerCase();
+  return raw === '/stop';
+}
+
 export type NativeVerboseCommand = {
   handled: true;
   verboseLevel?: 'on' | 'off' | 'full';
   text: string;
+};
+
+export type NativeHelpCommandOptions = {
+  isAdmin?: boolean;
+  peerKind?: 'direct' | 'group';
 };
 
 export type NativeHelpCommand = {
@@ -37,32 +49,6 @@ export type NativeSessionResetCommand = {
   reason: 'new' | 'reset';
   text: string;
 };
-
-const BNCR_HELP_TEXT = [
-  '🦞 Bncr command usage',
-  '',
-  '📌 Bncr builtins',
-  '  • /bncr whoami',
-  '  • /bncr verbose on|off|full',
-  '',
-  '🛡 Scene approval',
-  '  • /bncr allow [<SceneId>]',
-  '  • /bncr deny [<SceneId>]',
-  '  • /bncr bind <agentId> [<SceneId>]',
-  '  • /bncr mode help',
-  '  • /bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]',
-  '  • /bncr revoke [<SceneId>]',
-  '  • /bncr list pending [filters...]',
-  '  • /bncr list scenes [filters...]',
-  '',
-  '📋 Conversation history',
-  '  • /bncr history-help',
-  '  • /bncr history-limit [<number>|clear] [<SceneId>]',
-  '  • /bncr history-force on|off|clear [<SceneId>]',
-  '',
-  '🌐 Remote media',
-  '  • /bncr download-media on|off|clear|default on|off [<SceneId>]',
-].join('\n');
 
 const BNCR_NATIVE_COMMANDS = new Set([
   'help',
@@ -120,7 +106,7 @@ export function parseBncrNativeCommand(
     return { command: 'whoami', raw, body: '/whoami', argsText: '' };
   }
   if (!raw.startsWith('/bncr')) return null;
-  const match = raw.match(/^\/bncr(?:@[A-Za-z0-9_]+)?(?:\s+([^\s]+)(?:\s+([\s\S]*))?)?$/i);
+  const match = raw.match(/^\/bncr(?:\s+([^\s]+)(?:\s+([\s\S]*))?)?$/i);
   if (!match) return null;
 
   const command = String(match[1] || 'help')
@@ -142,7 +128,7 @@ export function parseBncrUnsupportedDirectCommand(text: string): {
   const raw = String(text || '').trim();
   if (!raw.startsWith('/')) return null;
 
-  const bareMatch = raw.match(/^\/([A-Za-z0-9_]+)(?:@[A-Za-z0-9_]+)?(?:\s+.*)?$/);
+  const bareMatch = raw.match(/^\/([A-Za-z0-9_]+)(?:\s+.*)?$/);
   if (!bareMatch) return null;
   const bareCommand = String(bareMatch[1] || '')
     .trim()
@@ -150,7 +136,7 @@ export function parseBncrUnsupportedDirectCommand(text: string): {
   if (!bareCommand) return null;
 
   if (bareCommand === 'bncr') {
-    const subMatch = raw.match(/^\/bncr(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]+))?/i);
+    const subMatch = raw.match(/^\/bncr(?:\s+([A-Za-z0-9_-]+))?/i);
     const subCommand =
       String(subMatch?.[1] || '')
         .trim()
@@ -163,9 +149,77 @@ export function parseBncrUnsupportedDirectCommand(text: string): {
   return { command: bareCommand, raw };
 }
 
-export function resolveBncrNativeHelpCommand(command: NativeCommand): NativeHelpCommand | null {
+const BNCR_HELP_SECTIONS = [
+  {
+    title: '📌 Bncr builtins',
+    audience: 'all',
+    commands: [
+      { label: '/bncr whoami', scopes: ['admin', 'direct', 'group'] },
+      { label: '/bncr status', scopes: ['admin', 'direct', 'group'] },
+      { label: '/bncr new', scopes: ['admin', 'direct'] },
+      { label: '/bncr reset', scopes: ['admin', 'direct'] },
+      { label: '/bncr verbose on|off|full', scopes: ['admin'] },
+    ],
+  },
+  {
+    title: '🛡 Scene approval',
+    audience: 'admin',
+    commands: [
+      { label: '/bncr allow [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr deny [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr bind <agentId> [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr mode help', scopes: ['admin'] },
+      {
+        label: '/bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]',
+        scopes: ['admin'],
+      },
+      { label: '/bncr revoke [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr list pending [filters...]', scopes: ['admin'] },
+      { label: '/bncr list scenes [filters...]', scopes: ['admin'] },
+    ],
+  },
+  {
+    title: '📋 Conversation history',
+    audience: 'admin',
+    commands: [
+      { label: '/bncr history-help', scopes: ['admin'] },
+      { label: '/bncr history-limit [<number>|clear] [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr history-force on|off|clear [<SceneId>]', scopes: ['admin'] },
+    ],
+  },
+  {
+    title: '🌐 Remote media',
+    audience: 'admin',
+    commands: [
+      {
+        label: '/bncr download-media on|off|clear|default on|off [<SceneId>]',
+        scopes: ['admin'],
+      },
+    ],
+  },
+];
+
+export function resolveBncrNativeHelpCommand(
+  command: NativeCommand,
+  options?: NativeHelpCommandOptions,
+): NativeHelpCommand | null {
   if (command.command !== 'help') return null;
-  return { handled: true, text: BNCR_HELP_TEXT };
+
+  const isAdmin = options?.isAdmin === true;
+  const isGroup = options?.peerKind === 'group';
+  const audience = isAdmin ? 'admin' : isGroup ? 'group' : 'direct';
+  const sections: string[] = ['🦞 Bncr command usage', ''];
+
+  for (const section of BNCR_HELP_SECTIONS) {
+    if (section.audience !== 'all' && section.audience !== audience) continue;
+    const visible = section.commands.filter((item) => item.scopes.includes(audience));
+    if (visible.length === 0) continue;
+    sections.push(section.title);
+    for (const item of visible) sections.push(`  • ${item.label}`);
+    sections.push('');
+  }
+
+  return { handled: true, text: sections.join('\n') };
 }
 
 export function resolveBncrNativeWhoamiCommand(args: {
@@ -214,16 +268,18 @@ export function resolveBncrNativeStatusCommand(args: {
 
 export function resolveBncrNativeSessionResetCommand(args: {
   command: NativeCommand;
+  peerKind: 'direct' | 'group';
 }): NativeSessionResetCommand | null {
   if (args.command.command !== 'new' && args.command.command !== 'reset') return null;
   const reason = args.command.command === 'new' ? 'new' : 'reset';
+  const scope = args.peerKind === 'group' ? 'this group chat' : 'this private chat';
   return {
     handled: true,
     reason,
     text:
       reason === 'new'
-        ? 'Started a new session for this private chat.'
-        : 'Reset the current session for this private chat.',
+        ? `Started a new session for ${scope}.`
+        : `Reset the current session for ${scope}.`,
   };
 }
 

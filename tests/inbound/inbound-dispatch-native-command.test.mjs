@@ -600,7 +600,54 @@ test('slash bncr new is handled locally for admin callers without native fallbac
   assert.equal(enqueueCalls[0].payload.replyToId, 'slash-new-admin');
 });
 
-test('slash bncr reset silently rejects group chat callers without invoking session reset', async () => {
+test('slash bncr new replies to group admin callers and invokes session reset', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    isGroup: true,
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr new',
+    mimeType: 'text/plain',
+    msgId: 'slash-new-group',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.deepEqual(calls.requests, [
+    {
+      method: 'sessions.reset',
+      params: {
+        key: 'agent:orion:bncr:group:7467426f743a2d31303031',
+        reason: 'new',
+        agentId: 'orion',
+      },
+    },
+  ]);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Started a new session for this group chat.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'slash-new-group');
+});
+
+test('slash bncr reset replies to group admin callers and invokes session reset', async () => {
   const { api, calls } = createInboundApiStub();
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
@@ -614,6 +661,89 @@ test('slash bncr reset silently rejects group chat callers without invoking sess
     msg: '/bncr reset',
     mimeType: 'text/plain',
     msgId: 'slash-reset-group',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.deepEqual(calls.requests, [
+    {
+      method: 'sessions.reset',
+      params: {
+        key: 'agent:orion:bncr:group:7467426f743a2d31303031',
+        reason: 'reset',
+        agentId: 'orion',
+      },
+    },
+  ]);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Reset the current session for this group chat.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'slash-reset-group');
+});
+
+test('slash bncr new silently ignores non-admin group callers without invoking session reset', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    isGroup: true,
+    isAdmin: false,
+    type: 'text',
+    msg: '/bncr new',
+    mimeType: 'text/plain',
+    msgId: 'slash-new-group-non-admin',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.deepEqual(calls.requests, []);
+  assert.equal(enqueueCalls.length, 0);
+});
+
+test('slash bncr reset silently ignores non-admin group callers without invoking session reset', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    isGroup: true,
+    isAdmin: false,
+    type: 'text',
+    msg: '/bncr reset',
+    mimeType: 'text/plain',
+    msgId: 'slash-reset-group-non-admin',
   });
   const enqueueCalls = [];
 
@@ -1841,7 +1971,7 @@ test('scene admin commands reject non-admin callers without falling through to a
   assert.equal(sceneRegistry.get('tgBot:10001')?.status, 'pending');
 });
 
-test('scene admin commands silently reject non-admin group callers without falling through to agent', async () => {
+test('scene admin commands reject non-admin group callers with admin permission required without falling through to agent', async () => {
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
   const sceneRegistry = new Map([
     [
@@ -1892,8 +2022,123 @@ test('scene admin commands silently reject non-admin group callers without falli
   });
 
   assert.equal(calls.turnRuns.length, 0);
-  assert.equal(enqueueCalls.length, 0);
-  assert.equal(sceneRegistry.get('tgBot:10001')?.status, 'pending');
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Admin permission required.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'slash-deny-no-admin-group');
+});
+
+test('scene admin commands reply with admin permission required for all-mode non-admin group callers', async () => {
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'wind_system',
+        groupReplyMode: 'all',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '20002',
+    isAdmin: false,
+    isGroup: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/bncr deny tgBot:10001',
+    mimeType: 'text/plain',
+    msgId: 'slash-deny-all-mode-non-admin',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Admin permission required.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'slash-deny-all-mode-non-admin');
+});
+
+test('scene admin commands reject non-admin group callers outside all mode with admin permission required', async () => {
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'wind_system',
+        groupReplyMode: 'admin',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '20002',
+    isAdmin: false,
+    isGroup: true,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/bncr mode',
+    mimeType: 'text/plain',
+    msgId: 'slash-mode-invalid-non-admin-group',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Admin permission required.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'slash-mode-invalid-non-admin-group');
 });
 
 test('unsupported direct slash command is rejected by bncr without falling through to agent', async () => {

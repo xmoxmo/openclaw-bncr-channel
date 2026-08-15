@@ -44,6 +44,7 @@ export function startBncrBridgeService(
       options?: { debugOnly?: boolean },
     ) => void;
     loadState: () => Promise<void>;
+    cutoverToSqlite?: () => Promise<{ backupPath: string | null; storeMode: string }>;
     setDebugFlag: (value: boolean) => void;
     refreshDebugFlagFromConfig: (options?: { forceLog?: boolean }) => Promise<void>;
     buildIntegratedDiagnostics: (accountId: string) => {
@@ -75,6 +76,13 @@ export function startBncrBridgeService(
       // ignore startup canonical agent initialization errors
     }
     await runtime.loadState();
+    if (process.env.BNCR_SQLITE_CUTOVER === '1' && runtime.cutoverToSqlite) {
+      const cutover = await runtime.cutoverToSqlite();
+      runtime.logInfo(
+        'sqlite',
+        `cutover completed backup=${cutover.backupPath || 'none'} storeMode=${cutover.storeMode}`,
+      );
+    }
     if (typeof debug === 'boolean') runtime.setDebugFlag(debug);
     await runtime.refreshDebugFlagFromConfig({ forceLog: true });
     const bootDiag = runtime.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);

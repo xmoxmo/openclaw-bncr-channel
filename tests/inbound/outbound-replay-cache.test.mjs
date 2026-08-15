@@ -5,6 +5,7 @@ import {
   buildBncrOutboundReplayKeyFromRoute,
   readBncrOutboundReplaySnapshot,
   recordBncrOutboundReplay,
+  removeBncrOutboundReplayMessageIds,
 } from '../../src/messaging/inbound/outbound-replay-cache.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
 
@@ -229,9 +230,150 @@ test('outbound messages deduplicate by outbox message id', () => {
   assert.equal(cache.get('Primary:tgBot:-1001')?.length, 1);
 });
 
+test('outbound replies without platform ids share one synthetic id across history and cache', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  const result = recordBncrOutboundReplay({
+    cache,
+    conversationHistories,
+    entry: makeOutboundEntry(undefined, route, { lastPushAt: 42 }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  assert.equal(result.recorded, true);
+
+  const historyMessageId = conversationHistories.get('tgBot:10001')?.[0]?.messageId;
+  const cacheMessageId = cache.get('Primary:tgBot:10001')?.[0]?.messageId;
+  assert.match(historyMessageId, /^bncr-synthetic:/);
+  assert.equal(cacheMessageId, historyMessageId);
+
+  const parsed = makeParsed(route);
+  const snapshot = readBncrOutboundReplaySnapshot({
+    cache,
+    conversationHistories,
+    parsed,
+    accountId: 'Primary',
+  });
+  assert.equal(snapshot.length, 1);
+  assert.equal(snapshot[0].messageId, historyMessageId);
+
+  assert.equal(
+    removeBncrOutboundReplayMessageIds({
+      cache,
+      parsed,
+      accountId: 'Primary',
+      messageIds: [historyMessageId],
+    }),
+    1,
+  );
+  assert.equal(cache.has('Primary:tgBot:10001'), false);
+});
+
 test('outbound replay key rejects unknown route targets', () => {
   assert.equal(
     buildBncrOutboundReplayKeyFromRoute({ platform: 'tgBot', groupId: '0', userId: '0' }),
     null,
+  );
+});
+
+test('outbound replay signals history overflow only when an outbound reaches the limit', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  const results = [];
+
+  for (let index = 1; index <= 3; index += 1) {
+    results.push(
+      recordBncrOutboundReplay({
+        cache,
+        conversationHistories,
+        historyLimit: 3,
+        entry: makeOutboundEntry(`overflow-${index}`, route),
+        sender: 'OpenClaw',
+        senderId: 'Primary',
+      }),
+    );
+  }
+
+  assert.deepEqual(results, [
+    { recorded: true, historyOverflow: false },
+    { recorded: true, historyOverflow: false },
+    { recorded: true, historyOverflow: true, historyVersion: 3 },
+  ]);
+
+  assert.deepEqual(
+    recordBncrOutboundReplay({
+      cache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundEntry('overflow-3', route),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    }),
+    { recorded: false, historyOverflow: true, historyVersion: 3 },
+  );
+});
+
+test('outbound replay still signals overflow when history is new but cache already has the message id', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache,
+    entry: makeOutboundEntry('cache-only-1', route),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+  recordBncrOutboundReplay({
+    cache,
+    entry: makeOutboundEntry('cache-only-2', route),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  recordBncrOutboundReplay({
+    cache,
+    conversationHistories,
+    historyLimit: 2,
+    entry: makeOutboundEntry('cache-only-1', route),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  assert.deepEqual(
+    recordBncrOutboundReplay({
+      cache,
+      conversationHistories,
+      historyLimit: 2,
+      entry: makeOutboundEntry('cache-only-2', route),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    }),
+    { recorded: false, historyOverflow: true, historyVersion: 2 },
+  );
+});
+
+test('outbound replay cache is bounded by the unified conversation window limit', () => {
+  const cache = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  for (let index = 1; index <= 5; index += 1) {
+    recordBncrOutboundReplay({
+      cache,
+      historyLimit: 3,
+      entry: makeOutboundEntry(`bounded-cache-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  assert.deepEqual(
+    cache.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
+    ['bounded-cache-3', 'bounded-cache-4', 'bounded-cache-5'],
   );
 });

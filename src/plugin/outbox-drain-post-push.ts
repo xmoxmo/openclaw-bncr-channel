@@ -95,6 +95,9 @@ export function createBncrOutboxDrainPostPush(runtime: BncrOutboxDrainPostPushRu
       ackTimeoutMs,
     });
 
+    if (!requireAck && onlineNow) {
+      runtime.outbox.delete(entry.messageId);
+    }
     if (!runtime.outbox.has(entry.messageId)) {
       await runtime.sleepMs(runtime.pushDrainIntervalMs);
       return { action: 'continue', localNextDelay };

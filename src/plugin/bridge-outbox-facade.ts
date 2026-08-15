@@ -45,7 +45,9 @@ export function createBncrBridgeOutboxFacade(runtime: {
   outboundReplayCache?: BncrOutboundReplayCache;
   conversationHistories?: BncrConversationHistoryMap;
   resolveOutboundHistoryLimit?: (entry: OutboxEntry) => number;
+  resolveOutboundHistoryForce?: (entry: OutboxEntry) => boolean;
   resolveOutboundSender?: (entry: OutboxEntry) => { sender: string; senderId?: string };
+  onConversationHistoryOverflow?: (entry: OutboxEntry, historyVersion?: number) => void;
   isOutboundAckRequired?: (accountId: string) => boolean;
   scheduleSave: () => void;
   flushPushQueueBestEffort: (args?: {
@@ -65,7 +67,7 @@ export function createBncrBridgeOutboxFacade(runtime: {
       sender: entry.accountId,
       senderId: entry.accountId,
     };
-    recordBncrOutboundReplay({
+    const replayResult = recordBncrOutboundReplay({
       cache: runtime.outboundReplayCache,
       ...(runtime.conversationHistories
         ? { conversationHistories: runtime.conversationHistories }
@@ -78,6 +80,9 @@ export function createBncrBridgeOutboxFacade(runtime: {
       senderId: senderInfo.senderId,
       status,
     });
+    if (replayResult.historyOverflow && runtime.resolveOutboundHistoryForce?.(entry) !== false) {
+      runtime.onConversationHistoryOverflow?.(entry, replayResult.historyVersion);
+    }
   };
 
   const markRecentOutboundAcked = (entry: OutboxEntry) => {
