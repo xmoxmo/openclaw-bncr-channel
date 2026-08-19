@@ -9,11 +9,7 @@ import {
   buildBncrStructuredContextFactsFromInboundParts,
 } from './context-facts.ts';
 import type { BncrInboundApi, BncrInboundConfig, BncrInboundContextPayload } from './contracts.ts';
-import {
-  type BncrConversationHistoryMap,
-  type BncrHistoryEntry,
-  collectBncrHistoryMediaFromEntries,
-} from './conversation-history.ts';
+import type { BncrConversationHistoryMap, BncrHistoryEntry } from './conversation-history.ts';
 import type {
   BncrInboundConversationResolution,
   BncrPreparedInboundSessionContext,
@@ -193,9 +189,6 @@ export function buildBncrInboundTurnContext(args: {
   const senderIsOwner = parsed.isAdmin === true || Boolean(ownerAllowFrom?.length);
   const senderIsAuthorized = senderIsOwner;
   const inboundHistory = undefined;
-  const contextMedia = shouldDispatch
-    ? collectBncrHistoryMediaFromEntries({ entries: contextEntries })
-    : [];
   const structuredContextEntries = shouldDispatch
     ? contextEntries.map((entry) => ({
         messageId: entry.messageId,
@@ -271,7 +264,7 @@ export function buildBncrInboundTurnContext(args: {
     kind: item.kind,
     messageId: msgId ?? undefined,
   }));
-  const media = dedupeBncrTurnMedia([...contextMedia, ...currentTurnMedia]);
+  const media = dedupeBncrTurnMedia(currentTurnMedia);
 
   return Promise.resolve(
     resolveBncrChannelInboundRuntime(api).buildContext({

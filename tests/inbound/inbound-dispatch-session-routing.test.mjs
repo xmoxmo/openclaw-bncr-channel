@@ -436,6 +436,135 @@ test('dispatchBncrInbound replays acknowledged outbound messages into direct con
   assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
 });
 
+test('dispatchBncrInbound keeps acknowledged agent media in context without lifting it into a later text turn', async () => {
+  const { api, calls } = createInboundApiStub();
+  const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    entry: makeOutboundReplayEntry('agent-file-1', route, {
+      type: 'file',
+      msg: '',
+      mediaUrl: '/tmp/agent-sent.txt',
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'text',
+    msg: 'hello after agent file',
+    mimeType: 'text/plain',
+    msgId: 'direct-after-agent-file-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    outboundReplayCache,
+    conversationHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  assert.deepEqual(ctx.media, []);
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.conversationContext;
+  const assistant = historyFacts?.find((entry) => entry.messageId === 'agent-file-1');
+  assert.equal(assistant?.role, 'assistant');
+  assert.equal(assistant?.senderId, 'Primary');
+  assert.equal(assistant?.content, '<media:document>');
+  assert.equal(assistant?.media?.[0]?.type, 'document');
+  assert.equal(assistant?.media?.[0]?.path, '/tmp/agent-sent.txt');
+  assert.equal(assistant?.media?.[0]?.messageId, 'agent-file-1');
+});
+
+test('dispatchBncrInbound keeps assistant media in context while current user media stays top-level', async () => {
+  const { api, calls } = createInboundApiStub();
+  const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache: outboundReplayCache,
+    conversationHistories,
+    entry: makeOutboundReplayEntry('agent-file-2', route, {
+      type: 'file',
+      msg: '',
+      mediaUrl: '/tmp/agent-sent-2.txt',
+    }),
+    sender: 'OpenClaw',
+    senderId: 'Primary',
+  });
+
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    type: 'image',
+    msg: 'current user image',
+    base64: Buffer.from('current-image').toString('base64'),
+    mimeType: 'image/png',
+    fileName: 'current.png',
+    msgId: 'direct-current-media-1',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    resolvedAgentId: 'public',
+    outboundReplayCache,
+    conversationHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  const ctx = calls.builtContextArgs.at(-1);
+  assert.ok(ctx);
+  assert.equal(ctx.media.length, 1);
+  assert.equal(ctx.media[0].kind, 'image');
+  assert.equal(ctx.media[0].path, '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin');
+  assert.equal(ctx.media[0].messageId, 'direct-current-media-1');
+
+  const historyFacts = ctx.extra?.BncrStructuredContextFacts?.conversationContext;
+  const assistant = historyFacts?.find((entry) => entry.messageId === 'agent-file-2');
+  assert.equal(assistant?.role, 'assistant');
+  assert.equal(assistant?.content, '<media:document>');
+  assert.equal(assistant?.media?.[0]?.type, 'document');
+  assert.equal(assistant?.media?.[0]?.path, '/tmp/agent-sent-2.txt');
+
+  const current = historyFacts?.find((entry) => entry.messageId === 'direct-current-media-1');
+  assert.equal(current?.role, 'user');
+  assert.equal(current?.content, 'current user image');
+  assert.equal(current?.media?.[0]?.type, 'image');
+});
+
 test('dispatchBncrInbound replays acknowledged outbound messages into group context', async () => {
   const { api, calls } = createInboundApiStub();
   const outboundReplayCache = new Map();
@@ -1218,7 +1347,7 @@ test('dispatchBncrInbound replays pending group text and image history on later 
   assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
 });
 
-test('dispatchBncrInbound retains all pending group images from one mediaList turn for later replay', async () => {
+test('dispatchBncrInbound retains pending group images in context without lifting them into a later text turn', async () => {
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
 
@@ -1307,27 +1436,14 @@ test('dispatchBncrInbound retains all pending group images from one mediaList tu
     '@bot summarize album',
   );
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
-  assert.deepEqual(triggeredCtx.media, [
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-      contentType: 'image/png',
-      kind: 'image',
-      messageId: 'pending-album-1',
-    },
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
-      contentType: 'image/jpeg',
-      kind: 'image',
-      messageId: 'pending-album-1',
-    },
-  ]);
+  assert.deepEqual(triggeredCtx.media, []);
   assert.equal(
     calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
     'bncr.inbound_context',
   );
 });
 
-test('dispatchBncrInbound merges pending group media into a later text trigger turn', async () => {
+test('dispatchBncrInbound keeps pending group image media in context for a later text trigger', async () => {
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
 
@@ -1394,14 +1510,7 @@ test('dispatchBncrInbound merges pending group media into a later text trigger t
 
   const triggeredCtx = calls.builtContextArgs.at(-1);
   assert.ok(triggeredCtx);
-  assert.deepEqual(triggeredCtx.media, [
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-      contentType: 'image/png',
-      kind: 'image',
-      messageId: 'pending-image-later-1',
-    },
-  ]);
+  assert.deepEqual(triggeredCtx.media, []);
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
   assert.equal(triggeredCtx.message.bodyForAgent, 'ENV:@bot 这张图是什么');
   const historyFacts = triggeredCtx.extra?.BncrStructuredContextFacts?.conversationContext;
@@ -3738,26 +3847,7 @@ test('dispatchBncrInbound records video, audio, and document group history marke
     '@bot summarize all media',
   );
   assert.equal(triggeredCtx.message.inboundHistory, undefined);
-  assert.deepEqual(triggeredCtx.media, [
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-      contentType: 'video/mp4',
-      kind: 'video',
-      messageId: 'pending-video-1',
-    },
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
-      contentType: 'audio/ogg',
-      kind: 'audio',
-      messageId: 'pending-audio-1',
-    },
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-3.bin',
-      contentType: 'application/pdf',
-      kind: 'document',
-      messageId: 'pending-file-1',
-    },
-  ]);
+  assert.deepEqual(triggeredCtx.media, []);
   assert.equal(
     calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
     'bncr.inbound_context',

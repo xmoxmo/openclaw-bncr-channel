@@ -405,11 +405,6 @@ export function buildBncrConversationContextFromEntries(args: {
   return `[Chat messages since your last reply - for context]\n${historyText}\n\n[Current message - respond to this]${args.currentMessage}`;
 }
 
-export function collectBncrHistoryMediaFromEntries(args: {
-  entries: readonly BncrHistoryEntry[];
-}): HistoryMediaEntry[] {
-  return args.entries.flatMap((entry) => (Array.isArray(entry.media) ? entry.media : []));
-}
 export function clearBncrPendingConversationHistory(args: {
   historyMap: BncrConversationHistoryMap;
   parsed: ParsedInbound;
