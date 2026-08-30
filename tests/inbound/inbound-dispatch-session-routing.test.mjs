@@ -928,12 +928,11 @@ test('admin OpenClaw native command grants owner allowFrom to real sender id', a
   assert.equal(calls.builtContexts[0].OriginatingChannel, 'bncr');
   assert.deepEqual(calls.builtContexts[0].OwnerAllowFrom, ['10001']);
   assert.equal(calls.builtContexts[0].CommandAuthorized, true);
-  assert.equal(calls.builtContexts[0].CommandSource, 'text');
+  assert.equal(calls.builtContexts[0].CommandSource, 'native');
   assert.deepEqual(calls.builtContexts[0].CommandTurn, {
-    kind: 'text-slash',
-    source: 'text',
+    kind: 'native',
+    source: 'native',
     authorized: true,
-    commandName: 'status',
     body: '/status',
   });
   assert.deepEqual(calls.builtContexts[0].AccessCommands, {
@@ -947,7 +946,7 @@ test('admin OpenClaw native command grants owner allowFrom to real sender id', a
     name: 'xmo',
     username: 'xmo',
   });
-  assert.equal(calls.builtContextArgs[0].extra.OwnerAllowFrom[0], '10001');
+  assert.equal(calls.builtContexts[0].OwnerAllowFrom[0], '10001');
 });
 
 test('admin bncr builtin command does not inject OpenClaw owner allowFrom', async () => {

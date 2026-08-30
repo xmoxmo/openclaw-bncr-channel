@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { setBncrInboundSessionRuntimeForTest } from '../../src/openclaw/inbound-session-runtime.ts';
+import { setBncrSessionResetRuntimeForTest } from '../../src/openclaw/session-reset-runtime.ts';
 
 export function createInboundApiStub(options = {}) {
   const currentConfig = {};
@@ -60,16 +61,25 @@ export function createInboundApiStub(options = {}) {
     },
   });
 
+  const gatewayRequest = async (method, params) => {
+    calls.requests.push({ method, params });
+    if (typeof options.onRequest === 'function') {
+      return await options.onRequest({ method, params, calls });
+    }
+    return { ok: true };
+  };
+
+  const _restoreSessionReset = setBncrSessionResetRuntimeForTest(async (params) => {
+    return gatewayRequest('sessions.reset', params);
+  });
+
   const api = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
-    async request(method, params) {
-      calls.requests.push({ method, params });
-      if (typeof options.onRequest === 'function') {
-        return await options.onRequest({ method, params, calls });
-      }
-      return { ok: true };
-    },
+    request: gatewayRequest,
     runtime: {
+      gateway: {
+        request: gatewayRequest,
+      },
       config: {
         current() {
           return currentConfig;

@@ -176,6 +176,8 @@ export async function dispatchBncrInbound(params: {
     // A stop command must not wait behind the history serial chain or mutate
     // the accumulated conversation window. Deliver it immediately so the host
     // can abort the active run instead of queuing behind it.
+    const stopOwnerAllowFrom =
+      parsed.peer.kind === 'direct' && senderIdForContext ? [senderIdForContext] : ownerAllowFrom;
     const ctxPayload = await buildBncrInboundTurnContext({
       api,
       cfg,
@@ -185,7 +187,7 @@ export async function dispatchBncrInbound(params: {
       peer,
       senderIdForContext,
       senderDisplayName,
-      ownerAllowFrom,
+      ownerAllowFrom: stopOwnerAllowFrom,
       bridgeSenderId,
       bridgeSenderName,
       historyLimit: resolvedHistoryLimit,

@@ -91,10 +91,32 @@ openclaw devices approve --latest
 补充口径：
 
 - 入站会话按正式 scene / route 语义接入 OpenClaw，区分私聊与群聊会话。
-- 非管理员私聊支持受控的本地命令能力：`/whoami`、`/status`、`/new`、`/reset`，以及对应的 `/bncr ...` 入口。
-- 非管理员私聊中，不在支持范围内的 slash 命令会由 bncr 直接拒绝，不再 fallback 到 agent。
-- 群聊非管理员执行场景管理命令（`mode` / `allow` / `deny` / `bind` / `revoke` / `list` / `history-*` / `download-media`）时，统一返回 `Admin permission required.`，不再附带用法提示。
-- 群聊非管理员执行 `/bncr new`、`/bncr reset`、`/bncr verbose` 时仍按静默拒绝处理。
+
+#### 私聊管理员
+
+- 不受白名单约束。裸发命令（如 `/whoami`、`/status`、`/new`、`/reset`、`/verbose`、`/model`）直接转发 OpenClaw/agent 处理，bncr 不拦截。
+- `/bncr xxx` 由 bncr 插件解析处理（admin 权限）。
+- 裸发 `/whoami` 与 `/bncr whoami` 由不同处理器响应，结果可能不同。
+
+#### 私聊非管理员
+
+- 白名单裸发命令 `/whoami`、`/status`、`/verbose`、`/model` 会临时提权为 admin 后注入 OpenClaw 原生命令解析器处理，即使解析失败也不 fallback 到 agent。
+- 白名单裸发命令 `/new`、`/reset` 会临时提权为 admin 后由 bncr 本地执行会话重置，不 fallback 到 agent。
+- `/stop` 不经过 bncr 原生命令处理器，所有调用者统一走会话级 stop 快速路径；私聊非管理员在该路径下注入 owner 权限后交给 OpenClaw 处理，不 fallback 到 agent。
+- 非白名单裸发命令（如 `/allow`、`/mode`）以调用者自身身份交给 OpenClaw/agent 处理，允许 fallback 到 agent。
+- `/bncr` 前缀命令由 bncr 插件按非管理员权限处理，可用的子命令为：`whoami`、`status`、`new`、`reset`、`verbose`、`history-help`、`history-limit`、`history-force`、`download-media`。
+- `/bncr` 未知子命令（含 `/bncr stop`）→ 直接拒绝，不转发 agent。
+- 非管理员私聊执行 self-admin 命令（`history-*`、`download-media`）时，如传入 `sceneId` 参数，仅允许控制当前私聊会话，传入其他会话 ID 会被拒绝。
+
+#### 群聊
+
+- 管理员：`/bncr xxx` 由 bncr 插件解析处理（admin 权限），裸发命令放行给 OpenClaw/agent。
+- 非管理员：裸发 `/whoami` 由 bncr 拦截返回身份；其余裸发命令放行给 OpenClaw/agent。
+- 非管理员执行场景管理命令（`mode`、`history-help`、`history-limit`、`history-force`、`download-media`、`allow`、`deny`、`bind`、`revoke`、`list`）时，统一返回 `Admin permission required.`，不再附带用法提示。
+- 非管理员执行 `/bncr new`、`/bncr reset`、`/bncr verbose` 时仍按静默拒绝处理。
+
+#### 其他
+
 - `/bncr list pending` 与 `/bncr list scenes` 采用按私聊 / 群聊分组的摘要展示格式，便于现场排查 scene 状态。
 
 ### `/bncr help` 权限过滤
@@ -103,7 +125,7 @@ openclaw devices approve --latest
 
 - 管理员：展示全部命令
 - 私聊非管理员：展示当前可用命令，不展示管理类命令
-- 群聊非管理员：仅展示基础命令，不展示 `mode`、`history-*`、`download-media` 等管理命令
+- 群聊非管理员：仅展示 `/bncr whoami`、`/bncr status`，不展示 `new`、`reset`、`verbose`、`mode`、`history-*`、`download-media` 等命令
 
 示例：
 
@@ -148,6 +170,15 @@ openclaw devices approve --latest
   • /bncr status
   • /bncr new
   • /bncr reset
+  • /bncr verbose on|off|full
+
+📋 Conversation history
+  • /bncr history-help
+  • /bncr history-limit [<number>|clear] [<SceneId>]
+  • /bncr history-force on|off|clear [<SceneId>]
+
+🌐 Remote media
+  • /bncr download-media on|off|clear|default on|off [<SceneId>]
 ```
 
 群聊非管理员：

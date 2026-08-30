@@ -81,6 +81,7 @@ export function createNativeCommandTurnContext(args: {
   peer: ParsedInbound['peer'];
   resolvedRoute: { sessionKey: string; agentId: string; mainSessionKey?: string };
   sessionKey: string;
+  ownerAllowFrom?: string[];
   displayTo: string;
   originatingTo: string;
   senderIdForContext: string;
@@ -167,6 +168,9 @@ export function createNativeCommandTurnContext(args: {
       authorized: true,
       body: args.body,
     };
+    if (args.ownerAllowFrom?.length) {
+      ctx.OwnerAllowFrom = args.ownerAllowFrom;
+    }
     return ctx;
   });
 }

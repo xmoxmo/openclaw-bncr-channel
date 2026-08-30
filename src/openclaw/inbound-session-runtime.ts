@@ -1,6 +1,7 @@
 import { recordInboundSession as sdkRecordInboundSession } from 'openclaw/plugin-sdk/conversation-runtime';
 import { resolvePinnedMainDmOwnerFromAllowlist as sdkResolvePinnedMainDmOwnerFromAllowlist } from 'openclaw/plugin-sdk/security-runtime';
 import {
+  getSessionEntry as sdkGetSessionEntry,
   recordSessionMetaFromInbound as sdkRecordSessionMetaFromInbound,
   resolveStorePath as sdkResolveStorePath,
   updateSessionStoreEntry as sdkUpdateSessionStoreEntry,
@@ -14,6 +15,7 @@ type ResolveStorePathFn = (
 type RecordInboundSessionFn = typeof sdkRecordInboundSession;
 type RecordSessionMetaFromInboundFn = typeof sdkRecordSessionMetaFromInbound;
 type UpdateSessionStoreEntryFn = typeof sdkUpdateSessionStoreEntry;
+type GetSessionEntryFn = typeof sdkGetSessionEntry;
 type ReadSessionUpdatedAtFn = (params: { storePath: string; sessionKey: string }) => unknown;
 type ResolvePinnedMainDmOwnerFromAllowlistFn = typeof sdkResolvePinnedMainDmOwnerFromAllowlist;
 
@@ -22,6 +24,7 @@ type BncrInboundSessionRuntime = {
   recordInboundSession: RecordInboundSessionFn;
   recordSessionMetaFromInbound: RecordSessionMetaFromInboundFn;
   updateSessionStoreEntry: UpdateSessionStoreEntryFn;
+  getSessionEntry: GetSessionEntryFn;
   readSessionUpdatedAt?: ReadSessionUpdatedAtFn;
   resolvePinnedMainDmOwnerFromAllowlist: ResolvePinnedMainDmOwnerFromAllowlistFn;
 };
@@ -36,6 +39,7 @@ function resolveRuntime(): BncrInboundSessionRuntime {
       testRuntimeOverride?.recordSessionMetaFromInbound ?? sdkRecordSessionMetaFromInbound,
     updateSessionStoreEntry:
       testRuntimeOverride?.updateSessionStoreEntry ?? sdkUpdateSessionStoreEntry,
+    getSessionEntry: testRuntimeOverride?.getSessionEntry ?? sdkGetSessionEntry,
     readSessionUpdatedAt: testRuntimeOverride?.readSessionUpdatedAt,
     resolvePinnedMainDmOwnerFromAllowlist:
       testRuntimeOverride?.resolvePinnedMainDmOwnerFromAllowlist ??
@@ -79,6 +83,19 @@ export function readBncrSessionUpdatedAt(
     throw new Error('OpenClaw channel session readSessionUpdatedAt API is unavailable');
   }
   return readSessionUpdatedAt(params);
+}
+
+export async function readBncrSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const runtime = resolveRuntime();
+  try {
+    const entry = await runtime.getSessionEntry(params);
+    return entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function resolveBncrPinnedMainDmOwnerFromAllowlist(

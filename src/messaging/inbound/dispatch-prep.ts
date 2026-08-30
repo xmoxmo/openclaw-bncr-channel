@@ -20,7 +20,7 @@ import {
 } from '../../openclaw/routing-runtime.ts';
 import type { BncrInboundApi, BncrInboundConfig, BncrRememberSessionRoute } from './contracts.ts';
 import { INBOUND_MEDIA_URL_MAX_BYTES, isHttpMediaUrl } from './media-url-download.ts';
-import { parseBncrNativeCommand } from './native-command.ts';
+import { parseBncrNativeCommand, resolveBncrNativeCommandParseOptions } from './native-command.ts';
 import { loadInboundRemoteMedia } from './remote-media.ts';
 
 export type ParsedInbound = ReturnType<typeof import('./parse.ts')['parseBncrInboundParams']>;
@@ -460,9 +460,13 @@ export async function prepareBncrInboundDispatch(args: {
   const senderIdForContext = parsed.userId || parsed.clientId || resolution.canonicalTo;
   const senderDisplayName = parsed.userName || resolution.canonicalTo;
   const isBncrNativeCommand =
-    parseBncrNativeCommand(parsed.extracted.text, {
-      allowBareWhoami: parsed.isAdmin !== true,
-    }) !== null;
+    parseBncrNativeCommand(
+      parsed.extracted.text,
+      resolveBncrNativeCommandParseOptions({
+        isAdmin: parsed.isAdmin,
+        peerKind: parsed.peer.kind as 'direct' | 'group',
+      }),
+    ) !== null;
   const isOpenClawNativeCommand =
     !isBncrNativeCommand &&
     hasControlCommand(parsed.extracted.text, cfg as Parameters<typeof hasControlCommand>[1]);

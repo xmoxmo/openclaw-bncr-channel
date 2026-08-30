@@ -6,6 +6,7 @@ import {
   resolveBncrPinnedMainDmOwnerFromAllowlist,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
+import { mergeBncrOwnerAllowFromIntoConfig } from './command-owner.ts';
 import type {
   BncrEnqueueFromReply,
   BncrInboundApi,
@@ -18,7 +19,11 @@ import type {
   ParsedInbound,
 } from './dispatch-prep.ts';
 import { buildBncrInboundRecordUpdateLastRoute } from './last-route.ts';
-import { isBncrStopCommandText, parseBncrNativeCommand } from './native-command.ts';
+import {
+  isBncrStopCommandText,
+  parseBncrNativeCommand,
+  resolveBncrNativeCommandParseOptions,
+} from './native-command.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { runBncrReplyDispatchSerial } from './reply-dispatch-serial.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
@@ -28,32 +33,6 @@ import {
   wrapBncrInboundRecordSessionLabelCorrection,
 } from './session-label.ts';
 import { createBncrSessionMetaTaskBarrier } from './session-meta-task.ts';
-
-function mergeBncrCommandOwnerAllowFrom(args: {
-  cfg: BncrInboundConfig;
-  parsed: ParsedInbound;
-  isBncrNativeCommand: boolean;
-  senderIdForContext: string;
-}) {
-  const { cfg, parsed, isBncrNativeCommand, senderIdForContext } = args;
-  if (parsed.isAdmin !== true || isBncrNativeCommand) return cfg;
-  const senderId = String(senderIdForContext || '').trim();
-  if (!senderId) return cfg;
-
-  const currentCommands = (cfg.commands || {}) as { ownerAllowFrom?: string[] };
-  const currentOwnerAllowFrom = Array.isArray(currentCommands.ownerAllowFrom)
-    ? currentCommands.ownerAllowFrom
-    : [];
-  if (currentOwnerAllowFrom.includes(senderId)) return cfg;
-
-  return {
-    ...cfg,
-    commands: {
-      ...currentCommands,
-      ownerAllowFrom: [...currentOwnerAllowFrom, senderId],
-    },
-  } satisfies BncrInboundConfig;
-}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -180,15 +159,17 @@ export async function runBncrInboundReplyDispatch(args: {
     pinnedMainDmOwner,
   });
   const isBncrNativeCommand =
-    parseBncrNativeCommand(rawBody, {
-      allowBareWhoami: parsed.isAdmin !== true,
-    }) !== null;
-  const commandDispatchCfg = mergeBncrCommandOwnerAllowFrom({
-    cfg,
-    parsed,
-    isBncrNativeCommand,
-    senderIdForContext,
-  });
+    parseBncrNativeCommand(
+      rawBody,
+      resolveBncrNativeCommandParseOptions({
+        isAdmin: parsed.isAdmin,
+        peerKind: parsed.peer.kind as 'direct' | 'group',
+      }),
+    ) !== null;
+  const commandDispatchCfg =
+    parsed.isAdmin === true && !isBncrNativeCommand
+      ? mergeBncrOwnerAllowFromIntoConfig({ cfg, senderIdForContext })
+      : cfg;
 
   if (!shouldDispatch) {
     await wrapBncrInboundRecordSessionLabelCorrection({

@@ -1,7 +1,10 @@
 import { hasControlCommand } from 'openclaw/plugin-sdk/command-auth';
 import { resolveAccount } from '../core/accounts.ts';
 import { checkBncrMessageGate } from '../messaging/inbound/gate.ts';
-import { parseBncrNativeCommand } from '../messaging/inbound/native-command.ts';
+import {
+  parseBncrNativeCommand,
+  resolveBncrNativeCommandParseOptions,
+} from '../messaging/inbound/native-command.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import type { OpenClawResolvedAgentRoute } from '../openclaw/routing-runtime.ts';
 import type { buildInboundResponsePayload } from './channel-inbound-helpers.ts';
@@ -21,9 +24,13 @@ function resolveDispatchBy(args: {
   if (!admission.allowed) return 'denied';
 
   const isBncrNativeCommand =
-    parseBncrNativeCommand(parsed.extracted.text, {
-      allowBareWhoami: parsed.isAdmin !== true,
-    }) !== null;
+    parseBncrNativeCommand(
+      parsed.extracted.text,
+      resolveBncrNativeCommandParseOptions({
+        isAdmin: parsed.isAdmin,
+        peerKind: parsed.peer.kind as 'direct' | 'group',
+      }),
+    ) !== null;
   const isAdminOpenClawNativeCommand =
     parsed.isAdmin === true &&
     !isBncrNativeCommand &&
@@ -49,9 +56,13 @@ function shouldDispatchForScene(args: {
   if (!admission.allowed) return false;
 
   const isBncrNativeCommand =
-    parseBncrNativeCommand(parsed.extracted.text, {
-      allowBareWhoami: parsed.isAdmin !== true,
-    }) !== null;
+    parseBncrNativeCommand(
+      parsed.extracted.text,
+      resolveBncrNativeCommandParseOptions({
+        isAdmin: parsed.isAdmin,
+        peerKind: parsed.peer.kind as 'direct' | 'group',
+      }),
+    ) !== null;
   const isAdminOpenClawNativeCommand =
     parsed.isAdmin === true &&
     !isBncrNativeCommand &&

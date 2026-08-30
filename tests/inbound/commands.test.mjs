@@ -4,6 +4,7 @@ import test from 'node:test';
 import { parseBncrNativeCommand } from '../../src/messaging/inbound/commands.ts';
 import {
   isBncrStopCommandText,
+  isBncrWhitelistBareCommandText,
   parseBncrUnsupportedDirectCommand,
   resolveBncrNativeHelpCommand,
   resolveBncrNativeSessionResetCommand,
@@ -135,6 +136,19 @@ test('isBncrStopCommandText only recognizes exact /stop', () => {
   assert.equal(isBncrStopCommandText('/bncr stop'), false);
 });
 
+test('isBncrWhitelistBareCommandText does not strip @bot suffixes', () => {
+  assert.equal(isBncrWhitelistBareCommandText('/whoami'), 'whoami');
+  assert.equal(isBncrWhitelistBareCommandText('/whoami@AixmoClaw_bot'), null);
+  assert.equal(isBncrWhitelistBareCommandText('/status@bot'), null);
+  assert.equal(isBncrWhitelistBareCommandText('/model gpt-5'), 'model');
+  assert.equal(isBncrWhitelistBareCommandText('/model@bot gpt-5'), null);
+  assert.equal(isBncrWhitelistBareCommandText('/new'), 'new');
+  assert.equal(isBncrWhitelistBareCommandText('/new@bot'), null);
+  assert.equal(isBncrWhitelistBareCommandText('/stop'), 'stop');
+  assert.equal(isBncrWhitelistBareCommandText('/stop@bot'), null);
+  assert.equal(isBncrWhitelistBareCommandText('not a command'), null);
+});
+
 test('resolveBncrNativeHelpCommand returns full help for admin callers', () => {
   const helpText = resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr help'), {
     isAdmin: true,
@@ -168,7 +182,7 @@ test('resolveBncrNativeHelpCommand returns full management help for direct admin
   assert.match(helpText, /📋 Conversation history/);
 });
 
-test('resolveBncrNativeHelpCommand returns direct non-admin help with only available builtins', () => {
+test('resolveBncrNativeHelpCommand returns direct non-admin help with self-service commands', () => {
   const helpText = resolveBncrNativeHelpCommand(parseBncrNativeCommand('/bncr help'), {
     isAdmin: false,
     peerKind: 'direct',
@@ -178,11 +192,12 @@ test('resolveBncrNativeHelpCommand returns direct non-admin help with only avail
   assert.match(helpText, /\/bncr status/);
   assert.match(helpText, /\/bncr new/);
   assert.match(helpText, /\/bncr reset/);
-  assert.doesNotMatch(helpText, /\/bncr verbose on\|off\|full/);
+  assert.match(helpText, /\/bncr verbose on\|off\|full/);
+  assert.match(helpText, /📋 Conversation history/);
+  assert.match(helpText, /\/bncr history-help/);
+  assert.match(helpText, /\/bncr download-media/);
   assert.doesNotMatch(helpText, /\/bncr allow \[<SceneId>\]/);
   assert.doesNotMatch(helpText, /\/bncr mode /);
-  assert.doesNotMatch(helpText, /📋 Conversation history/);
-  assert.doesNotMatch(helpText, /🌐 Remote media/);
   assert.doesNotMatch(helpText, /\/status/);
   assert.doesNotMatch(helpText, /\/whoami/);
 });
@@ -274,7 +289,7 @@ test('resolveBncrNativeSessionResetCommand returns direct-session reset intents'
     {
       handled: true,
       reason: 'new',
-      text: 'Started a new session for this private chat.',
+      text: '✅ New session started.',
     },
   );
   assert.deepEqual(
@@ -285,7 +300,7 @@ test('resolveBncrNativeSessionResetCommand returns direct-session reset intents'
     {
       handled: true,
       reason: 'reset',
-      text: 'Reset the current session for this private chat.',
+      text: '✅ Session reset.',
     },
   );
   assert.equal(
@@ -306,7 +321,7 @@ test('resolveBncrNativeSessionResetCommand returns group-session reset intents',
     {
       handled: true,
       reason: 'new',
-      text: 'Started a new session for this group chat.',
+      text: '✅ New session started.',
     },
   );
   assert.deepEqual(
@@ -317,7 +332,7 @@ test('resolveBncrNativeSessionResetCommand returns group-session reset intents',
     {
       handled: true,
       reason: 'reset',
-      text: 'Reset the current session for this group chat.',
+      text: '✅ Session reset.',
     },
   );
 });
@@ -340,18 +355,41 @@ test('resolveBncrNativeVerboseCommand resolves supported verbose levels', () => 
   });
 });
 
-test('resolveBncrNativeVerboseCommand treats status and empty verbose as unchanged', () => {
+test('resolveBncrNativeVerboseCommand reports current level for status and empty verbose', () => {
+  // When no currentLevel is provided, it should show 'default'.
   assert.deepEqual(
     resolveBncrNativeVerboseCommand(parseBncrNativeCommand('/bncr verbose status')),
     {
       handled: true,
-      text: 'Current verbose level is unchanged.',
+      text: 'Current verbose level: default',
     },
   );
   assert.deepEqual(resolveBncrNativeVerboseCommand(parseBncrNativeCommand('/bncr verbose')), {
     handled: true,
-    text: 'Current verbose level is unchanged.',
+    text: 'Current verbose level: default',
   });
+  // When a current level is provided, it should display that level.
+  assert.deepEqual(
+    resolveBncrNativeVerboseCommand(parseBncrNativeCommand('/bncr verbose status'), 'on'),
+    {
+      handled: true,
+      text: 'Current verbose level: on',
+    },
+  );
+  assert.deepEqual(
+    resolveBncrNativeVerboseCommand(parseBncrNativeCommand('/bncr verbose'), 'off'),
+    {
+      handled: true,
+      text: 'Current verbose level: off',
+    },
+  );
+  assert.deepEqual(
+    resolveBncrNativeVerboseCommand(parseBncrNativeCommand('/bncr verbose'), 'full'),
+    {
+      handled: true,
+      text: 'Current verbose level: full',
+    },
+  );
 });
 
 test('resolveBncrNativeVerboseCommand handles unknown verbose levels and non-verbose commands', () => {

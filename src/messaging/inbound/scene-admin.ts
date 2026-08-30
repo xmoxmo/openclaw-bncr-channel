@@ -435,11 +435,39 @@ export function executeSceneAdminCommand(args: {
   defaultAdminAgentId: string;
   defaultPublicAgentId: string;
   now: () => number;
+  /**
+   * When true, non-admin callers in direct chat are allowed to execute
+   * self-admin commands (history-*, download-media) scoped to
+   * their own session only.  The flag is set by the caller after an
+   * explicit allow-list check – it must NOT be granted unconditionally
+   * for direct chat.
+   */
+  allowNonAdminSelfAdmin?: boolean;
 }): { ok: true; text: string } | { ok: false; text: string } {
-  const { parsed, command, sceneRegistry, defaultAdminAgentId, defaultPublicAgentId, now } = args;
+  const {
+    parsed,
+    command,
+    sceneRegistry,
+    defaultAdminAgentId,
+    defaultPublicAgentId,
+    now,
+    allowNonAdminSelfAdmin,
+  } = args;
 
-  if (!parsed.isAdmin) {
+  // Admin always passes; non-admin only passes when the caller explicitly
+  // opted in via allowNonAdminSelfAdmin (self-admin commands in direct chat).
+  if (!parsed.isAdmin && !allowNonAdminSelfAdmin) {
     return { ok: false, text: 'Admin permission required.' };
+  }
+
+  // Non-admin self-admin: enforce that sceneId targets only the caller's own session.
+  if (allowNonAdminSelfAdmin && !parsed.isAdmin) {
+    const currentSceneKey = resolveCurrentSceneKey(parsed);
+    const cmdSceneKey =
+      'sceneKey' in command ? (command as { sceneKey?: string }).sceneKey : undefined;
+    if (cmdSceneKey && currentSceneKey && cmdSceneKey !== currentSceneKey) {
+      return { ok: false, text: 'You can only manage your own private chat session.' };
+    }
   }
 
   if (command.kind === 'history-help') {
