@@ -57,9 +57,9 @@ export type NativeSessionResetCommand = {
  * the same code path as an admin caller. This whitelist is shared
  * across permission checks so admin and non-admin logic stay in sync.
  *
- * `stop` stays in this whitelist for semantic consistency, but it is
- * routed through the unified stop fast path in dispatch.ts rather than
- * the native command handler, so it is never processed here.
+ * `stop` is intentionally absent: it is handled before this set by the
+ * unified stop fast path in dispatch.ts, and `isBncrStopCommandText` only
+ * accepts the exact `/stop` form.
  */
 export const BNCR_SELF_SERVICE_COMMANDS: ReadonlySet<string> = new Set([
   'whoami',
@@ -68,7 +68,6 @@ export const BNCR_SELF_SERVICE_COMMANDS: ReadonlySet<string> = new Set([
   'model',
   'new',
   'reset',
-  'stop',
 ]);
 
 /**
@@ -136,13 +135,7 @@ export const BNCR_NATIVE_COMMANDS = new Set([
   'download-media',
 ]);
 
-export const BNCR_DIRECT_ALLOWED_BARE_COMMANDS = new Set([
-  'whoami',
-  'status',
-  'new',
-  'reset',
-  'stop',
-]);
+export const BNCR_DIRECT_ALLOWED_BARE_COMMANDS = new Set(['whoami', 'status', 'new', 'reset']);
 
 export const BNCR_DIRECT_ALLOWED_SUBCOMMANDS = new Set([
   'help',
@@ -340,6 +333,9 @@ export function resolveBncrNativeSessionResetCommand(args: {
   peerKind: 'direct' | 'group';
 }): NativeSessionResetCommand | null {
   if (args.command.command !== 'new' && args.command.command !== 'reset') return null;
+  // new/reset are exact session-reset commands. Extra arguments are not
+  // valid and must not silently reset or create a session.
+  if (String(args.command.argsText || '').trim()) return null;
   const reason = args.command.command === 'new' ? 'new' : 'reset';
   return {
     handled: true,

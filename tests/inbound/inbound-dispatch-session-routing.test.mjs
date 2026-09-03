@@ -433,7 +433,7 @@ test('dispatchBncrInbound replays acknowledged outbound messages into direct con
   assert.equal(current?.role, 'user');
   assert.equal(current?.content, 'hello after my message');
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
 });
 
 test('dispatchBncrInbound keeps acknowledged agent media in context without lifting it into a later text turn', async () => {
@@ -637,7 +637,7 @@ test('dispatchBncrInbound replays acknowledged outbound messages into group cont
   assert.equal(assistant?.role, 'assistant');
   assert.equal(assistant?.content, 'my previous group outbound message');
   assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
 });
 
 test('dispatchBncrInbound replays all cached outbound messages and clears cache', async () => {
@@ -713,7 +713,7 @@ test('dispatchBncrInbound replays all cached outbound messages and clears cache'
     assert.equal(assistant?.content, `outbound message ${index}`);
   }
   assert.equal(outboundReplayCache.size, 0);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
 });
 
 test('dispatchBncrInbound interleaves private user history and bot replies in conversation_context', async () => {
@@ -828,7 +828,7 @@ test('dispatchBncrInbound interleaves private user history and bot replies in co
   );
   assert.deepEqual(ctx.extra?.BncrStructuredContextFacts?.participants, null);
   assert.equal(ctx.extra?.BncrStructuredContextFacts?.isGroupChat, false);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
 });
 
@@ -1222,7 +1222,7 @@ test('admin mode drops non-admin inbound but still accumulates bot replies for o
     ),
     ['admin-mode-bot-1', 'admin-mode-bot-2', 'admin-mode-bot-3'],
   );
-  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
 });
 
@@ -1343,7 +1343,7 @@ test('dispatchBncrInbound replays pending group text and image history on later 
     calls.builtContexts.at(-1)?.UntrustedStructuredContext?.[0]?.type,
     'bncr.inbound_context',
   );
-  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
 });
 
 test('dispatchBncrInbound retains pending group images in context without lifting them into a later text turn', async () => {
@@ -1586,9 +1586,9 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
 
   assert.equal(calls.turnRuns.length, 1);
   assert.equal(enqueueCalls.length, 0);
-  assert.equal(conversationHistories.get('tgBot:-1001')?.length, 2);
+  assert.equal(conversationHistories.get('Primary:tgBot:-1001')?.length, 2);
   assert.deepEqual(
-    conversationHistories.get('tgBot:-1001')?.map((entry) => entry.body),
+    conversationHistories.get('Primary:tgBot:-1001')?.map((entry) => entry.body),
     ['测试4', '测试5'],
   );
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
@@ -1648,7 +1648,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
     ),
     false,
   );
-  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
 
   const carry = ['测试6', '测试7', '测试8'];
   for (const [index, text] of carry.entries()) {
@@ -1688,7 +1688,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
 
   assert.equal(calls.turnRuns.length, 3);
   assert.equal(enqueueCalls.length, 0);
-  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
   assert.deepEqual(
     calls.turnRuns[2].ctxPayload.StructuredContextFacts.conversationContext.map(
       (entry) => entry.content,
@@ -1805,7 +1805,7 @@ test('dispatchBncrInbound honors scene history limit from the first accumulated 
     ),
     ['首1', '首2', '首3'],
   );
-  assert.deepEqual(conversationHistories.get('tgBot:-1002'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1002'), []);
 });
 
 test('dispatchBncrInbound flushes pending direct history at the direct scene history limit', async () => {
@@ -1868,7 +1868,7 @@ test('dispatchBncrInbound flushes pending direct history at the direct scene his
     ['私聊1', '私聊2', '私聊3'],
   );
   assert.deepEqual(
-    conversationHistories.get('tgBot:10001')?.map((entry) => entry.body),
+    conversationHistories.get('Primary:tgBot:10001')?.map((entry) => entry.body),
     ['私聊4', '私聊5'],
   );
 });
@@ -1977,7 +1977,7 @@ test('dispatchBncrInbound force-flushes a dispatched direct message when accumul
     ),
     ['direct-dispatched-limit-1', 'direct-dispatched-limit-bot-1', 'direct-dispatched-limit-2'],
   );
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
 });
 
 test('raw outbound replay recording does not dispatch history flush by itself', async () => {
@@ -2001,7 +2001,7 @@ test('raw outbound replay recording does not dispatch history flush by itself', 
   }
 
   assert.equal(calls.turnRuns.length, 0);
-  assert.equal(conversationHistories.get('tgBot:10001')?.length, 3);
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.length, 3);
   assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.length, 3);
   assert.equal(lastResult.historyOverflow, true);
 });
@@ -2064,7 +2064,7 @@ test('dispatch reconciles consumed memory before building the snapshot payload',
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map([
     [
-      'tgBot:10001',
+      'Primary:tgBot:10001',
       [
         {
           sender: 'alice',
@@ -2132,7 +2132,7 @@ test('dispatch reconciles consumed memory before building the snapshot payload',
     scheduleSave() {},
   });
 
-  assert.deepEqual(reconcileCalls, ['tgBot:10001']);
+  assert.deepEqual(reconcileCalls, ['Primary:tgBot:10001']);
   assert.equal(calls.turnRuns.length, 1);
   const messageIds = calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
     (entry) => entry.messageId,
@@ -2193,7 +2193,7 @@ test('dispatch does not fall back to direct upload when shard activation fails',
   assert.equal(calls.turnRuns.length, 0);
   // The shard owns the snapshot in SQLite, so the local window is disconnected
   // even if marking the shard as processing fails before direct upload.
-  assert.equal(conversationHistories.get('tgBot:10001')?.length, 0);
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.length, 0);
   resetConversationHistorySerialForTest();
 });
 
@@ -2245,7 +2245,7 @@ test('dispatch aborts direct upload when shard activation ownership is lost', as
   assert.equal(calls.turnRuns.length, 0);
   // SQLite owns the snapshot and the real worker will retain the claim, so the
   // local window is intentionally disconnected before the direct attempt stops.
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   resetConversationHistorySerialForTest();
 });
 
@@ -2297,7 +2297,7 @@ test('dispatch reuses an existing shard delivery id and activates its claim', as
 
   assert.equal(calls.turnRuns.length, 1);
   assert.equal(calls.ingested[0].id, 'bncr-history-shard:55');
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.deepEqual(queueCalls, ['create', 'processing', 'completed', 'complete']);
   resetConversationHistorySerialForTest();
 });
@@ -2355,7 +2355,7 @@ test('dispatch aborts direct upload when an existing shard claim is owned elsewh
   );
 
   assert.equal(calls.turnRuns.length, 0);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.deepEqual(queueCalls, ['create', 'processing']);
   resetConversationHistorySerialForTest();
 });
@@ -2408,7 +2408,7 @@ test('dispatch clears local history even when shard completion marking fails', a
   });
 
   assert.equal(calls.turnRuns.length, 1);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
   assert.deepEqual(completedShardIds, [97]);
   resetConversationHistorySerialForTest();
@@ -2475,7 +2475,7 @@ test('dispatchBncrOutboundHistoryFlush force-flushes bot-only history when an ou
     ),
     ['outbound-flush-1', 'outbound-flush-2', 'outbound-flush-3'],
   );
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
 });
 
@@ -2587,7 +2587,7 @@ test('dispatchBncrOutboundHistoryFlush keeps the triggering bot reply on out-of-
     ),
     ['out-of-order-bot-3', 'out-of-order-bot-2'],
   );
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
 });
 
@@ -2628,7 +2628,7 @@ test('dispatchBncrOutboundHistoryFlush serializes snapshots and skips redundant 
     });
   }
 
-  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const lock = runConversationHistorySerial('Primary:tgBot:10001', () => gate.promise);
   const first = dispatchBncrOutboundHistoryFlush({
     api,
     channelId: 'bncr',
@@ -2670,7 +2670,7 @@ test('dispatchBncrOutboundHistoryFlush serializes snapshots and skips redundant 
   await Promise.all([lock, first, second]);
 
   assert.equal(calls.turnRuns.length, 1);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
   resetConversationHistorySerialForTest();
 });
@@ -2715,7 +2715,7 @@ test('dispatchBncrOutboundHistoryFlush skips a stale snapshot when history chang
   }
   assert.equal(flushVersion, 3);
 
-  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const lock = runConversationHistorySerial('Primary:tgBot:10001', () => gate.promise);
   const staleFlush = dispatchBncrOutboundHistoryFlush({
     api,
     channelId: 'bncr',
@@ -2753,7 +2753,7 @@ test('dispatchBncrOutboundHistoryFlush skips a stale snapshot when history chang
   assert.equal(calls.turnRuns.length, 0);
   assert.equal(
     conversationHistories
-      .get('tgBot:10001')
+      .get('Primary:tgBot:10001')
       ?.some((entry) => entry.messageId === 'stale-flush-bot-4'),
     true,
   );
@@ -2774,7 +2774,7 @@ test('stop command bypasses conversation history serial and does not accumulate'
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
   const outboundReplayCache = new Map();
-  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const lock = runConversationHistorySerial('Primary:tgBot:10001', () => gate.promise);
 
   const stop = dispatchBncrInbound({
     api,
@@ -2808,7 +2808,7 @@ test('stop command bypasses conversation history serial and does not accumulate'
   ]);
   assert.equal(outcome, 'bypassed');
   assert.equal(calls.turnRuns.length, 1);
-  assert.equal(conversationHistories.has('tgBot:10001'), false);
+  assert.equal(conversationHistories.has('Primary:tgBot:10001'), false);
   assert.equal(outboundReplayCache.size, 0);
 
   gate.resolve();
@@ -2940,7 +2940,7 @@ test('dispatch outbound flush queued during an upload is not invalidated by that
 
   assert.equal(calls.turnRuns.length, 2);
   assert.ok(calls.turnRuns.some((turn) => turn.ctxPayload.SenderId === 'bncr-history-system'));
-  assert.deepEqual(conversationHistories.get('tgBot:10001') || [], []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001') || [], []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
   resetConversationHistorySerialForTest();
   resetBncrReplyDispatchSerialForTest();
@@ -2951,7 +2951,7 @@ test('dispatchBncrInbound waits for the conversation history snapshot lock', asy
   const gate = createDeferred();
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
-  const lock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const lock = runConversationHistorySerial('Primary:tgBot:10001', () => gate.promise);
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -2994,19 +2994,19 @@ test('dispatchBncrInbound waits for the conversation history snapshot lock', asy
     ),
     ['history-serial-inbound-1'],
   );
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   resetConversationHistorySerialForTest();
 });
 
 test('clearConversationHistorySerialLocks keeps a stale started chain as a barrier', async () => {
   resetConversationHistorySerialForTest();
   const gate = createDeferred();
-  const staleLock = runConversationHistorySerial('tgBot:10001', () => gate.promise);
+  const staleLock = runConversationHistorySerial('Primary:tgBot:10001', () => gate.promise);
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(clearConversationHistorySerialLocks(), 1);
   let ran = false;
-  const next = runConversationHistorySerial('tgBot:10001', async () => {
+  const next = runConversationHistorySerial('Primary:tgBot:10001', async () => {
     ran = true;
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -3251,7 +3251,7 @@ test('dispatchBncrInbound clears legacy outbound replay on silent overflow to av
     ['silent-overflow-user-1', 'silent-overflow-bot-1', 'silent-overflow-user-2'],
   );
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
 
   await dispatchDirect('silent-overflow-user-3', 'third', true);
 
@@ -3262,7 +3262,7 @@ test('dispatchBncrInbound clears legacy outbound replay on silent overflow to av
     ['silent-overflow-user-3'],
   );
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
 });
 
 test('dispatchBncrInbound clears group legacy outbound replay on silent overflow to avoid duplicate bot replies', async () => {
@@ -3339,7 +3339,7 @@ test('dispatchBncrInbound clears group legacy outbound replay on silent overflow
     ['group-silent-overflow-user-1', 'group-silent-overflow-bot-1', 'group-silent-overflow-user-2'],
   );
   assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
 
   await dispatchGroup('group-silent-overflow-user-3', 'third', true);
 
@@ -3350,7 +3350,7 @@ test('dispatchBncrInbound clears group legacy outbound replay on silent overflow
     ['group-silent-overflow-user-3'],
   );
   assert.equal(outboundReplayCache.has('Primary:tgBot:-1001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:-1001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
 });
 
 test('dispatchBncrInbound truncates merged assistant history to the limit and keeps the current message', async () => {
@@ -3426,7 +3426,7 @@ test('dispatchBncrInbound truncates merged assistant history to the limit and ke
     ['merged-bot-7', 'merged-bot-8', 'merged-current-1'],
   );
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
 });
 
 test('dispatchBncrInbound keeps the current synthetic message when history overflows without a platform id', async () => {
@@ -3505,7 +3505,7 @@ test('dispatchBncrInbound keeps the current synthetic message when history overf
   );
   assert.equal(calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.length, 3);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
 });
 
 test('dispatch cache cleanup after upload preserves bot replies written during the turn', async () => {
@@ -3576,7 +3576,7 @@ test('dispatch cache cleanup after upload preserves bot replies written during t
 
   assert.equal(calls.turnRuns.length, 1);
   assert.deepEqual(
-    conversationHistories.get('tgBot:10001')?.map((entry) => entry.messageId),
+    conversationHistories.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
     ['new-during-upload'],
   );
   assert.deepEqual(
@@ -3686,7 +3686,7 @@ test('dispatch cache cleanup preserves bot replies written while context is bein
 
   assert.equal(calls.turnRuns.length, 1);
   assert.deepEqual(
-    conversationHistories.get('tgBot:10001')?.map((entry) => entry.messageId),
+    conversationHistories.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
     ['during-context-bot'],
   );
   assert.deepEqual(

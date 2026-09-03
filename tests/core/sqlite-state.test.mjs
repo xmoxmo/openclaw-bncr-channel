@@ -87,7 +87,7 @@ function buildHistoryState() {
   return {
     historyBuckets: [
       {
-        key: 'tgBot:10001',
+        key: 'Primary:tgBot:10001',
         entries: [
           {
             sender: 'alice',
@@ -261,6 +261,121 @@ test('sqlite history state round trips json buckets', async () => {
   }
 });
 
+test('sqlite history import normalizes legacy scene-only bucket keys', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-legacy-key-'));
+  try {
+    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
+    db.importHistoryState(
+      [
+        {
+          key: 'tgBot:10001',
+          entries: [{ sender: 'alice', body: 'legacy history', messageId: 'legacy-history-1' }],
+        },
+      ],
+      [
+        {
+          key: 'tgBot:10001',
+          entries: [
+            {
+              sender: 'OpenClaw',
+              body: 'legacy replay',
+              messageId: 'legacy-replay-1',
+              accountId: 'Primary',
+              route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+            },
+          ],
+        },
+      ],
+    );
+
+    const restored = db.loadHistoryState();
+    assert.deepEqual(
+      restored.historyBuckets.map((bucket) => bucket.key),
+      ['Primary:tgBot:10001'],
+    );
+    assert.deepEqual(
+      restored.replayBuckets.map((bucket) => bucket.key),
+      ['Primary:tgBot:10001'],
+    );
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('sqlite history import canonicalizes default account aliases', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-default-key-'));
+  try {
+    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
+    db.importHistoryState(
+      [
+        {
+          key: 'default:tgBot:10001',
+          entries: [{ sender: 'alice', body: 'default history', messageId: 'default-history-1' }],
+        },
+      ],
+      [],
+    );
+
+    assert.deepEqual(
+      db.loadHistoryState().historyBuckets.map((bucket) => bucket.key),
+      ['Primary:tgBot:10001'],
+    );
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('sqlite history import separates account-scoped entries in a legacy replay bucket', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-legacy-mixed-'));
+  try {
+    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
+    db.importHistoryState(
+      [],
+      [
+        {
+          key: 'tgBot:10001',
+          entries: [
+            {
+              sender: 'PrimaryBot',
+              body: 'primary replay',
+              messageId: 'primary-legacy-replay-1',
+              accountId: 'Primary',
+              route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+            },
+            {
+              sender: 'SecondaryBot',
+              body: 'secondary replay',
+              messageId: 'secondary-legacy-replay-1',
+              accountId: 'Secondary',
+              route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+            },
+          ],
+        },
+      ],
+    );
+
+    const restored = db.loadHistoryState();
+    assert.deepEqual(
+      restored.replayBuckets.map((bucket) => [
+        bucket.key,
+        bucket.entries.map((entry) => entry.messageId),
+      ]),
+      [
+        ['Primary:tgBot:10001', ['primary-legacy-replay-1']],
+        ['Secondary:tgBot:10001', ['secondary-legacy-replay-1']],
+      ],
+    );
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('sqlite outbound state round trips queued and dead entries', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-outbound-'));
   try {
@@ -316,7 +431,7 @@ test('history shard moves pending rows and complete removes them', async () => {
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
 
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"snapshot"}',
       messageIds: ['h1', 'h2'],
@@ -332,7 +447,7 @@ test('history shard moves pending rows and complete removes them', async () => {
     db.saveHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [{ sender: 'alice', senderId: '10001', body: 'after shard', messageId: 'h3' }],
         },
       ],
@@ -341,7 +456,7 @@ test('history shard moves pending rows and complete removes them', async () => {
     assert.deepEqual(db.loadHistoryState(), {
       historyBuckets: [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [{ sender: 'alice', senderId: '10001', body: 'after shard', messageId: 'h3' }],
         },
       ],
@@ -366,7 +481,7 @@ test('history shard claims only the snapshot message ids', async () => {
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
 
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"exact-snapshot"}',
       messageIds: ['h1'],
@@ -408,7 +523,7 @@ test('queued history shards stay queued after restart and are replayed by the wo
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"unfinished"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -444,7 +559,7 @@ test('expired history shard leases are recovered without counting recovery as up
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"lease"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -473,7 +588,7 @@ test('history shard claims only the replay buffer that was uploaded', async () =
     db.importHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -519,7 +634,7 @@ test('history shard claims only the replay buffer that was uploaded', async () =
     );
 
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"primary-only"}',
       messageIds: ['shared-history', 'primary-reply'],
@@ -551,7 +666,7 @@ test('startup recovery returns unexpired in-flight shards to the worker queue', 
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"unexpired"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -579,7 +694,7 @@ test('failed history shards stay queued for worker retry', async () => {
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"failed"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -614,13 +729,13 @@ test('history shard worker claims due queued and failed shards with backoff', as
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
 
     const { shardId: queuedId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"queued"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
     });
     const { shardId: failedId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"failed"}',
       messageIds: ['h1'],
       bufferKeys: [],
@@ -657,7 +772,7 @@ test('history shard claim result carries the assigned owner', async () => {
     db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
     db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"owned"}',
       messageIds: ['h1'],
       bufferKeys: [],
@@ -690,7 +805,7 @@ test('expired shard lease recovery is isolated to the active claim owner', async
     db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"expired-owner-isolated"}',
       messageIds: ['h1'],
       bufferKeys: [],
@@ -720,13 +835,13 @@ test('history shard creation is idempotent for the same active message snapshot'
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
 
     const first = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"snapshot-a"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
     });
     const second = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"snapshot-b"}',
       messageIds: ['h2', 'h1'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -753,7 +868,7 @@ test('startup recovery only resets shards owned by the current bridge or legacy 
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
 
     const { shardId: currentShardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"current"}',
       messageIds: ['h1'],
       bufferKeys: [],
@@ -761,7 +876,7 @@ test('startup recovery only resets shards owned by the current bridge or legacy 
     db.markHistoryShardProcessing(currentShardId, 'bridge-a');
 
     const { shardId: otherShardId } = db.createHistoryShard({
-      historyKey: 'tgBot:20002',
+      historyKey: 'Primary:tgBot:20002',
       payloadJson: '{"context":"other"}',
       messageIds: ['h1'],
       bufferKeys: [],
@@ -792,14 +907,14 @@ test('loadHistoryState recovery respects the active bridge owner', async () => {
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
 
     const current = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"owner-a"}',
       messageIds: ['h1'],
       bufferKeys: [],
     });
     db.markHistoryShardProcessing(current.shardId, 'bridge-a');
     const other = db.createHistoryShard({
-      historyKey: 'tgBot:20002',
+      historyKey: 'Primary:tgBot:20002',
       payloadJson: '{"context":"owner-b"}',
       messageIds: ['h1'],
       bufferKeys: [],
@@ -828,24 +943,55 @@ test('startup recovery skips history keys with an active serial task', async () 
     db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
     const { shardId: activeShardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"active"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: [],
     });
     db.markHistoryShardProcessing(activeShardId);
     const { shardId: otherShardId } = db.createHistoryShard({
-      historyKey: 'tgBot:99999',
+      historyKey: 'Primary:tgBot:99999',
       payloadJson: '{"context":"other"}',
       messageIds: [],
       bufferKeys: [],
     });
     db.markHistoryShardProcessing(otherShardId);
 
-    assert.equal(db.recoverInFlightHistoryShards(['tgBot:10001']), 1);
+    assert.equal(db.recoverInFlightHistoryShards(['Primary:tgBot:10001']), 1);
     const rows = new Map(db.listHistoryShards().map((item) => [item.id, item]));
     assert.equal(rows.get(activeShardId).status, 'processing');
     assert.equal(rows.get(otherShardId).status, 'queued');
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('startup recovery skip list matches both new and legacy history keys', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-shard-skip-legacy-'));
+  try {
+    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
+    db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
+    const current = db.createHistoryShard({
+      historyKey: 'Primary:tgBot:10001',
+      payloadJson: '{"context":"current-key"}',
+      messageIds: ['h1'],
+      bufferKeys: [],
+    });
+    db.markHistoryShardProcessing(current.shardId);
+    const legacy = db.createHistoryShard({
+      historyKey: 'tgBot:10001',
+      payloadJson: '{"context":"legacy-key"}',
+      messageIds: ['h2'],
+      bufferKeys: [],
+    });
+    db.markHistoryShardProcessing(legacy.shardId);
+
+    assert.equal(db.recoverInFlightHistoryShards(['Primary:tgBot:10001']), 0);
+    const rows = new Map(db.listHistoryShards().map((item) => [item.id, item]));
+    assert.equal(rows.get(current.shardId).status, 'processing');
+    assert.equal(rows.get(legacy.shardId).status, 'processing');
     db.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -862,7 +1008,7 @@ test('expired shard leases stay processing for active history keys until reload 
     db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"active-lease"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -870,9 +1016,9 @@ test('expired shard leases stay processing for active history keys until reload 
     db.markHistoryShardProcessing(shardId);
 
     currentTime += 6 * 60 * 1000;
-    assert.equal(db.loadHistoryState(['tgBot:10001']).historyBuckets.length, 0);
+    assert.equal(db.loadHistoryState(['Primary:tgBot:10001']).historyBuckets.length, 0);
     assert.equal(db.listHistoryShards()[0].status, 'processing');
-    assert.equal(db.claimNextHistoryShard(['tgBot:10001']), null);
+    assert.equal(db.claimNextHistoryShard(['Primary:tgBot:10001']), null);
     assert.equal(db.claimNextHistoryShard()?.id, shardId);
     assert.equal(db.listHistoryShards()[0].status, 'claimed');
     assert.equal(db.listHistoryShards()[0].attempts, 0);
@@ -892,7 +1038,7 @@ test('history shard lease renewal extends an active processing claim', async () 
     db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"renew"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: [],
@@ -917,7 +1063,7 @@ test('terminal failed history shards are restored to the active window on load',
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
     assert.equal(db.getHistoryStateRevision(), 1);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"terminal"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -987,7 +1133,7 @@ test('active history replacement dedupes repeated message ids safely', async () 
     db.importHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             { sender: 'alice', senderId: '10001', body: 'hello', messageId: 'h1' },
             { sender: 'alice', senderId: '10001', body: 'hello duplicate', messageId: 'h1' },
@@ -1013,7 +1159,7 @@ test('completed history shards are cleaned before loading the active window', as
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"completed"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -1043,7 +1189,7 @@ test('cleanup failure after upload leaves a completed shard instead of a retryab
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"cleanup-failure"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -1079,7 +1225,7 @@ test('completion cleanup finalizes a processing shard even if the marker write i
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"cleanup-guard"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -1134,7 +1280,7 @@ test('completion cleanup leaves an unstarted queued shard intact', async () => {
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"queued-cleanup-guard"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -1165,7 +1311,7 @@ test('history shard renewal, failure, and completion are isolated to the claim o
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"owner-isolated"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -1211,7 +1357,7 @@ test('active history dedupe is scoped to the conversation history key', async ()
     db.importHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1223,7 +1369,7 @@ test('active history dedupe is scoped to the conversation history key', async ()
           ],
         },
         {
-          key: 'tgBot:20002',
+          key: 'Primary:tgBot:20002',
           entries: [
             {
               sender: 'bob',
@@ -1323,8 +1469,8 @@ test('migration 4 scopes existing active message id dedupe by history and replay
          storage_kind, history_key, buffer_key, sender, body, message_id, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    insert.run('history', 'tgBot:10001', 'tgBot:10001', 'alice', 'hello one', 'same', 1, 1);
-    insert.run('history', 'tgBot:20002', 'tgBot:20002', 'bob', 'hello two', 'same', 2, 2);
+    insert.run('history', 'Primary:tgBot:10001', 'tgBot:10001', 'alice', 'hello one', 'same', 1, 1);
+    insert.run('history', 'Primary:tgBot:20002', 'tgBot:20002', 'bob', 'hello two', 'same', 2, 2);
     insert.run(
       'replay',
       'tgBot:10001',
@@ -1365,7 +1511,7 @@ test('history shards with different account buffers are not deduplicated as one 
     db.importHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1411,14 +1557,14 @@ test('history shards with different account buffers are not deduplicated as one 
     );
 
     const primary = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"primary"}',
       messageIds: ['shared-history', 'primary-reply'],
       bufferKeys: ['Primary:tgBot:10001'],
     });
     const secondary = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Secondary',
       payloadJson: '{"context":"secondary"}',
       messageIds: ['shared-history', 'secondary-reply'],
@@ -1452,7 +1598,7 @@ test('shard completion tombstones shared payload messages not owned as rows', as
     db.importHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1498,14 +1644,14 @@ test('shard completion tombstones shared payload messages not owned as rows', as
     );
 
     const primary = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"primary"}',
       messageIds: ['shared-history', 'primary-reply'],
       bufferKeys: ['Primary:tgBot:10001'],
     });
     const secondary = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Secondary',
       payloadJson: '{"context":"secondary"}',
       messageIds: ['shared-history', 'secondary-reply'],
@@ -1546,7 +1692,7 @@ test('terminal restore does not resurrect messages already consumed by another p
     db.importHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1592,14 +1738,14 @@ test('terminal restore does not resurrect messages already consumed by another p
     );
 
     const primary = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"primary"}',
       messageIds: ['shared-history', 'primary-reply'],
       bufferKeys: ['Primary:tgBot:10001'],
     });
     const secondary = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Secondary',
       payloadJson: '{"context":"secondary"}',
       messageIds: ['shared-history', 'secondary-reply'],
@@ -1633,7 +1779,7 @@ test('completed shard tombstones prevent stale memory from reactivating consumed
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"consumed"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -1649,7 +1795,7 @@ test('completed shard tombstones prevent stale memory from reactivating consumed
       [
         ...fixture.historyBuckets,
         {
-          key: 'tgBot:20002',
+          key: 'Primary:tgBot:20002',
           entries: [
             {
               sender: 'bob',
@@ -1684,7 +1830,7 @@ test('completed shard tombstones prevent stale memory from reactivating consumed
       restored.historyBuckets.map((bucket) => bucket.entries.map((entry) => entry.messageId)),
       [['h1']],
     );
-    assert.equal(restored.historyBuckets[0].key, 'tgBot:20002');
+    assert.equal(restored.historyBuckets[0].key, 'Primary:tgBot:20002');
     assert.deepEqual(
       restored.replayBuckets.map((bucket) => bucket.entries.map((entry) => entry.messageId)),
       [['h2']],
@@ -1706,7 +1852,7 @@ test('expired history consumed tombstones are pruned after the retention window'
     const fixture = buildHistoryState();
     db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
     const { shardId } = db.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       payloadJson: '{"context":"retained"}',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -1751,7 +1897,7 @@ test('history state save rejects stale revisions and preserves newer active rows
     stale.importHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1770,7 +1916,7 @@ test('history state save rejects stale revisions and preserves newer active rows
     live.saveHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1801,7 +1947,7 @@ test('history state save rejects stale revisions and preserves newer active rows
         stale.saveHistoryState(
           [
             {
-              key: 'tgBot:10001',
+              key: 'Primary:tgBot:10001',
               entries: [
                 {
                   sender: 'alice',
@@ -1827,7 +1973,7 @@ test('history state save rejects stale revisions and preserves newer active rows
     stale.saveHistoryState(
       [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1895,7 +2041,7 @@ test('failed history revision save does not mark history as imported', async () 
         db.saveHistoryState(
           [
             {
-              key: 'tgBot:10001',
+              key: 'Primary:tgBot:10001',
               entries: [
                 {
                   sender: 'alice',

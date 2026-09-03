@@ -1,3 +1,4 @@
+import { normalizeAccountId } from '../../core/accounts.ts';
 import type {
   BncrOutboundReplayEntry,
   BncrOutboundReplayMediaEntry,
@@ -66,7 +67,7 @@ export function buildBncrOutboundReplayKeyFromRoute(args: {
   groupId?: string;
   userId?: string;
 }): string | null {
-  const accountId = String(args.accountId || '').trim() || 'default';
+  const accountId = normalizeAccountId(args.accountId);
   const platform = String(args.platform || '').trim();
   const groupId = String(args.groupId || '0').trim() || '0';
   const userId = String(args.userId || '0').trim() || '0';
@@ -167,6 +168,18 @@ export type BncrOutboundReplayRecordResult = {
   historyVersion?: number;
 };
 
+/**
+ * Record an outbound bot reply into both the conversation-history window and
+ * the outbound-replay cache.
+ *
+ * Dual-write strategy: the conversation-history window is the canonical
+ * ordered source for structured context (conversation_context). The
+ * outbound-replay cache is a lighter, indexed copy used by bridge-facing
+ * queries such as `listRecentOutbound`. Both are kept in sync for the
+ * duration of the runtime session. This is a compatibility design; the
+ * cache may be retired once all read paths are migrated to the history
+ * window.
+ */
 export function recordBncrOutboundReplay(args: {
   cache: BncrOutboundReplayCache;
   conversationHistories?: BncrConversationHistoryMap;
@@ -200,6 +213,7 @@ export function recordBncrOutboundReplay(args: {
   if (!body) return { recorded: false, historyOverflow: false };
   const recordTimestamp = args.entry.lastPushAt ?? Date.now();
   const historyKey = buildBncrConversationHistoryKeyFromRoute({
+    accountId: args.entry.accountId,
     platform: args.entry.route?.platform,
     groupId: args.entry.route?.groupId,
     userId: args.entry.route?.userId,
@@ -347,7 +361,9 @@ export function readBncrOutboundReplaySnapshot(args: {
     : [];
   if (!args.conversationHistories) return legacyEntries;
 
-  const historyKey = buildBncrConversationHistoryKey(args.parsed);
+  const historyKey = buildBncrConversationHistoryKey(args.parsed, {
+    accountId: args.accountId,
+  });
   const historyEntries = historyKey
     ? (args.conversationHistories.get(historyKey) || [])
         .filter((entry) => entry.role === 'assistant')

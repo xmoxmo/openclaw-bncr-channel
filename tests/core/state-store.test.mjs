@@ -20,7 +20,12 @@ function createStore() {
       const n = Number(value);
       return Number.isFinite(n) ? n : fallback;
     },
-    normalizeAccountId: (accountId) => String(accountId || '').trim() || 'Primary',
+    normalizeAccountId: (accountId) => {
+      const value = String(accountId || '').trim();
+      return !value || value.toLowerCase() === 'default' || value.toLowerCase() === 'primary'
+        ? 'Primary'
+        : value;
+    },
     normalizeStoredSessionKey: (sessionKey) =>
       sessionKey
         ? {
@@ -240,7 +245,7 @@ test('createBncrStateStore preserves senderId in persisted conversation historie
 
   store.loadPersistedConversationHistories([
     {
-      key: 'tgBot:-1001',
+      key: 'Primary:tgBot:-1001',
       entries: [
         {
           sender: 'alice',
@@ -254,7 +259,7 @@ test('createBncrStateStore preserves senderId in persisted conversation historie
     },
   ]);
 
-  assert.deepEqual(runtime.conversationHistories.get('tgBot:-1001'), [
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:-1001'), [
     {
       sender: 'alice',
       senderId: '10001',
@@ -266,7 +271,7 @@ test('createBncrStateStore preserves senderId in persisted conversation historie
   ]);
   assert.deepEqual(store.dumpPersistedConversationHistories(), [
     {
-      key: 'tgBot:-1001',
+      key: 'Primary:tgBot:-1001',
       entries: [
         {
           sender: 'alice',
@@ -281,12 +286,44 @@ test('createBncrStateStore preserves senderId in persisted conversation historie
   ]);
 });
 
+test('createBncrStateStore migrates legacy scene-only history keys to account-scoped keys', () => {
+  const { runtime, store } = createStore();
+  store.loadPersistedConversationHistories([
+    {
+      key: 'tgBot:10001',
+      entries: [
+        {
+          sender: 'alice',
+          senderId: '10001',
+          role: 'user',
+          body: 'legacy message',
+          timestamp: 10,
+          messageId: 'legacy-m1',
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(runtime.conversationHistories.has('tgBot:10001'), false);
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:10001'), [
+    {
+      sender: 'alice',
+      senderId: '10001',
+      role: 'user',
+      body: 'legacy message',
+      timestamp: 10,
+      messageId: 'legacy-m1',
+    },
+  ]);
+  assert.equal(store.dumpPersistedConversationHistories()[0].key, 'Primary:tgBot:10001');
+});
+
 test('createBncrStateStore preserves role in unified direct conversation histories', () => {
   const { runtime, store } = createStore();
 
   store.loadPersistedConversationHistories([
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries: [
         {
           sender: 'OpenClaw',
@@ -300,7 +337,7 @@ test('createBncrStateStore preserves role in unified direct conversation histori
     },
   ]);
 
-  assert.deepEqual(runtime.conversationHistories.get('tgBot:10001'), [
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:10001'), [
     {
       sender: 'OpenClaw',
       senderId: 'Primary',
@@ -312,7 +349,7 @@ test('createBncrStateStore preserves role in unified direct conversation histori
   ]);
   assert.deepEqual(store.dumpPersistedConversationHistories(), [
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries: [
         {
           sender: 'OpenClaw',
@@ -350,12 +387,12 @@ test('createBncrStateStore applies configured direct scene history caps when per
 
   store.loadPersistedConversationHistories([
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries,
     },
   ]);
 
-  assert.equal(runtime.conversationHistories.get('tgBot:10001')?.length, 96);
+  assert.equal(runtime.conversationHistories.get('Primary:tgBot:10001')?.length, 96);
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries.length, 96);
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[0]?.body, 'direct-25');
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[95]?.body, 'direct-120');
@@ -375,7 +412,7 @@ test('createBncrStateStore migrates legacy groupHistories state into conversatio
       sessionRoutes: [],
       groupHistories: [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -393,7 +430,7 @@ test('createBncrStateStore migrates legacy groupHistories state into conversatio
   );
 
   await store.loadState();
-  assert.deepEqual(runtime.conversationHistories.get('tgBot:10001'), [
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:10001'), [
     {
       sender: 'alice',
       senderId: '10001',
@@ -408,7 +445,7 @@ test('createBncrStateStore migrates legacy groupHistories state into conversatio
   const persisted = JSON.parse(await readFile(statePath, 'utf8'));
   assert.deepEqual(persisted.conversationHistories, [
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries: [
         {
           sender: 'alice',
@@ -467,7 +504,7 @@ test('createBncrStateStore normalizes missing history roles to user', () => {
 
   store.loadPersistedConversationHistories([
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries: [
         {
           sender: 'alice',
@@ -480,7 +517,7 @@ test('createBncrStateStore normalizes missing history roles to user', () => {
     },
   ]);
 
-  assert.deepEqual(runtime.conversationHistories.get('tgBot:10001'), [
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:10001'), [
     {
       sender: 'alice',
       senderId: '10001',
@@ -492,7 +529,7 @@ test('createBncrStateStore normalizes missing history roles to user', () => {
   ]);
   assert.deepEqual(store.dumpPersistedConversationHistories(), [
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries: [
         {
           sender: 'alice',
@@ -511,7 +548,7 @@ test('createBncrStateStore backfills stable synthetic ids for legacy missing mes
   const { runtime, store } = createStore();
   const persisted = [
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries: [
         {
           sender: 'alice',
@@ -533,14 +570,14 @@ test('createBncrStateStore backfills stable synthetic ids for legacy missing mes
   ];
 
   store.loadPersistedConversationHistories(persisted);
-  const firstLoad = runtime.conversationHistories.get('tgBot:10001') ?? [];
+  const firstLoad = runtime.conversationHistories.get('Primary:tgBot:10001') ?? [];
   assert.equal(firstLoad.length, 2);
   assert.match(firstLoad[0].messageId, /^bncr-synthetic:migrated:/);
   assert.match(firstLoad[1].messageId, /^bncr-synthetic:migrated:/);
   assert.equal(firstLoad[1].media?.[0]?.messageId, firstLoad[1].messageId);
 
   store.loadPersistedConversationHistories(persisted);
-  const secondLoad = runtime.conversationHistories.get('tgBot:10001') ?? [];
+  const secondLoad = runtime.conversationHistories.get('Primary:tgBot:10001') ?? [];
   assert.deepEqual(
     secondLoad.map((entry) => entry.messageId),
     firstLoad.map((entry) => entry.messageId),
@@ -552,17 +589,17 @@ test('createBncrStateStore backfills stable synthetic ids for legacy missing mes
 
   removeBncrConversationHistoryMessageIds({
     historyMap: runtime.conversationHistories,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     messageIds: secondLoad.map((entry) => entry.messageId),
   });
-  assert.deepEqual(runtime.conversationHistories.get('tgBot:10001'), []);
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:10001'), []);
 });
 
 test('createBncrStateStore aligns legacy outbound replay ids with assistant history', () => {
   const { runtime, store } = createStore();
   store.loadPersistedConversationHistories([
     {
-      key: 'tgBot:10001',
+      key: 'Primary:tgBot:10001',
       entries: [
         {
           sender: 'OpenClaw',
@@ -593,7 +630,7 @@ test('createBncrStateStore aligns legacy outbound replay ids with assistant hist
     { historyMap: runtime.conversationHistories },
   );
 
-  const historyMessageId = runtime.conversationHistories.get('tgBot:10001')?.[0]?.messageId;
+  const historyMessageId = runtime.conversationHistories.get('Primary:tgBot:10001')?.[0]?.messageId;
   const replayMessageId = runtime.outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.messageId;
   assert.match(historyMessageId, /^bncr-synthetic:migrated:/);
   assert.equal(replayMessageId, historyMessageId);
@@ -613,7 +650,7 @@ test('createBncrStateStore infers assistant role for legacy histories matched by
       sessionRoutes: [],
       groupHistories: [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'OpenClaw',
@@ -648,7 +685,7 @@ test('createBncrStateStore infers assistant role for legacy histories matched by
   );
 
   await store.loadState();
-  assert.equal(runtime.conversationHistories.get('tgBot:10001')?.[0]?.role, 'assistant');
+  assert.equal(runtime.conversationHistories.get('Primary:tgBot:10001')?.[0]?.role, 'assistant');
 
   await rm(dir, { recursive: true, force: true });
 });
@@ -665,15 +702,15 @@ test('createBncrStateStore scopes assistant role inference to the matching histo
     },
   ];
 
-  store.loadPersistedConversationHistories([{ key: 'tgBot:10001', entries }], {
-    assistantMessageIdsByHistoryKey: new Map([['tgBot:10002', new Set(['shared-m1'])]]),
+  store.loadPersistedConversationHistories([{ key: 'Primary:tgBot:10001', entries }], {
+    assistantMessageIdsByHistoryKey: new Map([['Primary:tgBot:10002', new Set(['shared-m1'])]]),
   });
-  assert.equal(runtime.conversationHistories.get('tgBot:10001')?.[0]?.role, 'user');
+  assert.equal(runtime.conversationHistories.get('Primary:tgBot:10001')?.[0]?.role, 'user');
 
-  store.loadPersistedConversationHistories([{ key: 'tgBot:10001', entries }], {
-    assistantMessageIdsByHistoryKey: new Map([['tgBot:10001', new Set(['shared-m1'])]]),
+  store.loadPersistedConversationHistories([{ key: 'Primary:tgBot:10001', entries }], {
+    assistantMessageIdsByHistoryKey: new Map([['Primary:tgBot:10001', new Set(['shared-m1'])]]),
   });
-  assert.equal(runtime.conversationHistories.get('tgBot:10001')?.[0]?.role, 'assistant');
+  assert.equal(runtime.conversationHistories.get('Primary:tgBot:10001')?.[0]?.role, 'assistant');
 });
 
 test('createBncrStateStore persists conversation histories up to 1.2x configured scene history limit', () => {
@@ -699,12 +736,12 @@ test('createBncrStateStore persists conversation histories up to 1.2x configured
 
   store.loadPersistedConversationHistories([
     {
-      key: 'tgBot:-1002',
+      key: 'Primary:tgBot:-1002',
       entries,
     },
   ]);
 
-  assert.equal(runtime.conversationHistories.get('tgBot:-1002')?.length, 96);
+  assert.equal(runtime.conversationHistories.get('Primary:tgBot:-1002')?.length, 96);
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries.length, 96);
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[0]?.body, 'm25');
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[95]?.body, 'm120');
@@ -733,12 +770,12 @@ test('createBncrStateStore uses a minimum persisted conversation history cap of 
 
   store.loadPersistedConversationHistories([
     {
-      key: 'tgBot:-1003',
+      key: 'Primary:tgBot:-1003',
       entries,
     },
   ]);
 
-  assert.equal(runtime.conversationHistories.get('tgBot:-1003')?.length, 60);
+  assert.equal(runtime.conversationHistories.get('Primary:tgBot:-1003')?.length, 60);
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries.length, 60);
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[0]?.body, 'd11');
   assert.equal(store.dumpPersistedConversationHistories()[0]?.entries[59]?.body, 'd70');
@@ -787,6 +824,226 @@ test('createBncrStateStore bounds persisted outbound replay buckets to the unifi
   assert.equal(store.dumpPersistedOutboundReplayCache()[0]?.entries[0]?.status, 'acked');
 });
 
+test('createBncrStateStore normalizes legacy outbound replay cache keys', () => {
+  const { runtime, store } = createStore();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  store.loadPersistedOutboundReplayCache([
+    {
+      key: 'tgBot:10001',
+      entries: [
+        {
+          sender: 'OpenClaw',
+          senderId: 'Primary',
+          body: 'legacy outbound',
+          timestamp: 10,
+          messageId: 'legacy-replay-1',
+          accountId: 'Primary',
+          route,
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(runtime.outboundReplayCache.has('tgBot:10001'), false);
+  assert.equal(
+    runtime.outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.messageId,
+    'legacy-replay-1',
+  );
+  assert.equal(store.dumpPersistedOutboundReplayCache()[0].key, 'Primary:tgBot:10001');
+});
+
+test('createBncrStateStore canonicalizes default account aliases in persisted keys', () => {
+  const { runtime, store } = createStore();
+  store.loadPersistedConversationHistories([
+    {
+      key: 'default:tgBot:10001',
+      entries: [{ sender: 'alice', body: 'legacy default', messageId: 'default-history-1' }],
+    },
+  ]);
+  store.loadPersistedOutboundReplayCache([
+    {
+      key: 'primary:tgBot:10001',
+      entries: [
+        {
+          sender: 'OpenClaw',
+          body: 'legacy primary',
+          messageId: 'primary-replay-1',
+          accountId: 'default',
+          route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(runtime.conversationHistories.has('default:tgBot:10001'), false);
+  assert.equal(
+    runtime.conversationHistories.get('Primary:tgBot:10001')?.[0]?.messageId,
+    'default-history-1',
+  );
+  assert.equal(runtime.outboundReplayCache.has('primary:tgBot:10001'), false);
+  assert.equal(
+    runtime.outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.messageId,
+    'primary-replay-1',
+  );
+  assert.equal(runtime.outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.accountId, 'Primary');
+});
+
+test('createBncrStateStore keeps account-scoped entries separate in a legacy replay bucket', () => {
+  const { runtime, store } = createStore();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+  store.loadPersistedOutboundReplayCache([
+    {
+      key: 'tgBot:10001',
+      entries: [
+        {
+          sender: 'PrimaryBot',
+          senderId: 'Primary',
+          body: 'primary outbound',
+          timestamp: 10,
+          messageId: 'primary-replay-1',
+          accountId: 'Primary',
+          route,
+        },
+        {
+          sender: 'SecondaryBot',
+          senderId: 'Secondary',
+          body: 'secondary outbound',
+          timestamp: 20,
+          messageId: 'secondary-replay-1',
+          accountId: 'Secondary',
+          route,
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(
+    runtime.outboundReplayCache.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
+    ['primary-replay-1'],
+  );
+  assert.deepEqual(
+    runtime.outboundReplayCache.get('Secondary:tgBot:10001')?.map((entry) => entry.messageId),
+    ['secondary-replay-1'],
+  );
+});
+
+test('createBncrStateStore separates account-scoped replay entries without routes', () => {
+  const { runtime, store } = createStore();
+  store.loadPersistedOutboundReplayCache([
+    {
+      key: 'tgBot:10001',
+      entries: [
+        {
+          sender: 'PrimaryBot',
+          body: 'primary outbound',
+          messageId: 'primary-no-route-1',
+          accountId: 'Primary',
+        },
+        {
+          sender: 'SecondaryBot',
+          body: 'secondary outbound',
+          messageId: 'secondary-no-route-1',
+          accountId: 'Secondary',
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(
+    runtime.outboundReplayCache.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
+    ['primary-no-route-1'],
+  );
+  assert.deepEqual(
+    runtime.outboundReplayCache.get('Secondary:tgBot:10001')?.map((entry) => entry.messageId),
+    ['secondary-no-route-1'],
+  );
+});
+
+test('createBncrStateStore infers assistant role for account-scoped replay without routes', () => {
+  const { runtime, store } = createStore();
+  store.loadPersistedConversationHistories([
+    {
+      key: 'Secondary:tgBot:10001',
+      entries: [
+        {
+          sender: 'SecondaryBot',
+          senderId: 'Secondary',
+          body: 'secondary reply',
+          messageId: 'secondary-no-route-role-1',
+        },
+      ],
+    },
+  ]);
+  store.loadPersistedOutboundReplayCache(
+    [
+      {
+        key: 'tgBot:10001',
+        entries: [
+          {
+            sender: 'SecondaryBot',
+            senderId: 'Secondary',
+            body: 'secondary reply',
+            messageId: 'secondary-no-route-role-1',
+            accountId: 'Secondary',
+          },
+        ],
+      },
+    ],
+    { historyMap: runtime.conversationHistories },
+  );
+
+  store.loadPersistedConversationHistories(
+    [
+      {
+        key: 'Secondary:tgBot:10001',
+        entries: [
+          {
+            sender: 'SecondaryBot',
+            senderId: 'Secondary',
+            body: 'secondary reply',
+            messageId: 'secondary-no-route-role-1',
+          },
+        ],
+      },
+    ],
+    {
+      assistantMessageIdsByHistoryKey: new Map([
+        ['Secondary:tgBot:10001', new Set(['secondary-no-route-role-1'])],
+      ]),
+    },
+  );
+  assert.equal(runtime.conversationHistories.get('Secondary:tgBot:10001')?.[0]?.role, 'assistant');
+});
+
+test('createBncrStateStore preserves an account-scoped replay bucket when an entry omits accountId', () => {
+  const { runtime, store } = createStore();
+  store.loadPersistedOutboundReplayCache([
+    {
+      key: 'Secondary:tgBot:10001',
+      entries: [
+        {
+          sender: 'SecondaryBot',
+          senderId: 'Secondary',
+          body: 'secondary outbound',
+          timestamp: 10,
+          messageId: 'secondary-replay-no-account-1',
+          route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(runtime.outboundReplayCache.has('Primary:tgBot:10001'), false);
+  assert.equal(
+    runtime.outboundReplayCache.get('Secondary:tgBot:10001')?.[0]?.messageId,
+    'secondary-replay-no-account-1',
+  );
+  assert.equal(
+    runtime.outboundReplayCache.get('Secondary:tgBot:10001')?.[0]?.accountId,
+    'Secondary',
+  );
+});
+
 test('createBncrStateStore imports controls into sqlite and prefers sqlite over stale json', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-state-sqlite-'));
   const statePath = join(dir, 'state.json');
@@ -822,7 +1079,7 @@ test('createBncrStateStore imports controls into sqlite and prefers sqlite over 
     ],
     conversationHistories: [
       {
-        key: 'tgBot:10001',
+        key: 'Primary:tgBot:10001',
         entries: [
           { sender: 'alice', senderId: '10001', role: 'user', body: 'hello', messageId: 'h1' },
         ],
@@ -874,7 +1131,7 @@ test('createBncrStateStore imports controls into sqlite and prefers sqlite over 
   await writeFile(statePath, JSON.stringify(persisted), 'utf8');
   await store.loadState();
   assert.equal(runtime.sceneRegistry.get('tgBot:10001')?.agentId, 'orion');
-  assert.equal(runtime.conversationHistories.get('tgBot:10001')?.[0]?.body, 'hello');
+  assert.equal(runtime.conversationHistories.get('Primary:tgBot:10001')?.[0]?.body, 'hello');
 
   await store.flushState();
   const writtenJson = JSON.parse(await readFile(statePath, 'utf8'));
@@ -947,12 +1204,12 @@ test('createBncrStateStore stale memory flush cannot reactivate consumed history
         createdAt: 130,
       },
     ];
-    activeRuntime.conversationHistories.set('tgBot:10001', historyBucket);
+    activeRuntime.conversationHistories.set('Primary:tgBot:10001', historyBucket);
     activeRuntime.outboundReplayCache.set('Primary:tgBot:10001', replayBucket);
     await activeStore.flushState();
 
     const { shardId } = activeStore.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"active-snapshot"}',
       messageIds: ['h1', 'h2', 'h3'],
@@ -967,7 +1224,7 @@ test('createBncrStateStore stale memory flush cannot reactivate consumed history
 
     const { runtime: staleRuntime, store: staleStore } = createStore();
     staleRuntime.sqliteState = sqlite;
-    staleRuntime.conversationHistories.set('tgBot:10001', historyBucket);
+    staleRuntime.conversationHistories.set('Primary:tgBot:10001', historyBucket);
     staleRuntime.outboundReplayCache.set('Primary:tgBot:10001', replayBucket);
     await staleStore.flushState();
 
@@ -988,7 +1245,7 @@ test('createBncrStateStore stale flush preserves another instance active history
     const { runtime: activeRuntime, store: activeStore } = createStore();
     activeRuntime.sqliteState = sqlite;
     await activeStore.loadState();
-    activeRuntime.conversationHistories.set('tgBot:10001', [
+    activeRuntime.conversationHistories.set('Primary:tgBot:10001', [
       {
         sender: 'alice',
         senderId: '10001',
@@ -1023,7 +1280,7 @@ test('createBncrStateStore stale flush preserves another instance active history
 
     const { runtime: staleRuntime, store: staleStore } = createStore();
     staleRuntime.sqliteState = sqlite;
-    staleRuntime.conversationHistories.set('tgBot:10001', [
+    staleRuntime.conversationHistories.set('Primary:tgBot:10001', [
       {
         sender: 'alice',
         senderId: '10001',
@@ -1071,7 +1328,7 @@ test('createBncrStateStore retries history flush after a concurrent revision con
     const { runtime: activeRuntime, store: activeStore } = createStore();
     activeRuntime.sqliteState = sqlite;
     await activeStore.loadState();
-    activeRuntime.conversationHistories.set('tgBot:10001', [
+    activeRuntime.conversationHistories.set('Primary:tgBot:10001', [
       {
         sender: 'alice',
         senderId: '10001',
@@ -1117,7 +1374,7 @@ test('createBncrStateStore retries history flush after a concurrent revision con
       },
     };
     staleRuntime.sqliteState = wrappedSqlite;
-    staleRuntime.conversationHistories.set('tgBot:10001', [
+    staleRuntime.conversationHistories.set('Primary:tgBot:10001', [
       {
         sender: 'alice',
         senderId: '10001',
@@ -1217,7 +1474,7 @@ test('createBncrStateStore reconcile memory drops consumed history before snapsh
         createdAt: 130,
       },
     ];
-    activeRuntime.conversationHistories.set('tgBot:10001', [
+    activeRuntime.conversationHistories.set('Primary:tgBot:10001', [
       ...historyEntries,
       {
         sender: 'alice',
@@ -1244,7 +1501,7 @@ test('createBncrStateStore reconcile memory drops consumed history before snapsh
     ]);
     await activeStore.flushState();
     const { shardId } = activeStore.createHistoryShard({
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       payloadJson: '{"context":"consumed"}',
       messageIds: ['reconcile-h3'],
@@ -1255,7 +1512,7 @@ test('createBncrStateStore reconcile memory drops consumed history before snapsh
 
     const { runtime: staleRuntime, store: staleStore } = createStore();
     staleRuntime.sqliteState = sqlite;
-    staleRuntime.conversationHistories.set('tgBot:10001', [
+    staleRuntime.conversationHistories.set('Primary:tgBot:10001', [
       ...historyEntries,
       {
         sender: 'alice',
@@ -1284,7 +1541,9 @@ test('createBncrStateStore reconcile memory drops consumed history before snapsh
 
     const restored = sqlite.loadHistoryState();
     assert.deepEqual(
-      staleRuntime.conversationHistories.get('tgBot:10001')?.map((entry) => entry.messageId),
+      staleRuntime.conversationHistories
+        .get('Primary:tgBot:10001')
+        ?.map((entry) => entry.messageId),
       ['reconcile-h1', 'reconcile-h2', 'reconcile-h4'],
     );
     assert.deepEqual(
@@ -1318,7 +1577,7 @@ test('createBncrStateStore cutoverToSqlite refuses outstanding history shards', 
       sessionRoutes: [],
       conversationHistories: [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1337,7 +1596,7 @@ test('createBncrStateStore cutoverToSqlite refuses outstanding history shards', 
   );
   await store.loadState();
   const { shardId } = store.createHistoryShard({
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     payloadJson: '{"context":"pending"}',
     messageIds: ['shard-h1'],
     bufferKeys: [],
@@ -1368,7 +1627,7 @@ test('createBncrStateStore recovers in-flight history shards before a reload', a
       sessionRoutes: [],
       conversationHistories: [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1388,7 +1647,7 @@ test('createBncrStateStore recovers in-flight history shards before a reload', a
   await store.loadState();
 
   const { shardId } = store.createHistoryShard({
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     payloadJson: '{"context":"pending"}',
     messageIds: ['recover-h1'],
     bufferKeys: [],
@@ -1420,7 +1679,7 @@ test('createBncrStateStore restores terminal shard messages into the active wind
       sessionRoutes: [],
       conversationHistories: [
         {
-          key: 'tgBot:10001',
+          key: 'Primary:tgBot:10001',
           entries: [
             {
               sender: 'alice',
@@ -1456,12 +1715,12 @@ test('createBncrStateStore restores terminal shard messages into the active wind
   await store.loadState();
 
   const { shardId } = store.createHistoryShard({
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     payloadJson: '{"context":"terminal"}',
     messageIds: ['terminal-h1', 'terminal-h2'],
     bufferKeys: ['Primary:tgBot:10001'],
   });
-  runtime.conversationHistories.set('tgBot:10001', []);
+  runtime.conversationHistories.set('Primary:tgBot:10001', []);
   runtime.outboundReplayCache.set('Primary:tgBot:10001', []);
 
   let terminalResult;
@@ -1475,7 +1734,7 @@ test('createBncrStateStore restores terminal shard messages into the active wind
 
   assert.equal(terminalResult.terminal, true);
   assert.deepEqual(
-    runtime.conversationHistories.get('tgBot:10001')?.map((entry) => entry.messageId),
+    runtime.conversationHistories.get('Primary:tgBot:10001')?.map((entry) => entry.messageId),
     ['terminal-h1'],
   );
   assert.deepEqual(
@@ -1669,7 +1928,7 @@ test('createBncrStateStore cutoverToSqlite backs up json and stops rewriting it'
     ],
     conversationHistories: [
       {
-        key: 'tgBot:10001',
+        key: 'Primary:tgBot:10001',
         entries: [
           {
             sender: 'alice',

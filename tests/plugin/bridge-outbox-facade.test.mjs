@@ -93,9 +93,9 @@ test('bridge outbox facade preserves enqueue, dead-letter, and due collection tr
   facade.markRecentOutboundAcked(first);
   assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.messageId, 'm1');
   assert.equal(outboundReplayCache.get('Primary:tgBot:10001')?.[0]?.body, 'm1');
-  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.messageId, 'm1');
-  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.body, 'm1');
-  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.role, 'assistant');
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.[0]?.messageId, 'm1');
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.[0]?.body, 'm1');
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.[0]?.role, 'assistant');
   assert.equal(facade.listRecentOutbound('session-1')[0]?.messageId, 'm1');
   assert.equal(facade.listRecentOutboundByAccount('Primary')[0]?.messageId, 'm1');
 
@@ -188,7 +188,7 @@ test('bridge outbox facade triggers history flush when an outbound reaches the l
     overflows.map(({ historyVersion }) => historyVersion),
     [3, 3],
   );
-  assert.equal(conversationHistories.get('tgBot:10001')?.length, 3);
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.length, 3);
 });
 
 test('bridge outbox facade does not trigger history flush when auto flush is off', () => {
@@ -249,5 +249,5 @@ test('bridge outbox facade does not trigger history flush when auto flush is off
   }
 
   assert.deepEqual(overflows, []);
-  assert.equal(conversationHistories.get('tgBot:10001')?.length, 3);
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.length, 3);
 });

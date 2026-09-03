@@ -137,7 +137,7 @@ export type BncrRecentOutboundEntry = {
 export type BncrOutboundReplayMediaEntry = {
   path?: string;
   contentType?: string;
-  kind?: 'image' | 'video' | 'audio' | 'document' | 'unknown';
+  kind?: 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'unknown';
   messageId?: string;
 };
 

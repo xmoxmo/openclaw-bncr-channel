@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
 import {
   dumpRegisterDriftSnapshot,
   normalizeRegisterDriftSnapshot,
@@ -776,17 +777,41 @@ function loadControlState(db: DatabaseSync): BncrSqliteControlState {
 }
 
 function deriveHistoryKeyFromRoute(args: {
+  accountId?: string | null;
   platform?: string;
   groupId?: string;
   userId?: string;
 }): string | null {
+  const accountId = normalizeAccountId(args.accountId);
   const platform = String(args.platform || '').trim();
   const groupId = String(args.groupId || '0').trim() || '0';
   const userId = String(args.userId || '0').trim() || '0';
   if (!platform) return null;
-  if (groupId !== '0') return `${platform}:${groupId}`;
-  if (userId !== '0') return `${platform}:${userId}`;
+  if (groupId !== '0') return `${accountId}:${platform}:${groupId}`;
+  if (userId !== '0') return `${accountId}:${platform}:${userId}`;
   return null;
+}
+
+function normalizePersistedHistoryKey(key: string): string {
+  const raw = String(key || '').trim();
+  if (!raw) return raw;
+  const firstColon = raw.indexOf(':');
+  const secondColon = raw.indexOf(':', firstColon + 1);
+  if (firstColon <= 0 || secondColon < 0) return `${BNCR_DEFAULT_ACCOUNT_ID}:${raw}`;
+  return `${normalizeAccountId(raw.slice(0, firstColon))}:${raw.slice(firstColon + 1)}`;
+}
+
+function resolvePersistedHistoryAccountId(key: string): string {
+  const normalized = normalizePersistedHistoryKey(key);
+  const separator = normalized.indexOf(':');
+  return normalizeAccountId(separator > 0 ? normalized.slice(0, separator) : undefined);
+}
+
+function resolvePersistedHistoryKey(key: string, accountId: string): string {
+  const normalized = normalizePersistedHistoryKey(key);
+  const separator = normalized.indexOf(':');
+  const sceneKey = separator > 0 ? normalized.slice(separator + 1) : normalized;
+  return `${normalizeAccountId(accountId)}:${sceneKey}`;
 }
 
 function parseMediaJson(value: string) {
@@ -861,7 +886,7 @@ function replaceHistoryMessages(
     const seenReplayMessageIds = new Map<string, Set<string>>();
 
     for (const bucket of historyBuckets) {
-      const historyKey = String(bucket.key || '').trim();
+      const historyKey = normalizePersistedHistoryKey(String(bucket.key || '').trim());
       if (!historyKey) continue;
       for (const entry of Array.isArray(bucket.entries) ? bucket.entries : []) {
         const sender = String(entry?.sender || '').trim();
@@ -909,12 +934,22 @@ function replaceHistoryMessages(
     }
 
     for (const bucket of replayBuckets) {
-      const bufferKey = String(bucket.key || '').trim();
-      if (!bufferKey) continue;
+      const bucketKey = normalizePersistedHistoryKey(String(bucket.key || '').trim());
+      if (!bucketKey) continue;
       for (const entry of Array.isArray(bucket.entries) ? bucket.entries : []) {
         const sender = String(entry?.sender || '').trim();
         const body = String(entry?.body || '').trim();
         if (!sender || !body) continue;
+        const entryAccountId = entry.accountId
+          ? normalizeAccountId(entry.accountId)
+          : resolvePersistedHistoryAccountId(bucketKey);
+        const routeHistoryKey = deriveHistoryKeyFromRoute({
+          accountId: entryAccountId,
+          platform: entry.route?.platform,
+          groupId: entry.route?.groupId,
+          userId: entry.route?.userId,
+        });
+        const bufferKey = routeHistoryKey || resolvePersistedHistoryKey(bucketKey, entryAccountId);
         if (entry.messageId) {
           const seen = seenReplayMessageIds.get(bufferKey) ?? new Set<string>();
           if (seen.has(entry.messageId)) continue;
@@ -930,16 +965,12 @@ function replaceHistoryMessages(
         if (entry.messageId && isConsumedReplayMessage.get(bufferKey, entry.messageId)) {
           continue;
         }
-        const historyKey = deriveHistoryKeyFromRoute({
-          platform: entry.route?.platform,
-          groupId: entry.route?.groupId,
-          userId: entry.route?.userId,
-        });
+        const historyKey = routeHistoryKey || bufferKey;
         insert.run(
           'replay',
           historyKey ?? '',
           bufferKey,
-          entry.accountId ?? null,
+          entryAccountId,
           sender,
           entry.senderId ?? null,
           'assistant',
@@ -1807,13 +1838,23 @@ export function createBncrSqliteStateDatabase(
   }
 
   function normalizeHistoryKeySkipList(skipHistoryKeys: readonly string[] | undefined): string[] {
-    return Array.from(
-      new Set(
-        (skipHistoryKeys ?? [])
-          .map((key) => String(key || '').trim())
-          .filter((key) => Boolean(key)),
-      ),
-    );
+    const normalized: string[] = [];
+    for (const rawKey of skipHistoryKeys ?? []) {
+      const key = String(rawKey || '').trim();
+      if (!key) continue;
+      normalized.push(key);
+      const legacyKey = toLegacyHistoryKey(key);
+      if (legacyKey && legacyKey !== key) normalized.push(legacyKey);
+    }
+    return Array.from(new Set(normalized));
+  }
+
+  function toLegacyHistoryKey(historyKey: string): string {
+    const firstColon = historyKey.indexOf(':');
+    if (firstColon <= 0) return '';
+    const secondColon = historyKey.indexOf(':', firstColon + 1);
+    if (secondColon <= firstColon + 1) return '';
+    return historyKey.slice(firstColon + 1);
   }
 
   function buildHistoryKeySkipCondition(skipped: readonly string[]): string {

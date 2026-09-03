@@ -247,6 +247,14 @@ export async function runBncrInboundReplyDispatch(args: {
                     sessionMetaBarrier.track(task);
                   },
                 },
+                // OpenClaw ≥8.1 requires prepared turns to carry a runDispatchLifecycle
+                // shim. Bncr dispatches directly via runDispatch and does not participate
+                // in the adoption lifecycle, so turnAdoptionLifecycle is intentionally
+                // left as undefined; onDispatchSkipped is a safe no-op here.
+                runDispatchLifecycle: {
+                  turnAdoptionLifecycle: undefined,
+                  onDispatchSkipped: async () => {},
+                },
                 runDispatch: async () => {
                   await sessionMetaBarrier.wait();
                   await correctBncrInboundSessionLabel({

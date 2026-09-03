@@ -1,6 +1,6 @@
 {
   "name": "@xmoxmo/bncr",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -38,13 +38,13 @@
     "check": "biome check ."
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.27"
+    "openclaw": ">=2026.8.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
     "@types/node": "^24.13.2",
     "esbuild": "^0.28.0",
-    "openclaw": ">=2026.5.27",
+    "openclaw": ">=2026.8.1",
     "typescript": "^6.0.3"
   },
   "openclaw": {
@@ -52,12 +52,12 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.5.27",
-      "minGatewayVersion": "2026.5.27"
+      "pluginApi": ">=2026.8.1",
+      "minGatewayVersion": "2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.5.28",
-      "pluginSdkVersion": "2026.5.28"
+      "openclawVersion": "2026.8.1",
+      "pluginSdkVersion": "2026.8.1"
     },
     "runtimeExtensions": [
       "./dist/index.js"

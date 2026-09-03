@@ -535,6 +535,92 @@ test('bare reset command is handled via elevated native session reset for non-ad
   assert.equal(enqueueCalls[0].payload.replyToId, 'bare-reset-user');
 });
 
+test('bare new with extra arguments does not invoke session reset', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'bncr-client-long-id',
+    bridgeId: 'bncr-client-long-id',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: false,
+    type: 'text',
+    msg: '/new foo',
+    mimeType: 'text/plain',
+    msgId: 'bare-new-extra',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(
+    calls.requests.some((request) => request.method === 'sessions.reset'),
+    false,
+  );
+  assert.ok(
+    enqueueCalls.every(
+      (entry) => !String(entry.payload?.text || '').includes('New session started.'),
+    ),
+  );
+});
+
+test('bare reset with extra arguments does not invoke session reset', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'bncr-client-long-id',
+    bridgeId: 'bncr-client-long-id',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: false,
+    type: 'text',
+    msg: '/reset bar',
+    mimeType: 'text/plain',
+    msgId: 'bare-reset-extra',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(
+    calls.requests.some((request) => request.method === 'sessions.reset'),
+    false,
+  );
+  assert.ok(
+    enqueueCalls.every((entry) => !String(entry.payload?.text || '').includes('Session reset.')),
+  );
+});
+
 test('slash bncr new is handled locally for admin callers without native fallback', async () => {
   const { api, calls } = createInboundApiStub();
   const parsed = parseBncrInboundParams({
@@ -2140,6 +2226,45 @@ test('non-admin bare /model in direct chat is elevated to OpenClaw, never falls 
   assert.ok(enqueueCalls.every((c) => !c.payload.text?.includes('Unsupported')));
 });
 
+test('non-admin bare /model with no native reply refuses agent fallback', async () => {
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '20002',
+    isAdmin: false,
+    isGroup: false,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/model gpt-5',
+    mimeType: 'text/plain',
+    msgId: 'slash-model-no-admin-direct-noop',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(parsed.isAdmin, false, 'parsed.isAdmin must not be mutated');
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Command /model failed.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'slash-model-no-admin-direct-noop');
+});
+
 test('non-admin /bncr verbose on in direct chat is now allowed (self-admin command)', async () => {
   // Verbose is a self-admin command allowed for non-admin in direct chat.
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
@@ -2562,8 +2687,8 @@ test('native command honors admitted resolvedAgentId for group session routing',
 
 // ─── Private-chat whitelist semantics ────────────────────────────────────────
 
-test('admin bare /whoami in direct chat falls through to OpenClaw agent', async () => {
-  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: true });
+test('admin bare /whoami in direct chat falls back to agent when OpenClaw emits no reply', async () => {
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -2594,15 +2719,18 @@ test('admin bare /whoami in direct chat falls through to OpenClaw agent', async 
     scheduleSave() {},
   });
 
-  // Admin bare OpenClaw native commands are routed to the OpenClaw parser
-  // and handled there without a duplicate agent turn.
-  assert.equal(calls.turnRuns.length, 1);
+  // Admin callers: OpenClaw native dispatch runs first (kind=native, no
+  // reply produced), then the command falls back to the agent via the
+  // normal dispatch path (kind=text-slash). Two turn runs total.
+  assert.equal(calls.turnRuns.length, 2);
   assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.kind, 'native');
-  assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.body, '/whoami');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.kind, 'text-slash');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.commandName, 'whoami');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.body, '/whoami');
 });
 
-test('admin bare /model in direct chat falls through to OpenClaw agent', async () => {
-  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: true });
+test('admin bare /model in direct chat falls back to agent when OpenClaw emits no reply', async () => {
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -2633,9 +2761,13 @@ test('admin bare /model in direct chat falls through to OpenClaw agent', async (
     scheduleSave() {},
   });
 
-  assert.equal(calls.turnRuns.length, 1);
+  // Admin callers: OpenClaw native dispatch runs first (kind=native, no
+  // reply produced), then the command falls back to the agent.
+  assert.equal(calls.turnRuns.length, 2);
   assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.kind, 'native');
-  assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.body, '/model gpt-5');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.kind, 'text-slash');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.commandName, 'model');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.body, '/model gpt-5');
 });
 
 test('non-admin bare /verbose in direct chat is elevated to OpenClaw, never falls back to agent', async () => {
@@ -3164,6 +3296,88 @@ test('/bncr stop is rejected as unsupported and never sent to agent', async () =
   assert.equal(parsed.isAdmin, false, 'parsed.isAdmin must not be mutated');
 });
 
+test('/stop extra is rejected with exact usage hint and never sent to agent', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '20002',
+    isAdmin: false,
+    isGroup: false,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/stop please',
+    mimeType: 'text/plain',
+    msgId: 'bare-stop-extra-unsupported',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Only exact /stop is supported. Send /stop to stop.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'bare-stop-extra-unsupported');
+});
+
+test('non-exact /stop forms are rejected with exact usage hint and never sent to agent', async () => {
+  const variants = ['/stop@bot', '/stop please', '/stop\tnow', '/stopxyz'];
+  for (const [index, msg] of variants.entries()) {
+    const { api, calls } = createInboundApiStub();
+    const parsed = parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '0',
+      userId: '20002',
+      isAdmin: false,
+      isGroup: false,
+      shouldRespond: true,
+      type: 'text',
+      msg,
+      mimeType: 'text/plain',
+      msgId: `bare-stop-non-exact-${index}`,
+    });
+    const enqueueCalls = [];
+
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'public',
+      rememberSessionRoute() {},
+      enqueueFromReply: async (args) => {
+        enqueueCalls.push(args);
+      },
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+
+    assert.equal(calls.turnRuns.length, 0, `variant ${msg} must not reach agent`);
+    assert.equal(enqueueCalls.length, 1, `variant ${msg} must get one reply`);
+    assert.equal(
+      enqueueCalls[0].payload.text,
+      'Only exact /stop is supported. Send /stop to stop.',
+    );
+    assert.equal(enqueueCalls[0].payload.replyToId, `bare-stop-non-exact-${index}`);
+  }
+});
+
 test('admin bare /stop in direct chat uses the same stop fast path as non-admin', async () => {
   const { api, calls } = createInboundApiStub();
   const parsed = parseBncrInboundParams({
@@ -3204,8 +3418,8 @@ test('admin bare /stop in direct chat uses the same stop fast path as non-admin'
   assert.equal(enqueueCalls[0].payload.replyToId, 'admin-bare-stop');
 });
 
-test('admin bare /new in direct chat falls through to OpenClaw agent', async () => {
-  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: true });
+test('admin bare /new in direct chat falls back to agent when OpenClaw emits no reply', async () => {
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -3236,13 +3450,17 @@ test('admin bare /new in direct chat falls through to OpenClaw agent', async () 
     scheduleSave() {},
   });
 
-  assert.equal(calls.turnRuns.length, 1);
+  // Admin callers: OpenClaw native dispatch runs first (kind=native, no
+  // reply produced), then the command falls back to the agent.
+  assert.equal(calls.turnRuns.length, 2);
   assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.kind, 'native');
-  assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.body, '/new');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.kind, 'text-slash');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.commandName, 'new');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.body, '/new');
 });
 
-test('admin bare /reset in direct chat falls through to OpenClaw agent', async () => {
-  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: true });
+test('admin bare /reset in direct chat falls back to agent when OpenClaw emits no reply', async () => {
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -3273,9 +3491,13 @@ test('admin bare /reset in direct chat falls through to OpenClaw agent', async (
     scheduleSave() {},
   });
 
-  assert.equal(calls.turnRuns.length, 1);
+  // Admin callers: OpenClaw native dispatch runs first (kind=native, no
+  // reply produced), then the command falls back to the agent.
+  assert.equal(calls.turnRuns.length, 2);
   assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.kind, 'native');
-  assert.equal(calls.turnRuns[0].ctxPayload.CommandTurn?.body, '/reset');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.kind, 'text-slash');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.commandName, 'reset');
+  assert.equal(calls.turnRuns[1].ctxPayload.CommandTurn?.body, '/reset');
 });
 
 test('non-admin /bncr whoami in direct chat shows non-admin identity', async () => {

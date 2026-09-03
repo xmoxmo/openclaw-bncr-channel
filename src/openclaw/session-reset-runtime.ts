@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -12,7 +13,7 @@ type SessionResetParams = {
 type SessionResetFn = (params: SessionResetParams) => Promise<SessionResetResult>;
 
 let testOverride: SessionResetFn | null = null;
-let resolvedSessionRuntimeUrlCache: string | null = null;
+let resolvedSessionResetRuntimeCache: SessionResetFn | null = null;
 
 export function setBncrSessionResetRuntimeForTest(fn: SessionResetFn | null): () => void {
   const previous = testOverride;
@@ -22,56 +23,103 @@ export function setBncrSessionResetRuntimeForTest(fn: SessionResetFn | null): ()
   };
 }
 
-function resolveOpenClawSessionsRuntimeUrl(): string {
-  if (resolvedSessionRuntimeUrlCache) return resolvedSessionRuntimeUrlCache;
-  let current = dirname(fileURLToPath(import.meta.url));
-  let pluginRoot: string | null = null;
+function findPackageRoot(startPath: string, packageName: string): string | null {
+  let current = dirname(startPath);
   while (true) {
     const pkgPath = join(current, 'package.json');
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { name?: string };
-      if (pkg.name === '@xmoxmo/bncr') {
-        pluginRoot = current;
-        break;
-      }
+      if (pkg.name === packageName) return current;
     } catch {
-      // Keep walking up toward the plugin root.
+      // Keep walking toward the package root.
+    }
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function resolveOpenClawDistDir(): string {
+  let current = dirname(fileURLToPath(import.meta.url));
+  let resolvedOpenClawEntry: string | null = null;
+  try {
+    resolvedOpenClawEntry = createRequire(import.meta.url).resolve('openclaw');
+  } catch {
+    // Fall back to the plugin-local dependency path below.
+  }
+
+  const openClawRoot = resolvedOpenClawEntry
+    ? findPackageRoot(resolvedOpenClawEntry, 'openclaw')
+    : null;
+  if (openClawRoot) {
+    const distDir = join(openClawRoot, 'dist');
+    if (existsSync(distDir)) return distDir;
+  }
+
+  while (true) {
+    const pluginRoot = findPackageRoot(current, '@xmoxmo/bncr');
+    if (pluginRoot) {
+      const distDir = join(pluginRoot, 'node_modules', 'openclaw', 'dist');
+      if (existsSync(distDir)) return distDir;
     }
     const parent = dirname(current);
     if (parent === current) break;
     current = parent;
   }
-  if (!pluginRoot) {
-    throw new Error('bncr plugin root not found for session reset runtime');
+
+  const resolvedPath = resolvedOpenClawEntry || '(unresolved)';
+  const pluginPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    'node_modules',
+    'openclaw',
+    'dist',
+  );
+  throw new Error(
+    `OpenClaw dist directory not found (resolved entry: ${resolvedPath}; plugin fallback: ${pluginPath})`,
+  );
+}
+
+function resolveOpenClawSessionsRuntimeUrls(): string[] {
+  const distDir = resolveOpenClawDistDir();
+  if (!existsSync(distDir)) {
+    throw new Error(`OpenClaw dist directory not found: ${distDir}`);
   }
 
-  // Try candidate paths for the sessions runtime re-export file.
-  // The hash-stamped bundle name may change across OpenClaw releases, so we
-  // first try the stable re-export entry and fall back to the known hash.
-  const candidates = [
-    join(pluginRoot, 'node_modules', 'openclaw', 'dist', 'sessions.runtime.js'),
-    join(pluginRoot, 'node_modules', 'openclaw', 'dist', 'sessions.runtime-BQwwkuFq.js'),
-  ];
-  for (const target of candidates) {
-    if (existsSync(target)) {
-      resolvedSessionRuntimeUrlCache = pathToFileURL(target).href;
-      return resolvedSessionRuntimeUrlCache;
-    }
-  }
-  throw new Error(
-    `OpenClaw sessions runtime not found under ${join(pluginRoot, 'node_modules', 'openclaw', 'dist')}`,
-  );
+  // Scan dist for sessions.runtime*.js, preferring the stable re-export.
+  const candidates = readdirSync(distDir)
+    .filter((name) => /^sessions\.runtime(?:-[A-Za-z0-9_-]+)?\.js$/.test(name))
+    .sort(
+      (a, b) =>
+        Number(b === 'sessions.runtime.js') - Number(a === 'sessions.runtime.js') ||
+        a.localeCompare(b),
+    );
+  return candidates.map((name) => pathToFileURL(join(distDir, name)).href);
 }
 
 export async function performBncrGatewaySessionReset(
   params: SessionResetParams,
 ): Promise<SessionResetResult> {
   if (testOverride) return testOverride(params);
-  const mod = (await import(resolveOpenClawSessionsRuntimeUrl())) as {
-    performGatewaySessionReset?: SessionResetFn;
-  };
-  if (typeof mod.performGatewaySessionReset !== 'function') {
-    throw new Error('OpenClaw performGatewaySessionReset is unavailable');
+  if (!resolvedSessionResetRuntimeCache) {
+    const candidates = resolveOpenClawSessionsRuntimeUrls();
+    const importErrors: string[] = [];
+    for (const url of candidates) {
+      try {
+        const mod = (await import(url)) as { performGatewaySessionReset?: SessionResetFn };
+        if (typeof mod.performGatewaySessionReset === 'function') {
+          resolvedSessionResetRuntimeCache = mod.performGatewaySessionReset;
+          break;
+        }
+        importErrors.push(`${url}: export unavailable`);
+      } catch (error) {
+        importErrors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!resolvedSessionResetRuntimeCache) {
+      throw new Error(
+        `OpenClaw performGatewaySessionReset is unavailable; candidates: ${importErrors.join('; ') || '(none)'}`,
+      );
+    }
   }
-  return mod.performGatewaySessionReset(params);
+  return resolvedSessionResetRuntimeCache(params);
 }

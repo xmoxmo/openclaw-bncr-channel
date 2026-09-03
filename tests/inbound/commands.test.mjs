@@ -144,7 +144,11 @@ test('isBncrWhitelistBareCommandText does not strip @bot suffixes', () => {
   assert.equal(isBncrWhitelistBareCommandText('/model@bot gpt-5'), null);
   assert.equal(isBncrWhitelistBareCommandText('/new'), 'new');
   assert.equal(isBncrWhitelistBareCommandText('/new@bot'), null);
-  assert.equal(isBncrWhitelistBareCommandText('/stop'), 'stop');
+  assert.equal(
+    isBncrWhitelistBareCommandText('/stop'),
+    null,
+    'stop removed from whitelist—handled by isBncrStopCommandText',
+  );
   assert.equal(isBncrWhitelistBareCommandText('/stop@bot'), null);
   assert.equal(isBncrWhitelistBareCommandText('not a command'), null);
 });
@@ -334,6 +338,23 @@ test('resolveBncrNativeSessionResetCommand returns group-session reset intents',
       reason: 'reset',
       text: '✅ Session reset.',
     },
+  );
+});
+
+test('resolveBncrNativeSessionResetCommand rejects extra arguments', () => {
+  assert.equal(
+    resolveBncrNativeSessionResetCommand({
+      command: parseBncrNativeCommand('/bncr new foo'),
+      peerKind: 'direct',
+    }),
+    null,
+  );
+  assert.equal(
+    resolveBncrNativeSessionResetCommand({
+      command: parseBncrNativeCommand('/bncr reset bar'),
+      peerKind: 'group',
+    }),
+    null,
   );
 });
 

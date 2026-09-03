@@ -5,6 +5,7 @@ import {
   type HistoryEntry,
   type HistoryMediaEntry,
 } from 'openclaw/plugin-sdk/reply-history';
+import { normalizeAccountId } from '../../core/accounts.ts';
 import { formatOpenClawAgentEnvelope } from '../../openclaw/reply-runtime.ts';
 import type { BncrInboundApi } from './contracts.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
@@ -87,31 +88,51 @@ export function resolveBncrHistoryLimit(historyLimit?: number): number {
   return resolved >= 2 ? resolved : DEFAULT_HISTORY_LIMIT;
 }
 
-export function buildBncrConversationHistoryKey(parsed: ParsedInbound): string | null {
+export function buildBncrConversationHistoryKey(
+  parsed: ParsedInbound,
+  options?: { accountId?: string | null },
+): string | null {
   const platform = String(parsed.platform || '').trim();
   if (!platform) return null;
+  const accountId = normalizeAccountId(options?.accountId ?? parsed.accountId);
   if (parsed.peer.kind === 'group') {
     const groupId = String(parsed.groupId || '').trim();
     if (!groupId || groupId === '0') return null;
-    return `${platform}:${groupId}`;
+    return `${accountId}:${platform}:${groupId}`;
   }
   const userId = String(parsed.userId || '').trim();
   if (!userId || userId === '0') return null;
-  return `${platform}:${userId}`;
+  return `${accountId}:${platform}:${userId}`;
 }
 
 export function buildBncrConversationHistoryKeyFromRoute(args: {
+  accountId?: string | null;
   platform?: string;
   groupId?: string;
   userId?: string;
 }): string | null {
   const platform = String(args.platform || '').trim();
   if (!platform) return null;
+  const accountId = normalizeAccountId(args.accountId);
   const groupId = String(args.groupId || '0').trim() || '0';
   const userId = String(args.userId || '0').trim() || '0';
-  if (groupId !== '0') return `${platform}:${groupId}`;
-  if (userId !== '0') return `${platform}:${userId}`;
+  if (groupId !== '0') return `${accountId}:${platform}:${groupId}`;
+  if (userId !== '0') return `${accountId}:${platform}:${userId}`;
   return null;
+}
+
+/**
+ * Extract the scene key (platform:userId or platform:groupId) from a history
+ * key that may contain an accountId prefix. Legacy scene-only keys pass
+ * through unchanged.
+ */
+export function resolveBncrSceneKeyFromHistoryKey(historyKey: string): string {
+  const key = String(historyKey || '').trim();
+  const firstColon = key.indexOf(':');
+  if (firstColon > 0 && key.indexOf(':', firstColon + 1) !== -1) {
+    return key.slice(firstColon + 1);
+  }
+  return key;
 }
 
 export function resolveBncrConversationHistoryMessageId(parsed: ParsedInbound): string | undefined {

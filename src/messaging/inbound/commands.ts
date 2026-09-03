@@ -120,8 +120,49 @@ export async function handleBncrNativeCommand(params: {
 
   // Stop always goes through the unified stop fast path in dispatch.ts.
   // It is not a bncr native command and must never be processed here.
-  if (isBncrStopCommandText(extracted.text)) {
-    return { handled: false };
+  // Only exact `/stop` is accepted; any other `/stop*` form is rejected.
+  const rawStopText = String(extracted.text || '')
+    .trim()
+    .toLowerCase();
+  if (rawStopText.startsWith('/stop')) {
+    if (isBncrStopCommandText(extracted.text)) {
+      return { handled: false };
+    }
+    // Non-exact `/stop` forms (extra args, @bot suffix, or other extension)
+    // are rejected immediately so they never reach the agent.
+    const rejectedRoute = buildBncrNativeCommandResolvedRoute({
+      api,
+      cfg,
+      channelId,
+      accountId,
+      peer,
+      resolvedAgentId,
+    });
+    const { baseSessionKey, sessionKey } = buildBncrNativeCommandSessionState({
+      parsed,
+      sessionAgentId: rejectedRoute.agentId || canonicalAgentId,
+      resolvedRoute: rejectedRoute,
+    });
+    logBncrNativeCommandSummary(
+      buildBncrNativeCommandSummary({
+        kind: 'stop',
+        command: rawStopText,
+        accountId,
+        to: formatDisplayScope(route),
+        msgId: msgId || null,
+        result: 'rejected',
+      }),
+    );
+    await enqueueFromReply({
+      accountId,
+      sessionKey: baseSessionKey,
+      route,
+      payload: {
+        text: 'Only exact /stop is supported. Send /stop to stop.',
+        replyToId: msgId || undefined,
+      },
+    });
+    return { handled: true, command: 'stop', sessionKey };
   }
 
   const whitelistBareCommand =

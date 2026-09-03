@@ -1,25 +1,8 @@
-# bncr
+# Bncr
 
-OpenClaw 的 Bncr 频道插件（`channelId=bncr`）。
+OpenClaw 的 Bncr 频道插件，用于将 Bncr / 无界客户端接入 OpenClaw，实现消息收发、媒体传输和会话管理。
 
-作用很简单：把 **Bncr / 无界客户端** 接到 **OpenClaw 网关**，用于消息双向通信与媒体/文件传输。
-
-> 当前定位说明：bncr **不是 agent**。它保留既有 **WS 接入链路** 作为 transport / 通信承载，
-> 在 OpenClaw 内部则按 **正式频道插件（channel plugin）** 建模。
-
----
-
-## 1. 这是什么
-
-- 一个 OpenClaw 的正式频道插件
-- 负责把 Bncr / 无界客户端接入 OpenClaw
-- 负责消息、媒体、文件与基础状态链路
-
----
-
-## 2. 安装方式
-
-### OpenClaw 侧
+## 安装
 
 ```bash
 openclaw plugins install @xmoxmo/bncr
@@ -27,397 +10,222 @@ openclaw plugins enable bncr
 openclaw gateway restart
 ```
 
-### 升级插件
+升级插件：
 
 ```bash
 openclaw plugins update bncr
 openclaw gateway restart
 ```
 
-> 兼容范围：`openclaw >= 2026.5.27`
->
-> 如果你是从精确版本升级，或本地安装记录仍钉在旧版本，也可以显式执行：
->
-> ```bash
-> openclaw plugins install @xmoxmo/bncr@latest
-> openclaw gateway restart
-> ```
+当前兼容 `OpenClaw >= 2026.8.1`。
 
-### Bncr / 无界侧
+## 客户端接入
 
-安装：
-
-- `openclawclient.js`
-
-然后完成客户端配置并连上 OpenClaw 网关即可。
-
----
-
-## 3. 客户端接入流程（最简）
-
-1. 在客户端插件配置中，将 **OpenClaw Token** 填写为 **gateway token**，并正确填写 host / port / ssl 后启用插件。
-2. 启动（或重启）bncr 客户端后，在 OpenClaw 侧执行：
+1. 安装并启用 `openclawclient.js`。
+2. 在客户端填写 OpenClaw 网关地址、端口、SSL 和 gateway token。
+3. 启动客户端，等待设备连接请求。
+4. 在 OpenClaw 上批准设备：
 
 ```bash
 openclaw devices approve --latest
 ```
 
-完成后，客户端会使用自己的身份并自动保存后续授权。
+设备批准后，客户端会保存授权信息并自动重连。
 
----
+## 基础配置
 
-## 4. 当前能力
+配置位于 `channels.bncr`。最小配置：
 
-- 文本
-- 图片
-- 视频
-- 语音
-- 音频
-- 文件
-- 下行推送
-- ACK
-- 离线消息排队
-- 重连后继续发送
-- 状态诊断
-- 文件互传
-
-### 0.6.1 新增说明
-
-- `bncr.outbound.recent`：本地 bridge 方法，可直接查询最近的出站记录；该记录来自出站重放缓存，不额外维护一份独立最近出站存储。
-- 出站重放缓存：最近出站消息会在下轮入站上下文回灌时带给 agent，用于让 agent 知道自己刚发过什么；查询和回灌共享同一份 `outboundReplayCache`。
-- bridge 方法调用：`message` 工具支持传入 `bridgeMethod`，可调用插件本地方法（如 `bncr.status.*`、`bncr.outbound.recent`）或转发到 OpenClawClient RPC。
-- unsend / delete：`message` 工具支持撤回/删除动作，按发送缓存映射回真实平台消息，不需要业务侧单独拼平台 message id。
-
-补充口径：
-
-- 入站会话按正式 scene / route 语义接入 OpenClaw，区分私聊与群聊会话。
-
-#### 私聊管理员
-
-- 不受白名单约束。裸发命令（如 `/whoami`、`/status`、`/new`、`/reset`、`/verbose`、`/model`）直接转发 OpenClaw/agent 处理，bncr 不拦截。
-- `/bncr xxx` 由 bncr 插件解析处理（admin 权限）。
-- 裸发 `/whoami` 与 `/bncr whoami` 由不同处理器响应，结果可能不同。
-
-#### 私聊非管理员
-
-- 白名单裸发命令 `/whoami`、`/status`、`/verbose`、`/model` 会临时提权为 admin 后注入 OpenClaw 原生命令解析器处理，即使解析失败也不 fallback 到 agent。
-- 白名单裸发命令 `/new`、`/reset` 会临时提权为 admin 后由 bncr 本地执行会话重置，不 fallback 到 agent。
-- `/stop` 不经过 bncr 原生命令处理器，所有调用者统一走会话级 stop 快速路径；私聊非管理员在该路径下注入 owner 权限后交给 OpenClaw 处理，不 fallback 到 agent。
-- 非白名单裸发命令（如 `/allow`、`/mode`）以调用者自身身份交给 OpenClaw/agent 处理，允许 fallback 到 agent。
-- `/bncr` 前缀命令由 bncr 插件按非管理员权限处理，可用的子命令为：`whoami`、`status`、`new`、`reset`、`verbose`、`history-help`、`history-limit`、`history-force`、`download-media`。
-- `/bncr` 未知子命令（含 `/bncr stop`）→ 直接拒绝，不转发 agent。
-- 非管理员私聊执行 self-admin 命令（`history-*`、`download-media`）时，如传入 `sceneId` 参数，仅允许控制当前私聊会话，传入其他会话 ID 会被拒绝。
-
-#### 群聊
-
-- 管理员：`/bncr xxx` 由 bncr 插件解析处理（admin 权限），裸发命令放行给 OpenClaw/agent。
-- 非管理员：裸发 `/whoami` 由 bncr 拦截返回身份；其余裸发命令放行给 OpenClaw/agent。
-- 非管理员执行场景管理命令（`mode`、`history-help`、`history-limit`、`history-force`、`download-media`、`allow`、`deny`、`bind`、`revoke`、`list`）时，统一返回 `Admin permission required.`，不再附带用法提示。
-- 非管理员执行 `/bncr new`、`/bncr reset`、`/bncr verbose` 时仍按静默拒绝处理。
-
-#### 其他
-
-- `/bncr list pending` 与 `/bncr list scenes` 采用按私聊 / 群聊分组的摘要展示格式，便于现场排查 scene 状态。
-
-### `/bncr help` 权限过滤
-
-`/bncr help` 现在按当前身份动态展示：
-
-- 管理员：展示全部命令
-- 私聊非管理员：展示当前可用命令，不展示管理类命令
-- 群聊非管理员：仅展示 `/bncr whoami`、`/bncr status`，不展示 `new`、`reset`、`verbose`、`mode`、`history-*`、`download-media` 等命令
-
-示例：
-
-管理员：
-
-```text
-🦞 Bncr command usage
-
-📌 Bncr builtins
-  • /bncr whoami
-  • /bncr status
-  • /bncr new
-  • /bncr reset
-  • /bncr verbose on|off|full
-
-🛡 Scene approval
-  • /bncr allow [<SceneId>]
-  • /bncr deny [<SceneId>]
-  • /bncr bind <agentId> [<SceneId>]
-  • /bncr mode help
-  • /bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]
-  • /bncr revoke [<SceneId>]
-  • /bncr list pending [filters...]
-  • /bncr list scenes [filters...]
-
-📋 Conversation history
-  • /bncr history-help
-  • /bncr history-limit [<number>|clear] [<SceneId>]
-  • /bncr history-force on|off|clear [<SceneId>]
-
-🌐 Remote media
-  • /bncr download-media on|off|clear|default on|off [<SceneId>]
+```json
+{
+  "channels": {
+    "bncr": {
+      "enabled": true,
+      "allowTool": false,
+      "outboundRequireAck": true
+    }
+  }
+}
 ```
 
-私聊非管理员：
+常用配置：
 
-```text
-🦞 Bncr command usage
+| 配置 | 说明 |
+| --- | --- |
+| `enabled` | 是否启用 Bncr 频道 |
+| `dmPolicy` | 私聊策略：`open`、`allowlist`、`disabled` |
+| `groupPolicy` | 群聊策略：`open`、`allowlist`、`disabled` |
+| `allowFrom` | 私聊允许的用户列表 |
+| `groupAllowFrom` | 群聊允许的用户列表 |
+| `allowTool` | 是否转发工具消息，默认关闭 |
+| `outboundRequireAck` | 出站文本是否等待客户端 ACK，默认开启 |
+| `accounts` | 多账号配置 |
+| `debug.verbose` | 是否输出详细调试日志 |
 
-📌 Bncr builtins
-  • /bncr whoami
-  • /bncr status
-  • /bncr new
-  • /bncr reset
-  • /bncr verbose on|off|full
+多账号示例：
 
-📋 Conversation history
-  • /bncr history-help
-  • /bncr history-limit [<number>|clear] [<SceneId>]
-  • /bncr history-force on|off|clear [<SceneId>]
-
-🌐 Remote media
-  • /bncr download-media on|off|clear|default on|off [<SceneId>]
+```json
+{
+  "channels": {
+    "bncr": {
+      "accounts": {
+        "Primary": { "enabled": true, "name": "主账号" },
+        "Secondary": { "enabled": true, "name": "备用账号" }
+      }
+    }
+  }
+}
 ```
 
-群聊非管理员：
-
-```text
-🦞 Bncr command usage
-
-📌 Bncr builtins
-  • /bncr whoami
-  • /bncr status
-```
-
----
-
-## 5. 架构定位
-
-bncr 当前采用两层模型：
-
-1. **WS 承载层**
-   - Bncr 客户端通过 WebSocket 接入 OpenClaw 网关
-   - 负责连接、推送、ACK、文件分块等 transport 能力
-
-2. **OpenClaw 频道插件层**
-   - 在 OpenClaw 内部按正式 `channel plugin` 建模
-   - 负责入站解析、消息分发、出站适配、状态与治理
-
-出站可靠投递的边界：bncr 后面仍有自己的服务框架和 outbox / ACK / retry / deadLetter 体系。对 OpenClaw 宿主来说，消息成功交给 bncr 插件并进入 bncr 自管 outbox，即表示频道 handoff 完成；这不等价于客户端 ACK 或目标平台最终送达。后续可靠投递由 bncr 自身负责。
-
-当前已注册生产 `channel.message` 作为 bncr 的频道专用 handoff adapter：`text` / `media` / `payload` 会转换为 bncr outbox entry。原有通用 `message.send` / `channel.actions.send` 发送能力继续保留；`channel.message` 是频道专用入口，不替代通用发送入口。该 adapter 仍不启用 `durableFinal`；进入 outbox 后的客户端 ACK、目标平台送达、retry、deadLetter 继续由 bncr 服务框架负责。
-
-当前代码结构：
-
-```text
-plugins/bncr/src/
-  channel.ts
-  core/
-  messaging/
-```
-
----
-
-## 6. 配置项总览
-
-当前主要配置字段：
-
-- `enabled`
-- `dmPolicy`
-- `groupPolicy`
-- `allowFrom`
-- `groupAllowFrom`
-- `outboundRequireAck`
-- `requireMention`
-- `accounts`
-
-补充：
-
-- `dmPolicy` / `groupPolicy` 支持：`open | allowlist | disabled`
-- `outboundRequireAck` 是当前**单账号场景**使用的顶层字段：`channels.bncr.outboundRequireAck`
-- `outboundRequireAck=true` 时，文本外发会等待 `bncr.ack` 再出队；关闭后不再强制等待文本 ACK，超时类错误会显示为 `push-delivery-unconfirmed`
-- `requireMention` 当前仍是保留字段
-
----
-
-## 7. 媒体发送（OpenClaw 2026.5.18 验证适用）
-
-当前有两种常见媒体发送方式，它们都属于 OpenClaw 标准能力，但**不是同一条实现链路**。
-
-### 方式 A：Agent 回复中的 `MEDIA:<path>`
-
-适用场景：
-
-- agent 在当前会话中直接回附件
-- 由宿主 reply-media / outbound attachment 链统一处理
-
-示例：
-
-```text
-MEDIA:/root/.openclaw/workspace/tmp/demo.png
-```
-
-说明：
-
-- 这条链先经过 OpenClaw 宿主的 `reply-media-paths` / `loadWebMedia` 预处理
-- 本地文件是否允许发送，取决于宿主侧的路径准入与 MIME / 类型白名单
-- 在 `2026.5.18` 口径下，`MEDIA:` 是否成功，**不能直接等价**为 bncr 插件自身的 file-transfer 是否成功
-
-### 方式 B：动作发送链（`message.action` / `send`）
-
-适用场景：
-
-- 需要显式指定目标会话 / 路由
-- 需要验证 OpenClaw 动作发送接口到 bncr channel 的下行链路
-
-示例：
+也可以使用命令生成最小配置：
 
 ```bash
-openclaw gateway call message.action --params '{
-  "channel": "bncr",
-  "action": "send",
-  "accountId": "Primary",
-  "idempotencyKey": "bncr-media-demo-1",
-  "params": {
-    "to": "Bncr:tgBot:-1001:10001",
-    "caption": "图片发送测试",
-    "path": "/root/.openclaw/workspace/tmp/demo.png"
-  }
-}'
+openclaw bncr miniconfig
 ```
 
-说明：
+## 支持的能力
 
-- 这是 OpenClaw 标准动作发送接口，不是 bncr 私有命令
-- 这条链与 `MEDIA:` 的宿主 reply-media 预处理链不同
-- 联调时建议把两条链分开验证，避免把宿主准入问题误判成 bncr 文件传输问题
+- 文本消息
+- 图片、视频、音频和语音
+- 文件传输和媒体附件
+- 消息撤回和删除
+- 离线排队、ACK、重试和重连
+- 多账号、私聊和群聊会话
+- 会话历史上下文
+- 状态和投递诊断
 
-### 2026.5.18 验证说明
+Agent 可以使用 OpenClaw 标准消息能力发送文本或媒体。需要指定目标会话时，使用 Bncr 目标地址并同时指定 `accountId`。
 
-以下口径已在 OpenClaw `2026.5.18` 上完成验证，当前建议把媒体问题拆成两类看：
+## 命令
 
-1. `MEDIA:<path>` 失败：优先检查宿主 reply-media / MIME 白名单 / 本地路径准入
-2. `message.action` 失败：优先检查动作 envelope、目标 `to`、bncr 出站 push/ack 与 file-transfer 日志
+### 基础命令
 
-后续如果在其他 OpenClaw 版本上完成验证，应继续在本节追加对应版本的验证过程与结论，不直接外推复用 `2026.5.18` 的验证口径。
+```text
+/bncr help
+/bncr whoami
+/bncr status
+/bncr new
+/bncr reset
+/bncr verbose on|off|full
+/stop
+```
 
-### 2026.6.1 验证说明
+`/stop` 只支持精确写法，不支持 `/stop@bot`、`/stop extra` 等变体。
 
-以下口径已在 OpenClaw `2026.6.1` 与 bncr `0.3.2` 上完成基础验证：
+### 场景管理
 
-1. 普通文本入站与 assistant 文本回复正常。
-2. Agent 回复中的图片附件可通过 `MEDIA:<path>` 投递。
-3. Agent 回复中的 `ogg(opus)` voice 附件可通过 `MEDIA:<path>` 搭配 voice 发送提示投递。
-4. 入站 prompt 中只出现 OpenClaw 官方 `Conversation info` / `Sender` untrusted metadata，未重复注入 bncr 自定义 context block。
+```text
+/bncr allow [<SceneId>]
+/bncr deny [<SceneId>]
+/bncr bind <agentId> [<SceneId>]
+/bncr revoke [<SceneId>]
+/bncr list pending [filters...]
+/bncr list scenes [filters...]
+/bncr mode help
+/bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]
+```
 
-仍需分开判断：
+### 会话历史
 
-- `MEDIA:<path>` 成功代表宿主 reply-media / attachment 链路和 bncr 下行媒体投递在该场景下可用。
-- `message.action` / `send` 仍应作为显式目标发送链单独验证，特别是跨会话、跨账号、文件传输 ACK 与 outbox 重试场景。
+```text
+/bncr history-help
+/bncr history-limit [<number>|clear] [<SceneId>]
+/bncr history-force on|off|clear [<SceneId>]
+```
 
----
+会话历史统一累计用户消息和 Bot 回复，默认窗口为 50 条。达到上限后会在后续消息到达时整理并发送历史上下文。
 
-## 8. 状态与诊断
+### 远程媒体
 
-常用检查：
+```text
+/bncr download-media on|off|clear|default on|off [<SceneId>]
+```
+
+## 权限规则
+
+管理员可以使用全部 Bncr 命令。管理员发送的裸命令优先交给 OpenClaw 原生命令处理，未处理时才允许交给 Agent；`/bncr` 命令由 Bncr 处理。
+
+非管理员的权限按会话类型区分：
+
+- 私聊允许正常对话；`/whoami`、`/status`、`/new`、`/reset`、`/stop`、`/model`、`/verbose` 等受控命令按对应规则执行，不会以提升后的身份转交 Agent。
+- 群聊受当前场景模式控制。未授权场景不会进入正常处理流程。
+- `/bncr` 命令始终由 Bncr 识别；未知或不可用的 Bncr 命令会直接提示，不会转交 Agent。
+- `/bncr help` 会根据当前会话类型和权限，仅展示当前可用的命令。
+- 私聊非管理员使用 `history-*` 或 `download-media` 时，只能操作当前私聊会话，不能通过参数修改其他会话。
+
+## 群聊模式
+
+```text
+/bncr mode admin
+/bncr mode mention
+/bncr mode hybrid
+/bncr mode all
+/bncr mode clear
+```
+
+| 模式 | 说明 |
+| --- | --- |
+| `admin` | 仅管理员消息触发 |
+| `mention` | 需要明确提及 Bot |
+| `hybrid` | 按管理员或提及条件处理 |
+| `all` | 处理群内符合接入条件的消息 |
+| `clear` | 清除当前场景的自定义模式 |
+
+新群聊默认需要管理员授权。管理员可以使用 `/bncr allow`、`/bncr deny`、`/bncr bind` 和 `/bncr revoke` 管理场景。
+
+## 检查状态
 
 ```bash
 openclaw gateway status
-openclaw health --json
+openclaw gateway health
+openclaw bncr --help
 ```
 
-重点看：
+如需查看 Bncr 运行状态，可使用 `/bncr status`。如需排查连接、ACK、队列或媒体问题，再开启 `channels.bncr.debug.verbose` 后重启网关。
 
-- `linked`
-- `pending`
-- `deadLetter`
-- diagnostics / probe / status 摘要
-- diagnostics 里的 `runtimeFlags.outboundRequireAck`
-- diagnostics 里的 `runtimeFlags.ackPolicySource`
-- diagnostics 里的 `waiters.messageAck` / `waiters.fileAck`
+## 目标地址
 
----
+发送到指定会话时使用以下形式：
 
-## 9. 常见安装/加载问题
+```text
+Bncr:<platform>:0:<userId>
+Bncr:<platform>:<groupId>:0
+```
 
-### 报错：`Cannot find module 'openclaw/plugin-sdk/core'`
+示例：
 
-这通常不是 bncr 没装上，而是：
+```text
+Bncr:tgBot:0:10001
+Bncr:tgBot:-1001234567890:0
+```
 
-- bncr 已经安装到 `~/.openclaw/extensions/bncr`
-- 但插件目录当前解析不到宿主 `openclaw` 包
-- 因而在加载 `openclaw/plugin-sdk/core` 时失败
+私聊目标使用用户 ID，群聊目标使用群 ID。多账号场景同时指定 `accountId`，避免不同账号之间串用会话或连接。
 
-bncr 0.1.1 会先尝试自动修复插件目录下的 `node_modules/openclaw` 解析链；如果仍失败，可手动执行：
+## 常见问题
+
+### 客户端无法连接
+
+确认 gateway token、网关地址、端口和 SSL 配置正确，并执行：
 
 ```bash
-mkdir -p ~/.openclaw/extensions/bncr/node_modules
-ln -s "$(npm root -g)/openclaw" ~/.openclaw/extensions/bncr/node_modules/openclaw
+openclaw devices approve --latest
 openclaw gateway restart
-openclaw plugins inspect bncr
 ```
 
-如果 `npm root -g` 指向的不是实际宿主位置，请先检查：
+### 消息没有发出
 
-```bash
-which openclaw
-npm root -g
+检查网关、客户端和 Bncr 状态，确认客户端在线，并查看 ACK 与队列状态。
+
+### 媒体发送失败
+
+确认文件路径可被 OpenClaw 访问，文件类型受宿主和客户端支持，并检查客户端文件传输状态。
+
+### 群聊没有响应
+
+检查场景是否已授权、当前群聊模式以及消息是否满足触发条件：
+
+```text
+/bncr status
+/bncr list scenes
+/bncr mode
 ```
-
-然后把 `openclaw` 的真实安装目录软链接到 `~/.openclaw/extensions/bncr/node_modules/openclaw`。
-
-## 10. 自检与测试
-
-```bash
-cd plugins/bncr
-npm run fullcheck
-npm test
-npm run typecheck
-npm run selfcheck
-npm run check-pack
-npm pack
-```
-
-用途：
-
-- `npm run fullcheck`：运行当前全量门禁（`typecheck + check + test + selfcheck + check-pack + format:check`）
-- `npm test`：跑回归测试
-- `npm run typecheck`：执行 `tsconfig.typecheck.json`，确保类型边界与 OpenClaw surface 对齐
-- `npm run selfcheck`：检查插件骨架是否完整，并验证关键 OpenClaw SDK subpath 可解析
-- `npm run check-pack`：执行 `npm pack --dry-run --json`，确认发布包包含关键入口与 OpenClaw adapter 文件
-- `tests/integrity/source-manifest.test.mjs`：确保 `selfcheck` / `check-pack` 的源文件清单与当前 `src/**/*.ts` 一致，新增源文件不会漏进发布清单
-- `npm run format:check`：执行 Biome `format` 只读检查（不带 `--write`），防止格式漂移混进发布门禁
-- `npm pack`：确认当前版本可正常打包
-- `npm run check-register-drift -- --duration-sec 300 --interval-sec 15`：静置采样 `bncr.diagnostics`，观察 `registerCount / apiGeneration / postWarmupRegisterCount` 是否在 warmup 后继续增长
-
-示例输出重点：
-
-- `delta.registerCount`
-- `delta.apiGeneration`
-- `delta.postWarmupRegisterCount`
-- `historicalWarmupExternalDrift`
-- `newDriftDuringWindow`
-- `last.postWarmupRegisterCount`
-- `last.unexpectedRegisterAfterWarmup`
-- `driftDetected`
-
----
-
-## 11. 上线前检查
-
-上线前建议至少确认：
-
-- README 与当前实现一致
-- **隐私清理**：测试/示例/日志中的 scope、ID、账号等做去标识化（必要时用占位值）
-- 配置 schema 与实际字段一致
-- 测试通过
-- 自检通过
-- 可以正常打包
-- 本地版本号与 npm / 发布目标一致（版本号修改应优先在工作仓完成，再同步到发布仓）
-- 运行态 `linked / pending / deadLetter` 正常
-
----
-
-如果你接触过旧版本，请以当前 README 和当前代码为准。

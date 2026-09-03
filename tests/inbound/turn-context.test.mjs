@@ -107,7 +107,7 @@ test('buildBncrInboundTurnContext replays pending group text and image history i
       body: 'ENV:@bot summarize',
       mediaItems: [],
     },
-    conversationHistories: new Map([['tgBot:-1001', historyEntries1]]),
+    conversationHistories: new Map([['Primary:tgBot:-1001', historyEntries1]]),
     pendingHistoryEntries: historyEntries1,
     shouldDispatch: true,
   });
@@ -212,7 +212,7 @@ test('buildBncrInboundTurnContext replays pending non-image media markers withou
       body: 'ENV:@bot summarize media',
       mediaItems: [],
     },
-    conversationHistories: new Map([['tgBot:-1001', historyEntries2]]),
+    conversationHistories: new Map([['Primary:tgBot:-1001', historyEntries2]]),
     pendingHistoryEntries: historyEntries2,
     shouldDispatch: true,
   });

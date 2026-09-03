@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildBncrConversationHistoryKey,
   clearBncrPendingConversationHistory,
   readBncrPendingConversationHistorySnapshot,
   readConversationHistoryVersion,
@@ -11,6 +12,7 @@ import {
   removeBncrConversationHistoryMessageIds,
   resetConversationHistoryVersions,
   resolveBncrHistoryLimit,
+  resolveBncrSceneKeyFromHistoryKey,
 } from '../../src/messaging/inbound/conversation-history.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
 
@@ -41,6 +43,31 @@ test('resolveBncrHistoryLimit treats zero and invalid values as the default wind
   assert.equal(resolveBncrHistoryLimit(12.8), 12);
 });
 
+test('conversation history key isolates non-default accounts via accountId prefix', () => {
+  const primary = makeDirectParsed('key-account-1', 'hello');
+  const secondary = parseBncrInboundParams({
+    accountId: 'Secondary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    isGroup: false,
+    type: 'text',
+    msg: 'hello',
+    mimeType: 'text/plain',
+    msgId: 'key-account-2',
+  });
+
+  assert.equal(buildBncrConversationHistoryKey(primary), 'Primary:tgBot:10001');
+  assert.equal(buildBncrConversationHistoryKey(secondary), 'Secondary:tgBot:10001');
+});
+
+test('resolveBncrSceneKeyFromHistoryKey strips account prefixes and preserves legacy keys', () => {
+  assert.equal(resolveBncrSceneKeyFromHistoryKey('Primary:tgBot:10001'), 'tgBot:10001');
+  assert.equal(resolveBncrSceneKeyFromHistoryKey('Secondary:tgBot:-1001'), 'tgBot:-1001');
+  assert.equal(resolveBncrSceneKeyFromHistoryKey('tgBot:10001'), 'tgBot:10001');
+});
+
 test('conversation history records with historyLimit zero use the default window', () => {
   const historyMap = new Map();
   const parsed = makeDirectParsed('zero-limit-user-1', 'hello');
@@ -55,7 +82,7 @@ test('conversation history records with historyLimit zero use the default window
   });
   recordBncrBotReply({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot reply',
@@ -63,7 +90,7 @@ test('conversation history records with historyLimit zero use the default window
     historyLimit: 0,
   });
 
-  const entries = historyMap.get('tgBot:10001') ?? [];
+  const entries = historyMap.get('Primary:tgBot:10001') ?? [];
   assert.equal(entries.length, 2);
   assert.equal(entries[0].role, 'user');
   assert.equal(entries[1].role, 'assistant');
@@ -93,7 +120,7 @@ test('conversation history read and clear with historyLimit zero use the default
     parsed,
     historyLimit: 0,
   });
-  assert.deepEqual(historyMap.get('tgBot:10001'), []);
+  assert.deepEqual(historyMap.get('Primary:tgBot:10001'), []);
 });
 
 test('conversation history assigns stable synthetic ids for missing platform message ids', () => {
@@ -137,14 +164,14 @@ test('conversation history assigns stable synthetic ids for missing platform mes
   assert.match(textMessageId, /^bncr-synthetic:/);
   assert.match(mediaMessageId, /^bncr-synthetic:/);
   assert.notEqual(textMessageId, mediaMessageId);
-  assert.equal(historyMap.get('tgBot:10001')?.[1]?.media?.[0]?.messageId, mediaMessageId);
+  assert.equal(historyMap.get('Primary:tgBot:10001')?.[1]?.media?.[0]?.messageId, mediaMessageId);
 
   removeBncrConversationHistoryMessageIds({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     messageIds: [textMessageId, mediaMessageId],
   });
-  assert.deepEqual(historyMap.get('tgBot:10001'), []);
+  assert.deepEqual(historyMap.get('Primary:tgBot:10001'), []);
 });
 
 test('identical messages without platform ids are retained as distinct entries', () => {
@@ -173,7 +200,7 @@ test('bot replies without platform message ids get stable synthetic history ids'
 
   const first = recordBncrBotReply({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot reply without platform id',
@@ -182,7 +209,7 @@ test('bot replies without platform message ids get stable synthetic history ids'
   });
   const duplicate = recordBncrBotReply({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot reply without platform id',
@@ -192,22 +219,22 @@ test('bot replies without platform message ids get stable synthetic history ids'
 
   assert.equal(first, true);
   assert.equal(duplicate, false);
-  const entry = historyMap.get('tgBot:10001')?.[0];
+  const entry = historyMap.get('Primary:tgBot:10001')?.[0];
   assert.match(entry.messageId, /^bncr-synthetic:/);
   assert.equal(entry.media?.[0]?.messageId, entry.messageId);
 
   removeBncrConversationHistoryMessageIds({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     messageIds: [entry.messageId],
   });
-  assert.deepEqual(historyMap.get('tgBot:10001'), []);
+  assert.deepEqual(historyMap.get('Primary:tgBot:10001'), []);
 });
 
 test('history snapshot backfills stable synthetic ids for legacy bot entries without ids', () => {
   const historyMap = new Map([
     [
-      'tgBot:10001',
+      'Primary:tgBot:10001',
       [
         {
           sender: 'OpenClaw',
@@ -225,7 +252,7 @@ test('history snapshot backfills stable synthetic ids for legacy bot entries wit
   });
   const messageId = snapshot[0]?.messageId;
   assert.match(messageId, /^bncr-synthetic:/);
-  assert.equal(historyMap.get('tgBot:10001')?.[0]?.messageId, messageId);
+  assert.equal(historyMap.get('Primary:tgBot:10001')?.[0]?.messageId, messageId);
 });
 
 test('conversation history version increments only for new writes and clears', () => {
@@ -238,33 +265,33 @@ test('conversation history version increments only for new writes and clears', (
     senderId: '10001',
     bodyText: 'hello',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 1);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 1);
 
   recordBncrBotReply({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot hello',
     messageId: 'version-bot-1',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 2);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
 
   recordBncrBotReply({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot hello',
     messageId: 'version-bot-1',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 2);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
 
   clearBncrPendingConversationHistory({
     historyMap,
     parsed: makeDirectParsed('version-user-1', 'hello'),
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 3);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 3);
 });
 
 test('snapshot cleanup removal does not advance history version', () => {
@@ -278,22 +305,22 @@ test('snapshot cleanup removal does not advance history version', () => {
   });
   recordBncrBotReply({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot hello',
     messageId: 'cleanup-version-bot-1',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 2);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
 
   removeBncrConversationHistoryMessageIds({
     historyMap,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     messageIds: ['cleanup-version-user-1', 'cleanup-version-bot-1'],
   });
 
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 2);
-  assert.deepEqual(historyMap.get('tgBot:10001'), []);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
+  assert.deepEqual(historyMap.get('Primary:tgBot:10001'), []);
 });
 
 test('conversation history version resets when persisted history is replaced', () => {
@@ -306,8 +333,8 @@ test('conversation history version resets when persisted history is replaced', (
     senderId: '10001',
     bodyText: 'hello',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 1);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 1);
 
   resetConversationHistoryVersions(historyMap);
-  assert.equal(readConversationHistoryVersion(historyMap, 'tgBot:10001'), 0);
+  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 0);
 });

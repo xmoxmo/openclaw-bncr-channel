@@ -270,7 +270,11 @@ const channelMessageChecks = {
 const channelMessageOk = Object.values(channelMessageChecks).every(Boolean);
 
 const result = {
-  ok: missing.length === 0 && pkg.peerDependencies?.openclaw === '>=2026.5.27' && channelMessageOk,
+  ok:
+    missing.length === 0 &&
+    pkg.peerDependencies?.openclaw === pkg.devDependencies?.openclaw &&
+    pkg.peerDependencies?.openclaw === `>=${pkg.openclaw?.compat?.minGatewayVersion}` &&
+    channelMessageOk,
   package: pack?.id,
   entryCount: pack?.entryCount,
   missing,

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, rename } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
 import {
   dumpRegisterDriftSnapshot,
   normalizeRegisterDriftSnapshot,
@@ -12,6 +13,7 @@ import {
   buildBncrConversationHistoryKeyFromRoute,
   resetConversationHistoryVersions,
   resolveBncrHistoryLimit,
+  resolveBncrSceneKeyFromHistoryKey,
 } from '../messaging/inbound/conversation-history.ts';
 import {
   getConversationHistorySerialOwner,
@@ -50,6 +52,35 @@ import type {
 
 const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
 const DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT = 50;
+
+/**
+ * Migrate legacy scene-only history keys (`tgBot:10001`) to the current
+ * account-scoped format (`Primary:tgBot:10001`). Keys that already carry an
+ * accountId prefix are returned unchanged.
+ */
+function normalizePersistedHistoryKey(key: string): string {
+  const raw = String(key || '').trim();
+  if (!raw) return raw;
+  const firstColon = raw.indexOf(':');
+  const secondColon = raw.indexOf(':', firstColon + 1);
+  if (firstColon <= 0 || secondColon < 0) return `${BNCR_DEFAULT_ACCOUNT_ID}:${raw}`;
+  return `${normalizeAccountId(raw.slice(0, firstColon))}:${raw.slice(firstColon + 1)}`;
+}
+
+function resolvePersistedHistoryAccountId(key: string): string {
+  const normalized = normalizePersistedHistoryKey(key);
+  const separator = normalized.indexOf(':');
+  return separator > 0
+    ? normalized.slice(0, separator).trim() || BNCR_DEFAULT_ACCOUNT_ID
+    : BNCR_DEFAULT_ACCOUNT_ID;
+}
+
+function resolvePersistedHistoryKey(key: string, accountId: string): string {
+  const normalized = normalizePersistedHistoryKey(key);
+  const separator = normalized.indexOf(':');
+  const sceneKey = separator > 0 ? normalized.slice(separator + 1) : normalized;
+  return `${normalizeAccountId(accountId)}:${sceneKey}`;
+}
 
 type BncrPersistedStateStoreInput = {
   outbox?: unknown;
@@ -165,7 +196,8 @@ export function createBncrStateStore(runtime: {
   }
 
   function resolvePersistedConversationHistoryLimit(key: string): number {
-    const scene = runtime.sceneRegistry.get(key);
+    const sceneKey = resolveBncrSceneKeyFromHistoryKey(key);
+    const scene = runtime.sceneRegistry.get(sceneKey);
     const sceneLimit = resolveBncrHistoryLimit(scene?.historyLimit);
     return Math.max(DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT, Math.ceil(sceneLimit * 1.2));
   }
@@ -176,7 +208,11 @@ export function createBncrStateStore(runtime: {
   ): string | null {
     const route = entries.find((entry) => runtime.parseRouteLike(entry?.route))?.route;
     if (route) {
+      const accountId = entries.find((entry) =>
+        runtime.asString(entry.accountId || '').trim(),
+      )?.accountId;
       return buildBncrConversationHistoryKeyFromRoute({
+        accountId,
         platform: route.platform,
         groupId: route.groupId,
         userId: route.userId,
@@ -184,7 +220,7 @@ export function createBncrStateStore(runtime: {
     }
     const separator = bucketKey.indexOf(':');
     if (separator < 0 || separator >= bucketKey.length - 1) return null;
-    return bucketKey.slice(separator + 1).trim() || null;
+    return normalizePersistedHistoryKey(bucketKey);
   }
 
   function resolveOutboundReplayBucketLimit(
@@ -193,7 +229,8 @@ export function createBncrStateStore(runtime: {
   ): number {
     const historyKey = resolveOutboundReplayBucketHistoryKey(bucketKey, entries);
     if (!historyKey) return DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT;
-    return resolveBncrHistoryLimit(runtime.sceneRegistry.get(historyKey)?.historyLimit);
+    const sceneKey = resolveBncrSceneKeyFromHistoryKey(historyKey);
+    return resolveBncrHistoryLimit(runtime.sceneRegistry.get(sceneKey)?.historyLimit);
   }
 
   function normalizeOutboundReplayBucket(
@@ -282,6 +319,7 @@ export function createBncrStateStore(runtime: {
     for (const bucket of buckets) {
       const key = runtime.asString(bucket?.key || '').trim();
       if (!key) continue;
+      const normalizedKey = normalizePersistedHistoryKey(key);
       const entries: BncrPersistedConversationHistoryEntry[] = [];
       const rawEntries = Array.isArray(bucket?.entries)
         ? (bucket.entries as PersistedConversationHistoryEntryInput[])
@@ -315,7 +353,7 @@ export function createBncrStateStore(runtime: {
         }
 
         const rawRole = entry?.role;
-        const assistantMessageIds = options?.assistantMessageIdsByHistoryKey?.get(key);
+        const assistantMessageIds = options?.assistantMessageIdsByHistoryKey?.get(normalizedKey);
         const role =
           rawRole === 'user' || rawRole === 'assistant' || rawRole === 'system'
             ? rawRole
@@ -325,7 +363,7 @@ export function createBncrStateStore(runtime: {
         if (!messageId) {
           messageId = buildMigratedHistoryMessageId(
             JSON.stringify({
-              key,
+              key: normalizedKey,
               entryIndex,
               sender,
               senderId: runtime.asString(entry?.senderId || '').trim(),
@@ -365,8 +403,10 @@ export function createBncrStateStore(runtime: {
         entries.push(normalizedEntry);
       }
       if (entries.length > 0) {
-        const limit = resolveLimit(key);
-        const merged = options?.merge ? [...(target.get(key) || []), ...entries] : entries;
+        const limit = resolveLimit(normalizedKey);
+        const merged = options?.merge
+          ? [...(target.get(normalizedKey) || []), ...entries]
+          : entries;
         const seenMessageIds = new Set<string>();
         const deduped: BncrPersistedConversationHistoryEntry[] = [];
         for (const entry of merged) {
@@ -375,7 +415,7 @@ export function createBncrStateStore(runtime: {
           if (messageId) seenMessageIds.add(messageId);
           deduped.push(entry);
         }
-        target.set(key, Number.isFinite(limit) ? deduped.slice(-limit) : deduped);
+        target.set(normalizedKey, Number.isFinite(limit) ? deduped.slice(-limit) : deduped);
       }
     }
   }
@@ -409,6 +449,7 @@ export function createBncrStateStore(runtime: {
         sender?: unknown;
         body?: unknown;
         messageId?: unknown;
+        accountId?: unknown;
         route?: { platform?: unknown; groupId?: unknown; userId?: unknown };
       }>) {
         const sender = runtime.asString(entry?.sender || '').trim();
@@ -417,12 +458,17 @@ export function createBncrStateStore(runtime: {
         const messageId = runtime.asString(entry?.messageId || '').trim();
         if (!messageId) continue;
         const route = entry?.route;
+        const entryAccountId = runtime.asString(entry?.accountId || '').trim() || undefined;
         const historyKey =
           buildBncrConversationHistoryKeyFromRoute({
+            accountId: entryAccountId,
             platform: typeof route?.platform === 'string' ? route.platform : undefined,
             groupId: typeof route?.groupId === 'string' ? route.groupId : undefined,
             userId: typeof route?.userId === 'string' ? route.userId : undefined,
-          }) ?? (bucketKey.includes(':') ? bucketKey.slice(bucketKey.indexOf(':') + 1) : '');
+          }) ??
+          (entryAccountId
+            ? resolvePersistedHistoryKey(bucketKey, entryAccountId)
+            : normalizePersistedHistoryKey(bucketKey));
         if (!historyKey) continue;
         const scopedMessageIds = messageIdsByHistoryKey.get(historyKey) ?? new Set<string>();
         scopedMessageIds.add(messageId);
@@ -440,18 +486,18 @@ export function createBncrStateStore(runtime: {
     timestamp: number;
     media: BncrPersistedConversationHistoryMediaEntry[];
     route?: BncrRoute | null;
+    accountId?: string;
     historyMap?: Map<string, BncrPersistedConversationHistoryEntry[]>;
   }): string | undefined {
     const route = args.route;
     const historyKey = route
       ? buildBncrConversationHistoryKeyFromRoute({
+          accountId: args.accountId,
           platform: route.platform,
           groupId: route.groupId,
           userId: route.userId,
         })
-      : args.bucketKey.includes(':')
-        ? args.bucketKey.slice(args.bucketKey.indexOf(':') + 1).trim()
-        : '';
+      : normalizePersistedHistoryKey(args.bucketKey);
     if (!historyKey) return undefined;
 
     const matchingHistory = args.historyMap
@@ -491,7 +537,7 @@ export function createBncrStateStore(runtime: {
     for (const bucket of buckets) {
       const key = runtime.asString(bucket?.key || '').trim();
       if (!key) continue;
-      const entries: BncrOutboundReplayEntry[] = [];
+      const entriesByHistoryKey = new Map<string, BncrOutboundReplayEntry[]>();
       const rawEntries = Array.isArray(bucket?.entries)
         ? (bucket.entries as PersistedOutboundReplayEntryInput[])
         : [];
@@ -502,6 +548,9 @@ export function createBncrStateStore(runtime: {
         const timestamp = runtime.finiteNumberOr(entry?.timestamp, 0);
         const messageId = runtime.asString(entry?.messageId || '').trim();
         const accountId = runtime.asString(entry?.accountId || '').trim();
+        const effectiveAccountId = runtime.normalizeAccountId(
+          accountId || resolvePersistedHistoryAccountId(key),
+        );
         const sessionKey = runtime.asString(entry?.sessionKey || '').trim();
         const type = runtime.asString(entry?.type || '').trim();
         const mediaUrl = runtime.asString(entry?.mediaUrl || '').trim();
@@ -514,6 +563,14 @@ export function createBncrStateStore(runtime: {
             groupId: entry?.route?.groupId,
             userId: entry?.route?.userId,
           });
+        const historyKey = route
+          ? buildBncrConversationHistoryKeyFromRoute({
+              accountId: effectiveAccountId,
+              platform: route.platform,
+              groupId: route.groupId,
+              userId: route.userId,
+            }) || resolvePersistedHistoryKey(key, effectiveAccountId)
+          : resolvePersistedHistoryKey(key, effectiveAccountId);
         const media: BncrPersistedConversationHistoryMediaEntry[] = [];
         const rawMedia = Array.isArray(entry?.media)
           ? (entry.media as Partial<BncrPersistedConversationHistoryMediaEntry>[])
@@ -534,13 +591,14 @@ export function createBncrStateStore(runtime: {
         const resolvedMessageId =
           messageId ||
           resolvePersistedOutboundReplayMessageId({
-            bucketKey: key,
+            bucketKey: historyKey,
             sender,
             senderId: runtime.asString(entry?.senderId || '').trim(),
             body,
             timestamp,
             media,
             route,
+            accountId: effectiveAccountId,
             historyMap: options?.historyMap,
           });
         const normalizedMedia = media.map((item) => ({
@@ -549,7 +607,7 @@ export function createBncrStateStore(runtime: {
             ? { messageId: item.messageId || resolvedMessageId }
             : {}),
         }));
-        entries.push({
+        const normalizedEntry = {
           sender,
           ...(runtime.asString(entry?.senderId || '').trim()
             ? { senderId: runtime.asString(entry?.senderId || '').trim() }
@@ -558,7 +616,7 @@ export function createBncrStateStore(runtime: {
           ...(timestamp > 0 ? { timestamp } : {}),
           ...(resolvedMessageId ? { messageId: resolvedMessageId } : {}),
           ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
-          ...(accountId ? { accountId } : {}),
+          accountId: effectiveAccountId,
           ...(sessionKey ? { sessionKey } : {}),
           ...(route ? { route } : {}),
           ...(type ? { type } : {}),
@@ -567,10 +625,13 @@ export function createBncrStateStore(runtime: {
           ...(status === 'pushed' || status === 'acked'
             ? { status: status as BncrOutboundReplayStatus }
             : {}),
-        });
+        } satisfies BncrOutboundReplayEntry;
+        const entries = entriesByHistoryKey.get(historyKey) || [];
+        entries.push(normalizedEntry);
+        entriesByHistoryKey.set(historyKey, entries);
       }
-      if (entries.length > 0) {
-        const combined = options?.merge ? [...(target.get(key) || []), ...entries] : entries;
+      for (const [historyKey, entries] of entriesByHistoryKey) {
+        const combined = options?.merge ? [...(target.get(historyKey) || []), ...entries] : entries;
         const seenMessageIds = new Set<string>();
         const deduped: BncrOutboundReplayEntry[] = [];
         for (const entry of combined) {
@@ -580,7 +641,7 @@ export function createBncrStateStore(runtime: {
           deduped.push(entry);
         }
         if (deduped.length > 0) {
-          target.set(key, normalizeOutboundReplayBucket(key, deduped));
+          target.set(historyKey, normalizeOutboundReplayBucket(historyKey, deduped));
         }
       }
     }

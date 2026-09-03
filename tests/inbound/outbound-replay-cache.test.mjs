@@ -119,12 +119,12 @@ test('outbound messages write assistant entries into unified private history', (
     senderId: 'Primary',
   });
 
-  assert.deepEqual(conversationHistories.get('tgBot:10001'), [
+  assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), [
     {
       sender: 'OpenClaw',
       senderId: 'Primary',
       body: 'see this image',
-      timestamp: conversationHistories.get('tgBot:10001')[0].timestamp,
+      timestamp: conversationHistories.get('Primary:tgBot:10001')[0].timestamp,
       messageId: 'out-private-history-1',
       role: 'assistant',
       media: [
@@ -169,7 +169,7 @@ test('outbound message history timestamps prefer the actual push time', () => {
     senderId: 'Primary',
   });
 
-  assert.equal(conversationHistories.get('tgBot:10001')?.[0]?.timestamp, 42);
+  assert.equal(conversationHistories.get('Primary:tgBot:10001')?.[0]?.timestamp, 42);
   assert.equal(cache.get('Primary:tgBot:10001')?.[0]?.timestamp, 42);
 });
 
@@ -219,6 +219,29 @@ test('read outbound replay deduplicates unified history and legacy cache', () =>
   assert.equal(entries[0].messageId, 'out-shared-1');
 });
 
+test('read outbound replay scopes unified history to the requested account', () => {
+  const cache = new Map();
+  const conversationHistories = new Map();
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  recordBncrOutboundReplay({
+    cache,
+    conversationHistories,
+    entry: { ...makeOutboundEntry('out-secondary-1', route), accountId: 'Secondary' },
+    sender: 'OpenClaw',
+    senderId: 'Secondary',
+  });
+
+  const entries = readBncrOutboundReplaySnapshot({
+    cache,
+    conversationHistories,
+    parsed: makeParsed(route),
+    accountId: 'Secondary',
+  });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].messageId, 'out-secondary-1');
+});
+
 test('outbound messages deduplicate by outbox message id', () => {
   const cache = new Map();
   const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
@@ -244,7 +267,7 @@ test('outbound replies without platform ids share one synthetic id across histor
   });
   assert.equal(result.recorded, true);
 
-  const historyMessageId = conversationHistories.get('tgBot:10001')?.[0]?.messageId;
+  const historyMessageId = conversationHistories.get('Primary:tgBot:10001')?.[0]?.messageId;
   const cacheMessageId = cache.get('Primary:tgBot:10001')?.[0]?.messageId;
   assert.match(historyMessageId, /^bncr-synthetic:/);
   assert.equal(cacheMessageId, historyMessageId);
@@ -275,6 +298,13 @@ test('outbound replay key rejects unknown route targets', () => {
   assert.equal(
     buildBncrOutboundReplayKeyFromRoute({ platform: 'tgBot', groupId: '0', userId: '0' }),
     null,
+  );
+});
+
+test('outbound replay key normalizes a missing account id to the default account', () => {
+  assert.equal(
+    buildBncrOutboundReplayKeyFromRoute({ platform: 'tgBot', groupId: '0', userId: '10001' }),
+    'Primary:tgBot:10001',
   );
 });
 

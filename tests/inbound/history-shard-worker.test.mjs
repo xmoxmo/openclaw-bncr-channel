@@ -15,13 +15,13 @@ import {
 function buildHistoryShard(overrides = {}) {
   return {
     id: 77,
-    historyKey: 'tgBot:10001',
+    historyKey: 'Primary:tgBot:10001',
     accountId: 'Primary',
     status: 'claimed',
     attempts: 1,
     payloadJson: JSON.stringify({
       version: 2,
-      historyKey: 'tgBot:10001',
+      historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       messageIds: ['h1', 'h2'],
       bufferKeys: ['Primary:tgBot:10001'],
@@ -132,7 +132,7 @@ test('history shard worker renews the lease while waiting for the serial lock', 
   const serialGate = new Promise((resolve) => {
     releaseSerialGate = resolve;
   });
-  const lock = runConversationHistorySerial('tgBot:10001', () => serialGate);
+  const lock = runConversationHistorySerial('Primary:tgBot:10001', () => serialGate);
   const queue = buildQueue();
   const run = processBncrHistoryShardSlot({
     shard: buildHistoryShard(),
@@ -168,7 +168,7 @@ test('history shard worker dispatches a claimed shard and completes cleanup', as
   const queue = buildQueue();
   const historyMap = new Map([
     [
-      'tgBot:10001',
+      'Primary:tgBot:10001',
       [
         { sender: 'alice', body: 'h1', messageId: 'h1' },
         { sender: 'alice', body: 'h2', messageId: 'h2' },
@@ -189,7 +189,7 @@ test('history shard worker dispatches a claimed shard and completes cleanup', as
   });
   assert.equal(dispatched, true);
   assert.deepEqual(queue.calls, ['processing:77', 'completed:77', 'complete:77']);
-  assert.equal(historyMap.get('tgBot:10001').length, 0);
+  assert.equal(historyMap.get('Primary:tgBot:10001').length, 0);
 });
 
 test('history shard worker marks failed and does not complete on dispatch error', async () => {
@@ -356,7 +356,7 @@ test('history shard worker keeps the claim owner when queued behind a stale lock
   const serialGate = new Promise((resolve) => {
     releaseSerialGate = resolve;
   });
-  const blocker = runConversationHistorySerial('tgBot:10001', () => serialGate);
+  const blocker = runConversationHistorySerial('Primary:tgBot:10001', () => serialGate);
   const queue = buildQueue();
   queue.markHistoryShardProcessing = (shardId, owner) =>
     queue.calls.push(`processing:${shardId}:${owner}`);

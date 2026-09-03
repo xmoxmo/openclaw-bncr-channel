@@ -86,7 +86,7 @@ export type BncrPersistedConversationHistoryEntry = {
 export type BncrPersistedConversationHistoryMediaEntry = {
   path?: string;
   contentType?: string;
-  kind?: 'image' | 'video' | 'audio' | 'document' | 'unknown';
+  kind?: 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'unknown';
   messageId?: string;
 };
 
