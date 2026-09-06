@@ -11,6 +11,7 @@ import {
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
 import { resolveOpenClawAgentRoute } from '../../openclaw/routing-runtime.ts';
 import { performBncrGatewaySessionReset } from '../../openclaw/session-reset-runtime.ts';
+import { addNativeElevation, removeNativeElevation } from '../../plugin/config.ts';
 import { mergeBncrOwnerAllowFromIntoConfig } from './command-owner.ts';
 import type {
   BncrEnqueueFromReply,
@@ -774,74 +775,83 @@ export async function handleBncrNativeCommand(params: {
     },
     { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
   );
-  await resolveBncrChannelInboundRuntime(api).run({
-    channel: channelId,
-    accountId,
-    raw: parsed,
-    adapter: {
-      ingest: () => ({
-        id: msgId ?? `${displayTo}:${Date.now()}`,
-        timestamp: Date.now(),
-        rawText: body,
-        textForAgent: ctxPayload.BodyForAgent,
-        textForCommands: ctxPayload.CommandBody,
-        raw: parsed,
-      }),
-      resolveTurn: () => {
-        const sessionMetaBarrier = createBncrSessionMetaTaskBarrier();
-        return {
-          channel: channelId,
-          accountId,
-          routeSessionKey: resolvedRoute.sessionKey,
-          storePath,
-          ctxPayload,
-          recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
-            recordInboundSession: recordBncrInboundSession as (
-              ...args: unknown[]
-            ) => Promise<unknown> | unknown,
-            expectedPatch: sessionIdentityPatch,
-          }),
-          record: {
-            updateLastRoute,
-            onRecordError: (err: unknown) => {
-              buildNativeCommandRecordErrorLogger(err);
-            },
-            trackSessionMetaTask: (task: Promise<unknown>) => {
-              sessionMetaBarrier.track(task);
-            },
-          },
-          runDispatch: async () => {
-            await sessionMetaBarrier.wait();
-            return dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
-              ctx: ctxPayload,
-              cfg: effectiveReply.replyCfg,
-              dispatcherOptions: {
-                deliver: createNativeCommandReplyDeliverer({
-                  command: command.command,
-                  accountId,
-                  sessionKey,
-                  to: displayTo,
-                  msgId: msgId || undefined,
-                  effectiveReply,
-                  route,
-                  enqueueFromReply,
-                  nativeCommandDebugEnabled,
-                  onResponded: () => responded,
-                  markResponded: () => {
-                    responded = true;
-                  },
-                }),
+  if (dispatchToOpenClaw && senderIdForContext) {
+    addNativeElevation(senderIdForContext);
+  }
+  try {
+    await resolveBncrChannelInboundRuntime(api).run({
+      channel: channelId,
+      accountId,
+      raw: parsed,
+      adapter: {
+        ingest: () => ({
+          id: msgId ?? `${displayTo}:${Date.now()}`,
+          timestamp: Date.now(),
+          rawText: body,
+          textForAgent: ctxPayload.BodyForAgent,
+          textForCommands: ctxPayload.CommandBody,
+          raw: parsed,
+        }),
+        resolveTurn: () => {
+          const sessionMetaBarrier = createBncrSessionMetaTaskBarrier();
+          return {
+            channel: channelId,
+            accountId,
+            routeSessionKey: resolvedRoute.sessionKey,
+            storePath,
+            ctxPayload,
+            recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
+              recordInboundSession: recordBncrInboundSession as (
+                ...args: unknown[]
+              ) => Promise<unknown> | unknown,
+              expectedPatch: sessionIdentityPatch,
+            }),
+            record: {
+              updateLastRoute,
+              onRecordError: (err: unknown) => {
+                buildNativeCommandRecordErrorLogger(err);
               },
-              replyOptions: {
-                disableBlockStreaming: !effectiveReply.blockStreaming,
-                shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
+              trackSessionMetaTask: (task: Promise<unknown>) => {
+                sessionMetaBarrier.track(task);
               },
-            });
-          },
-        };
+            },
+            runDispatch: async () => {
+              await sessionMetaBarrier.wait();
+              return dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
+                ctx: ctxPayload,
+                cfg: effectiveReply.replyCfg,
+                dispatcherOptions: {
+                  deliver: createNativeCommandReplyDeliverer({
+                    command: command.command,
+                    accountId,
+                    sessionKey,
+                    to: displayTo,
+                    msgId: msgId || undefined,
+                    effectiveReply,
+                    route,
+                    enqueueFromReply,
+                    nativeCommandDebugEnabled,
+                    onResponded: () => responded,
+                    markResponded: () => {
+                      responded = true;
+                    },
+                  }),
+                },
+                replyOptions: {
+                  disableBlockStreaming: !effectiveReply.blockStreaming,
+                  shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
+                },
+              });
+            },
+          };
+        },
       },
-    },
-  });
+    });
+  } finally {
+    if (dispatchToOpenClaw && senderIdForContext && !parsed.isAdmin) {
+      removeNativeElevation(senderIdForContext);
+    }
+  }
 
   if (!responded) {
     // Self-service commands must never fall back to the agent — doing so

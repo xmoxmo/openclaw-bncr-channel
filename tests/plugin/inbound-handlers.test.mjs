@@ -126,6 +126,32 @@ test('inbound handlers accept inbound and flush/dispatch with canonical agent id
   assert.equal(calls.dispatched[0].canonicalAgentId, 'orion');
 });
 
+test('inbound handlers run post-ack dispatch through an independent work runner', async () => {
+  const detachedStarts = [];
+  const { runtime, calls } = createRuntime({
+    async runInboundDetached(run) {
+      detachedStarts.push(true);
+      await run();
+    },
+  });
+  const handlers = createBncrInboundHandlers(runtime);
+  const responses = [];
+
+  await handlers.handleInbound({
+    params: { leaseId: 'lease-1' },
+    respond(ok, payload) {
+      responses.push([ok, payload]);
+    },
+    client: { connId: 'conn-1', clientId: 'client-1' },
+    context: null,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(detachedStarts.length, 1);
+  assert.equal(calls.dispatched.length, 1);
+});
+
 test('inbound handlers short-circuit stale events before acceptance', async () => {
   const { runtime, calls } = createRuntime({
     shouldIgnoreStaleEvent() {

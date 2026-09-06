@@ -1,4 +1,5 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import { runDetachedWebhookWork } from 'openclaw/plugin-sdk/webhook-request-guards';
 import { buildCanonicalBncrSessionKey } from '../core/targets.ts';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
 import type { BncrConversationHistoryMap } from '../messaging/inbound/conversation-history.ts';
@@ -171,6 +172,7 @@ export type BncrInboundHandlersRuntime = {
     defaultPublicAgentId: string;
     now: () => number;
   }) => Promise<unknown>;
+  runInboundDetached?: (run: () => Promise<unknown>) => Promise<unknown>;
 };
 
 export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRuntime, 'respond'>) {
@@ -326,8 +328,12 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
       );
       runtime.flushOnInboundAccepted(accountId);
 
-      void runtime
-        .dispatchInbound({
+      const runInboundDetached = runtime.runInboundDetached ?? runDetachedWebhookWork;
+      // Ack-first handlers must run follow-up work on an independent admitted
+      // root. Otherwise the host releases this request admission after respond,
+      // and later native/agent queue submissions are mistaken for draining.
+      void runInboundDetached(async () => {
+        await runtime.dispatchInbound({
           cfg,
           parsed,
           canonicalAgentId,
@@ -340,10 +346,10 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           defaultAdminAgentId,
           defaultPublicAgentId: runtime.defaultPublicAgentId(),
           now: runtime.now,
-        })
-        .catch((err) => {
-          runtime.logError('inbound', `process failed: ${String(err)}`, { debugOnly: true });
         });
+      }).catch((err) => {
+        runtime.logError('inbound', `process failed: ${String(err)}`, { debugOnly: true });
+      });
     },
   };
 }

@@ -1,12 +1,17 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
+import { normalizeAccountId } from '../core/accounts.ts';
 import {
   dumpRegisterDriftSnapshot,
   normalizeRegisterDriftSnapshot,
   type RegisterDriftSnapshot,
 } from '../core/register-trace.ts';
 import type { BncrRoute, OutboxEntry } from '../core/types.ts';
+import {
+  normalizePersistedHistoryKey,
+  resolvePersistedHistoryAccountId,
+  resolvePersistedHistoryKey,
+} from '../messaging/inbound/conversation-history.ts';
 import type {
   BncrGroupReplyMode,
   BncrPersistedAccountTimestamp,
@@ -790,28 +795,6 @@ function deriveHistoryKeyFromRoute(args: {
   if (groupId !== '0') return `${accountId}:${platform}:${groupId}`;
   if (userId !== '0') return `${accountId}:${platform}:${userId}`;
   return null;
-}
-
-function normalizePersistedHistoryKey(key: string): string {
-  const raw = String(key || '').trim();
-  if (!raw) return raw;
-  const firstColon = raw.indexOf(':');
-  const secondColon = raw.indexOf(':', firstColon + 1);
-  if (firstColon <= 0 || secondColon < 0) return `${BNCR_DEFAULT_ACCOUNT_ID}:${raw}`;
-  return `${normalizeAccountId(raw.slice(0, firstColon))}:${raw.slice(firstColon + 1)}`;
-}
-
-function resolvePersistedHistoryAccountId(key: string): string {
-  const normalized = normalizePersistedHistoryKey(key);
-  const separator = normalized.indexOf(':');
-  return normalizeAccountId(separator > 0 ? normalized.slice(0, separator) : undefined);
-}
-
-function resolvePersistedHistoryKey(key: string, accountId: string): string {
-  const normalized = normalizePersistedHistoryKey(key);
-  const separator = normalized.indexOf(':');
-  const sceneKey = separator > 0 ? normalized.slice(separator + 1) : normalized;
-  return `${normalizeAccountId(accountId)}:${sceneKey}`;
 }
 
 function parseMediaJson(value: string) {

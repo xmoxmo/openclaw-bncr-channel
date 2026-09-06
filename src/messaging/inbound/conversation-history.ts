@@ -5,7 +5,7 @@ import {
   type HistoryEntry,
   type HistoryMediaEntry,
 } from 'openclaw/plugin-sdk/reply-history';
-import { normalizeAccountId } from '../../core/accounts.ts';
+import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../../core/accounts.ts';
 import { formatOpenClawAgentEnvelope } from '../../openclaw/reply-runtime.ts';
 import type { BncrInboundApi } from './contracts.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
@@ -119,6 +119,33 @@ export function buildBncrConversationHistoryKeyFromRoute(args: {
   if (groupId !== '0') return `${accountId}:${platform}:${groupId}`;
   if (userId !== '0') return `${accountId}:${platform}:${userId}`;
   return null;
+}
+
+/**
+ * Migrate legacy scene-only history keys (`tgBot:10001`) to the current
+ * account-scoped format (`Primary:tgBot:10001`). Keys that already carry an
+ * accountId prefix are returned unchanged.
+ */
+export function normalizePersistedHistoryKey(key: string): string {
+  const raw = String(key || '').trim();
+  if (!raw) return raw;
+  const firstColon = raw.indexOf(':');
+  const secondColon = raw.indexOf(':', firstColon + 1);
+  if (firstColon <= 0 || secondColon < 0) return `${BNCR_DEFAULT_ACCOUNT_ID}:${raw}`;
+  return `${normalizeAccountId(raw.slice(0, firstColon))}:${raw.slice(firstColon + 1)}`;
+}
+
+export function resolvePersistedHistoryAccountId(key: string): string {
+  const normalized = normalizePersistedHistoryKey(key);
+  const separator = normalized.indexOf(':');
+  return normalizeAccountId(separator > 0 ? normalized.slice(0, separator) : undefined);
+}
+
+export function resolvePersistedHistoryKey(key: string, accountId: string): string {
+  const normalized = normalizePersistedHistoryKey(key);
+  const separator = normalized.indexOf(':');
+  const sceneKey = separator > 0 ? normalized.slice(separator + 1) : normalized;
+  return `${normalizeAccountId(accountId)}:${sceneKey}`;
 }
 
 /**

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile, rename } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
 import {
   dumpRegisterDriftSnapshot,
   normalizeRegisterDriftSnapshot,
@@ -11,9 +10,12 @@ import {
   type BncrConversationHistoryMap,
   buildBncrBotReplyMessageId,
   buildBncrConversationHistoryKeyFromRoute,
+  normalizePersistedHistoryKey,
   resetConversationHistoryVersions,
   resolveBncrHistoryLimit,
   resolveBncrSceneKeyFromHistoryKey,
+  resolvePersistedHistoryAccountId,
+  resolvePersistedHistoryKey,
 } from '../messaging/inbound/conversation-history.ts';
 import {
   getConversationHistorySerialOwner,
@@ -52,35 +54,6 @@ import type {
 
 const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
 const DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT = 50;
-
-/**
- * Migrate legacy scene-only history keys (`tgBot:10001`) to the current
- * account-scoped format (`Primary:tgBot:10001`). Keys that already carry an
- * accountId prefix are returned unchanged.
- */
-function normalizePersistedHistoryKey(key: string): string {
-  const raw = String(key || '').trim();
-  if (!raw) return raw;
-  const firstColon = raw.indexOf(':');
-  const secondColon = raw.indexOf(':', firstColon + 1);
-  if (firstColon <= 0 || secondColon < 0) return `${BNCR_DEFAULT_ACCOUNT_ID}:${raw}`;
-  return `${normalizeAccountId(raw.slice(0, firstColon))}:${raw.slice(firstColon + 1)}`;
-}
-
-function resolvePersistedHistoryAccountId(key: string): string {
-  const normalized = normalizePersistedHistoryKey(key);
-  const separator = normalized.indexOf(':');
-  return separator > 0
-    ? normalized.slice(0, separator).trim() || BNCR_DEFAULT_ACCOUNT_ID
-    : BNCR_DEFAULT_ACCOUNT_ID;
-}
-
-function resolvePersistedHistoryKey(key: string, accountId: string): string {
-  const normalized = normalizePersistedHistoryKey(key);
-  const separator = normalized.indexOf(':');
-  const sceneKey = separator > 0 ? normalized.slice(separator + 1) : normalized;
-  return `${normalizeAccountId(accountId)}:${sceneKey}`;
-}
 
 type BncrPersistedStateStoreInput = {
   outbox?: unknown;
