@@ -102,8 +102,8 @@ test('createDynamicChannelPlugin proxies outbound status and gateway calls throu
     account: { accountId: 'Primary' },
     cfg: { accounts: [{ id: 'Primary', enable: true }] },
   });
-  const firstStart = plugin.gateway.startAccount({ accountId: 'Primary' });
-  const firstStop = plugin.gateway.stopAccount({ accountId: 'Primary' });
+  const firstStart = await plugin.gateway.startAccount({ accountId: 'Primary' });
+  const firstStop = await plugin.gateway.stopAccount({ accountId: 'Primary' });
 
   currentBridge = bridgeB;
 
@@ -130,4 +130,201 @@ test('createDynamicChannelPlugin proxies outbound status and gateway calls throu
   assert.deepEqual(secondSummary, { via: 'summary:b', defaultAccountId: 'Primary' });
   assert.equal(secondSnapshot.runtime.diagnostics.via, 'b');
   assert.equal(secondState, 'linked');
+});
+
+test('createDynamicChannelPlugin activates lifecycle only for gateway starts', async () => {
+  const bridgeA = createBridge('a');
+  const bridgeB = createBridge('b');
+  let currentBridge = bridgeA;
+  let startResolveCalls = 0;
+  let stopAllowed = true;
+  const loaded = {
+    createBncrChannelPlugin() {
+      return {
+        outbound: {
+          async sendText() {
+            return { via: 'base-text' };
+          },
+          async sendMedia() {
+            return { via: 'base-media' };
+          },
+        },
+        status: {
+          async buildChannelSummary() {
+            return { via: 'base-summary' };
+          },
+          async buildAccountSnapshot({ account, runtime }) {
+            return { accountId: account?.accountId || 'Primary', runtime };
+          },
+          resolveAccountState() {
+            return 'configured';
+          },
+        },
+        gateway: {
+          startAccount() {
+            return { via: 'base-start' };
+          },
+          stopAccount() {
+            return { via: 'base-stop' };
+          },
+        },
+      };
+    },
+  };
+
+  const plugin = createDynamicChannelPlugin({
+    loaded,
+    getCurrentBridge: () => currentBridge,
+    resolveBridgeForStart: async () => {
+      startResolveCalls += 1;
+      return bridgeB;
+    },
+    resolveBridgeForStop: () => (stopAllowed ? currentBridge : null),
+  });
+
+  assert.equal((await plugin.outbound.sendText({ text: 'hello' })).via, 'text:a');
+  assert.deepEqual(await plugin.status.buildChannelSummary({}), {
+    via: 'summary:a',
+    defaultAccountId: 'Primary',
+  });
+  assert.equal(startResolveCalls, 0);
+
+  assert.equal((await plugin.gateway.startAccount({ accountId: 'Primary' })).via, 'start:b');
+  assert.equal(startResolveCalls, 1);
+  assert.equal((await plugin.gateway.stopAccount({ accountId: 'Primary' })).via, 'stop:a');
+
+  currentBridge = bridgeB;
+  stopAllowed = false;
+  assert.equal(await plugin.gateway.stopAccount({ accountId: 'Primary' }), undefined);
+  assert.equal(bridgeB.stopCalls.length, 0);
+
+  assert.deepEqual(await plugin.status.buildChannelSummary({}), {
+    via: 'summary:b',
+    defaultAccountId: 'Primary',
+  });
+  assert.equal(startResolveCalls, 1);
+});
+
+test('createDynamicChannelPlugin suppresses a start that loses lifecycle ownership after resolution', async () => {
+  const bridge = createBridge('a');
+  let current = true;
+  const loaded = {
+    createBncrChannelPlugin() {
+      return {
+        outbound: {},
+        status: {},
+        gateway: {
+          startAccount() {},
+          stopAccount() {},
+        },
+      };
+    },
+  };
+  const plugin = createDynamicChannelPlugin({
+    loaded,
+    getCurrentBridge: () => bridge,
+    resolveBridgeForStart: async () => {
+      current = false;
+      return bridge;
+    },
+    isBridgeForStartCurrent: () => current,
+  });
+
+  assert.equal(await plugin.gateway.startAccount({ accountId: 'Primary' }), undefined);
+  assert.equal(bridge.startCalls.length, 0);
+});
+
+test('createDynamicChannelPlugin reports a current bridge start attempt immediately', async () => {
+  const bridge = createBridge('a');
+  let releaseStart;
+  const startGate = new Promise((resolve) => {
+    releaseStart = resolve;
+  });
+  bridge.channelStartAccount = (ctx) => {
+    bridge.startCalls.push(ctx);
+    return startGate;
+  };
+  const loaded = {
+    createBncrChannelPlugin() {
+      return {
+        outbound: {},
+        status: {},
+        gateway: {
+          startAccount() {},
+          stopAccount() {},
+        },
+      };
+    },
+  };
+  let observed = 0;
+  const plugin = createDynamicChannelPlugin({
+    loaded,
+    getCurrentBridge: () => bridge,
+    onBridgeStartObserved: () => {
+      observed += 1;
+    },
+  });
+
+  const starting = plugin.gateway.startAccount({ accountId: 'Primary' });
+  await Promise.resolve();
+  assert.equal(observed, 1);
+  assert.equal(bridge.startCalls.length, 1);
+
+  releaseStart();
+  await starting;
+});
+
+test('createDynamicChannelPlugin keeps startup successful when observation fails', async () => {
+  const bridge = createBridge('a');
+  const loaded = {
+    createBncrChannelPlugin() {
+      return {
+        outbound: {},
+        status: {},
+        gateway: {
+          startAccount() {},
+          stopAccount() {},
+        },
+      };
+    },
+  };
+  const plugin = createDynamicChannelPlugin({
+    loaded,
+    getCurrentBridge: () => bridge,
+    onBridgeStartObserved: () => {
+      throw new Error('observation boom');
+    },
+  });
+
+  await assert.doesNotReject(plugin.gateway.startAccount({ accountId: 'Primary' }));
+  assert.equal(bridge.startCalls.length, 1);
+});
+
+test('createDynamicChannelPlugin suppresses a stop that loses lifecycle ownership after resolution', async () => {
+  const bridge = createBridge('a');
+  let current = true;
+  const loaded = {
+    createBncrChannelPlugin() {
+      return {
+        outbound: {},
+        status: {},
+        gateway: {
+          startAccount() {},
+          stopAccount() {},
+        },
+      };
+    },
+  };
+  const plugin = createDynamicChannelPlugin({
+    loaded,
+    getCurrentBridge: () => bridge,
+    resolveBridgeForStop: async () => {
+      current = false;
+      return bridge;
+    },
+    isBridgeForStopCurrent: () => current,
+  });
+
+  assert.equal(await plugin.gateway.stopAccount({ accountId: 'Primary' }), undefined);
+  assert.equal(bridge.stopCalls.length, 0);
 });

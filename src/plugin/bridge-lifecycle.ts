@@ -59,13 +59,15 @@ export function startBncrBridgeService(
     getChannelConfigRoot: (
       cfg: BncrChannelConfigRoot,
     ) => BncrChannelPolicyConfig | null | undefined;
+    resumeOutboxDrain?: () => void;
+    isStartCurrent?: () => boolean;
   },
   ctx: OpenClawPluginServiceContext,
   debug?: boolean,
 ) {
-  runtime.setStopped(false);
   runtime.setStatePath(path.join(ctx.stateDir, 'bncr-bridge-state.json'));
   return (async () => {
+    const isStartCurrent = () => runtime.isStartCurrent?.() ?? true;
     try {
       const cfg = runtime.getRuntimeConfig();
       runtime.initializeCanonicalAgentId(cfg);
@@ -76,8 +78,10 @@ export function startBncrBridgeService(
       // ignore startup canonical agent initialization errors
     }
     await runtime.loadState();
+    if (!isStartCurrent()) return false;
     if (process.env.BNCR_SQLITE_CUTOVER === '1' && runtime.cutoverToSqlite) {
       const cutover = await runtime.cutoverToSqlite();
+      if (!isStartCurrent()) return false;
       runtime.logInfo(
         'sqlite',
         `cutover completed backup=${cutover.backupPath || 'none'} storeMode=${cutover.storeMode}`,
@@ -85,6 +89,8 @@ export function startBncrBridgeService(
     }
     if (typeof debug === 'boolean') runtime.setDebugFlag(debug);
     await runtime.refreshDebugFlagFromConfig({ forceLog: true });
+    if (!isStartCurrent()) return false;
+    runtime.setStopped(false);
     const bootDiag = runtime.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
     runtime.logInfo(
       'startup',
@@ -95,7 +101,12 @@ export function startBncrBridgeService(
       `service started bridge=${runtime.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter}`,
       { debugOnly: true },
     );
-  })();
+    runtime.resumeOutboxDrain?.();
+    return true;
+  })().catch((error) => {
+    runtime.setStopped(true);
+    throw error;
+  });
 }
 
 export function cleanupBncrBridgeRuntime(

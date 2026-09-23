@@ -1,4 +1,5 @@
 import { emitBncrLogLine } from '../core/logging.ts';
+import type { RegisterLifecycleState } from './register-lifecycle.ts';
 import type { BridgeRegisterStateCarrier } from './register-runtime-helpers.ts';
 import type { ChannelModule } from './runtime-loader.ts';
 
@@ -39,24 +40,76 @@ export function createBncrGatewayMethodRegistry(runtime: {
   getGatewayRuntime: () => {
     currentBridge?: BridgeSingleton;
     registeredMethodsByRegistry: Map<string, Set<BncrGatewayMethodName>>;
+    gatewayMethodDispatchers?: Partial<
+      Record<
+        BncrGatewayMethodName,
+        (bridge: BridgeSingleton, opts: BridgeGatewayHandlerContext) => BridgeGatewayHandlerResult
+      >
+    >;
+    registryDeclarations?: Map<
+      string,
+      {
+        state: 'shadow' | 'active' | 'retired';
+        registration?: 'pending' | 'complete' | 'failed';
+      }
+    >;
+    lifecycle?: RegisterLifecycleState;
   };
   gatewayMethodDispatchers: Record<
     BncrGatewayMethodName,
     (bridge: BridgeSingleton, opts: BridgeGatewayHandlerContext) => BridgeGatewayHandlerResult
   >;
   getBridgeRegisterStateCarrier: (bridge: BridgeSingleton) => BridgeRegisterStateCarrier;
+  getRegistryRuntimeObservation?: (registryFingerprint: string) => unknown;
 }) {
   const dispatchGatewayMethod = (
     name: BncrGatewayMethodName,
     opts: BridgeGatewayHandlerContext,
+    registryFingerprint?: string,
   ) => {
     const gatewayRuntime = runtime.getGatewayRuntime();
+    const declaration = registryFingerprint
+      ? gatewayRuntime.registryDeclarations?.get(registryFingerprint)
+      : undefined;
+    const lifecycleFailed = gatewayRuntime.lifecycle?.active?.phase === 'failed';
+    const declarationFailed = declaration?.registration === 'failed';
+    const dispatchAllowed = declaration
+      ? declaration.state !== 'retired' && !declarationFailed && !lifecycleFailed
+      : !gatewayRuntime.lifecycle?.active;
+    if (registryFingerprint && !dispatchAllowed) {
+      throw new Error(`bncr lifecycle registry is inactive for ${name}`);
+    }
     const bridge = gatewayRuntime.currentBridge;
     if (!bridge) {
       throw new Error(`bncr gateway runtime unavailable for ${name}`);
     }
+    const dispatcherOpts =
+      name === 'bncr.diagnostics' &&
+      registryFingerprint &&
+      runtime.getRegistryRuntimeObservation &&
+      typeof opts.respond === 'function'
+        ? {
+            ...opts,
+            respond: (...response: Parameters<typeof opts.respond>) => {
+              const [ok, payload, error, meta] = response;
+              let observation: unknown = null;
+              try {
+                observation = runtime.getRegistryRuntimeObservation?.(registryFingerprint) ?? null;
+              } catch {
+                observation = null;
+              }
+              const nextPayload =
+                ok && payload && typeof payload === 'object' && !Array.isArray(payload)
+                  ? { ...payload, lifecycleObservation: observation }
+                  : payload;
+              opts.respond(ok, nextPayload, error, meta);
+            },
+          }
+        : opts;
     try {
-      return runtime.gatewayMethodDispatchers[name](bridge, opts);
+      const dispatcher =
+        gatewayRuntime.gatewayMethodDispatchers?.[name] || runtime.gatewayMethodDispatchers[name];
+      return dispatcher(bridge, dispatcherOpts);
     } catch (error) {
       const state = runtime.getBridgeRegisterStateCarrier(bridge) as BridgeStateReader;
       const detail =
@@ -88,7 +141,15 @@ export function createBncrGatewayMethodRegistry(runtime: {
   ) => {
     if (!Array.isArray(api?.methods)) return;
     if (api.methods.some((item) => item?.name === name)) return;
-    api.methods.push({ name, handler: (opts) => dispatchGatewayMethod(name, opts) });
+    api.methods.push({
+      name,
+      handler: (opts) =>
+        dispatchGatewayMethod(
+          name,
+          opts,
+          runtime.getRegisterMeta(api).registryFingerprint || runtime.getRegistryFingerprint(api),
+        ),
+    });
   };
 
   const ensureGatewayMethodRegistered = (
@@ -115,7 +176,7 @@ export function createBncrGatewayMethodRegistry(runtime: {
       return;
     }
     api.registerGatewayMethod(name, (opts: BridgeGatewayHandlerContext) =>
-      dispatchGatewayMethod(name, opts),
+      dispatchGatewayMethod(name, opts, registryFingerprint),
     );
     mirrorGatewayMethodForMockApi(api, name);
     registryMethods.add(name);

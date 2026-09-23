@@ -348,6 +348,7 @@ class BncrBridgeRuntime {
   // 内置健康/回归计数（替代独立脚本）
   private startedAt = now();
   private stopped = false;
+  private serviceStarted = false;
   private connectEventsByAccount = new Map<string, number>();
   private inboundEventsByAccount = new Map<string, number>();
   private activityEventsByAccount = new Map<string, number>();
@@ -840,8 +841,21 @@ class BncrBridgeRuntime {
     return BNCR_DEBUG_VERBOSE;
   }
 
-  startService = async (ctx: OpenClawPluginServiceContext, debug?: boolean) => {
-    await startBncrBridgeService(
+  getRuntimeObservation() {
+    const activeChannelAccounts = this.channelAccountWorkers.size;
+    return {
+      serviceRunning: this.serviceStarted,
+      channelRunning: activeChannelAccounts > 0,
+      activeChannelAccounts,
+    };
+  }
+
+  startService = async (
+    ctx: OpenClawPluginServiceContext,
+    debug?: boolean,
+    isStartCurrent?: () => boolean,
+  ) => {
+    const started = await startBncrBridgeService(
       {
         bridgeId: this.bridgeId,
         setStopped: (value) => {
@@ -865,11 +879,19 @@ class BncrBridgeRuntime {
           (((cfg as BncrChannelConfigRoot | null | undefined)?.channels || null)?.[CHANNEL_ID] as
             | Record<string, unknown>
             | undefined) || {},
+        resumeOutboxDrain: () => {
+          if (this.outbox.size === 0 || this.connections.size === 0) return;
+          this.schedulePushDrain(0);
+        },
+        isStartCurrent,
       },
       ctx,
       debug,
     );
+    if (!started || this.stopped || !(isStartCurrent?.() ?? true)) return false;
     this.startHistoryShardWorker();
+    this.serviceStarted = true;
+    return true;
   };
 
   stopService = async () => {
@@ -887,6 +909,7 @@ class BncrBridgeRuntime {
   }
 
   private cleanupRuntimeWaitersAndTimers(reason: string) {
+    this.serviceStarted = false;
     this.stopHistoryShardWorker(reason);
     this.clientRpcRuntime.shutdown();
     cleanupBncrBridgeRuntime(

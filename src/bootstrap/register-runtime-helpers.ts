@@ -4,6 +4,9 @@ export type BridgeOwner = {
   apiInstanceId: string;
   registryFingerprint: string;
   registrationMode?: string;
+  pluginVersion?: string;
+  pluginRoot?: string;
+  pluginFile?: string;
 };
 
 export type BridgeRegisterStateSnapshot = {
@@ -35,20 +38,17 @@ export type BridgeRegisterStateCarrier = {
   gatewayPid?: number;
 };
 
-export function getProcessOwnerApiInstanceId(args: {
-  serviceOwnerApiInstanceId?: string;
-  channelOwnerApiInstanceId?: string;
-}) {
-  return args.serviceOwnerApiInstanceId || args.channelOwnerApiInstanceId || undefined;
-}
-
 export function sameBridgeOwner(left?: BridgeOwner, right?: BridgeOwner) {
   if (!left || !right) return false;
   return (
     left.moduleEpoch === right.moduleEpoch &&
     left.bridgeFactoryId === right.bridgeFactoryId &&
     left.apiInstanceId === right.apiInstanceId &&
-    left.registryFingerprint === right.registryFingerprint
+    left.registryFingerprint === right.registryFingerprint &&
+    left.registrationMode === right.registrationMode &&
+    left.pluginVersion === right.pluginVersion &&
+    left.pluginRoot === right.pluginRoot &&
+    left.pluginFile === right.pluginFile
   );
 }
 
@@ -101,40 +101,4 @@ export function hydrateBridgeRegisterState<T extends BridgeRegisterStateCarrier>
   bridge.lastDriftSnapshot = snapshot.lastDriftSnapshot;
   bridge.registerTraceRecent = snapshot.registerTraceRecent.map((trace) => ({ ...trace }));
   return bridge;
-}
-
-export function shouldAdoptProcessOwner(args: {
-  apiInstanceId: string;
-  serviceRegistered?: boolean;
-  channelRegistered?: boolean;
-  serviceOwnerApiInstanceId?: string;
-  channelOwnerApiInstanceId?: string;
-}) {
-  const existingOwnerApiInstanceId = getProcessOwnerApiInstanceId({
-    serviceOwnerApiInstanceId: args.serviceOwnerApiInstanceId,
-    channelOwnerApiInstanceId: args.channelOwnerApiInstanceId,
-  });
-  const hasSingletonOwner = Boolean(args.serviceRegistered) || Boolean(args.channelRegistered);
-
-  if (!hasSingletonOwner) {
-    return {
-      adoptOwner: true,
-      existingOwnerApiInstanceId,
-      reason: 'no-singleton-owner',
-    };
-  }
-
-  if (existingOwnerApiInstanceId && existingOwnerApiInstanceId === args.apiInstanceId) {
-    return {
-      adoptOwner: true,
-      existingOwnerApiInstanceId,
-      reason: 'same-owner-api',
-    };
-  }
-
-  return {
-    adoptOwner: false,
-    existingOwnerApiInstanceId,
-    reason: 'singleton-owned-by-other-api',
-  };
 }

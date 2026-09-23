@@ -26,15 +26,32 @@ type BridgeSingletonWithOwner = NonNullable<
 >;
 type BridgeOwner = ReturnType<typeof registerRuntime.getBridgeOwnerFromBridge>;
 const {
+  adoptLifecycleBridge,
+  beginRetirement,
+  canStartLifecycleRegistry,
+  canStopLifecycleRegistry,
+  commitLifecycle,
   ensureGatewayMethodRegistered,
-  getBridgeSingleton,
   getBridgeOwnerFromBridge,
+  getBridgeGenerationKey,
   getCurrentBridge,
   getExistingBridgeSingleton,
   getGatewayRuntime,
   getGlobalRegisterTrace,
+  getLifecycleBridgeForStart,
   getRegisterMeta,
-  shouldAdoptProcessOwner,
+  getRegistryDeclaration,
+  isLifecycleRegistryCurrent,
+  markRegistryChannelDeclared,
+  markRegistryRegistrationComplete,
+  markRegistryServiceDeclared,
+  noteRegisterTraceValue,
+  planLifecycle,
+  probeRegistryRuntimeObservation,
+  pruneRegistryLedgers,
+  recoverLifecycleRegistration,
+  settleRetirement,
+  failLifecycleStart,
 } = registerRuntime;
 
 type BncrDebugConfigRoot = {
@@ -71,150 +88,293 @@ const plugin = {
     const registryFingerprint = meta.registryFingerprint || 'unknown';
     const sameApiAsPrevious = previousApiInstanceId === apiInstanceId;
     const sameRegistryAsPrevious = previousRegistryFingerprint === registryFingerprint;
-    const firstSeenApi = !globalTrace.seenApiInstanceIds.has(apiInstanceId);
-    const firstSeenRegistry = !globalTrace.seenRegistryFingerprints.has(registryFingerprint);
+    const apiSeenRecently = globalTrace.seenApiInstanceIds.has(apiInstanceId);
+    const registrySeenRecently = globalTrace.seenRegistryFingerprints.has(registryFingerprint);
 
-    const gatewayRuntime = getGatewayRuntime();
-    const ownerDecision = shouldAdoptProcessOwner(apiInstanceId, gatewayRuntime);
+    let ownerDecision: ReturnType<typeof planLifecycle> | undefined;
 
-    let bridge: BridgeSingletonWithOwner | undefined;
-    let runtime: LoadedRuntime;
-    let created = false;
-    let rebuilt = false;
-    let owner: BridgeOwner | undefined;
-    let previousOwner: BridgeOwner | undefined;
+    try {
+      const gatewayRuntime = getGatewayRuntime();
+      ownerDecision = planLifecycle(api);
+      const lifecycleOwner = commitLifecycle(ownerDecision);
+      let bridge: BridgeSingletonWithOwner | undefined;
+      const runtime: LoadedRuntime = loadBncrRuntimeSync();
+      let created = false;
+      let rebuilt = false;
+      let owner: BridgeOwner | undefined;
+      let previousOwner: BridgeOwner | undefined;
+      const shouldDeclareLifecycle =
+        ownerDecision.kind === 'initialize' ||
+        ownerDecision.kind === 'takeover' ||
+        ownerDecision.kind === 'defer';
 
-    if (ownerDecision.adoptOwner) {
-      const adopted = getBridgeSingleton(api);
-      bridge = adopted.bridge;
-      runtime = adopted.runtime;
-      created = adopted.created;
-      rebuilt = adopted.rebuilt;
-      owner = adopted.owner;
-      previousOwner = adopted.previousOwner;
-      gatewayRuntime.currentBridge = bridge;
-      if (rebuilt) {
-        gatewayRuntime.serviceRegistered = false;
-        gatewayRuntime.channelRegistered = false;
-        gatewayRuntime.serviceOwnerApiInstanceId = undefined;
-        gatewayRuntime.channelOwnerApiInstanceId = undefined;
+      if (ownerDecision.kind === 'initialize') {
+        if (lifecycleOwner) {
+          const adopted = adoptLifecycleBridge(api, lifecycleOwner, 'create');
+          bridge = adopted.bridge;
+          created = adopted.created;
+          rebuilt = adopted.rebuilt;
+          owner = adopted.owner;
+          previousOwner = adopted.previousOwner;
+        }
+      } else if (ownerDecision.kind === 'takeover') {
+        if (lifecycleOwner) {
+          const adopted = adoptLifecycleBridge(api, lifecycleOwner, ownerDecision.mode);
+          bridge = adopted.bridge;
+          created = adopted.created;
+          rebuilt = adopted.rebuilt;
+          owner = adopted.owner;
+          previousOwner = adopted.previousOwner;
+        }
+      } else if (ownerDecision.kind === 'defer') {
+        bridge = gatewayRuntime.currentBridge || getExistingBridgeSingleton();
+        previousOwner = getBridgeOwnerFromBridge(bridge);
+        owner = previousOwner;
+      } else {
+        bridge = gatewayRuntime.currentBridge || getExistingBridgeSingleton();
+        previousOwner = getBridgeOwnerFromBridge(bridge);
+        owner = previousOwner;
+        if (bridge && !gatewayRuntime.currentBridge) {
+          gatewayRuntime.currentBridge = bridge;
+        }
       }
-    } else {
-      runtime = loadBncrRuntimeSync();
-      bridge = gatewayRuntime.currentBridge || getExistingBridgeSingleton();
-      previousOwner = getBridgeOwnerFromBridge(bridge);
-      owner = previousOwner;
+
+      /*
+       * A duplicate or rejected registration must never adopt or rebuild the
+       * process bridge. It still registers methods for its own registry.
+       */
       if (bridge && !gatewayRuntime.currentBridge) {
         gatewayRuntime.currentBridge = bridge;
       }
-    }
 
-    globalTrace.seenApiInstanceIds.add(apiInstanceId);
-    globalTrace.seenRegistryFingerprints.add(registryFingerprint);
-    globalTrace.lastApiInstanceId = apiInstanceId;
-    globalTrace.lastRegistryFingerprint = registryFingerprint;
-    bridge?.noteRegister?.({
-      source: '@xmoxmo/bncr',
-      pluginVersion,
-      apiRebound: ownerDecision.adoptOwner ? !created && !rebuilt : false,
-      apiInstanceId: meta.apiInstanceId,
-      registryFingerprint: meta.registryFingerprint,
-    });
-    const debugLog = (...args: unknown[]) => {
-      const rendered = args
-        .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
-        .join(' ')
-        .trim();
-      if (!rendered) return;
-      emitBncrLogLine('info', `[bncr] debug ${rendered}`, { debugOnly: true }, () =>
-        Boolean(bridge?.isDebugEnabled?.()),
-      );
-    };
-
-    debugLog(
-      `register begin bridge=${bridge?.getBridgeId?.() || 'unknown'} created=${created} rebuilt=${rebuilt} ` +
-        `ownerApi=${owner?.apiInstanceId || 'none'} ownerRegistry=${owner?.registryFingerprint || 'none'} ` +
-        `previousOwnerApi=${previousOwner?.apiInstanceId || 'none'} previousOwnerRegistry=${previousOwner?.registryFingerprint || 'none'}`,
-    );
-    debugLog(
-      `register classify mode=${meta.registrationMode || 'unknown'} api=${apiInstanceId} registry=${registryFingerprint} ` +
-        `sameApiAsPrevious=${sameApiAsPrevious} sameRegistryAsPrevious=${sameRegistryAsPrevious} ` +
-        `firstSeenApi=${firstSeenApi} firstSeenRegistry=${firstSeenRegistry}`,
-    );
-    debugLog(
-      `register owner adopt=${ownerDecision.adoptOwner} reason=${ownerDecision.reason} ` +
-        `existingOwnerApi=${ownerDecision.existingOwnerApiInstanceId || 'none'}`,
-    );
-    if (!ownerDecision.adoptOwner) {
-      debugLog(
-        `bridge rebuild suppressed due to existing singleton owner api ${ownerDecision.existingOwnerApiInstanceId || 'unknown'}`,
-      );
-    } else {
-      if (!created && !rebuilt) debugLog('bridge api rebound');
-      if (rebuilt) debugLog('bridge rebuilt due to owner/runtime change');
-    }
-
-    const resolveDebug = async () => {
-      try {
-        const cfg = getOpenClawRuntimeConfig(api) as BncrDebugConfigRoot | null | undefined;
-        return Boolean(cfg?.channels?.bncr?.debug?.verbose);
-      } catch {
-        return false;
-      }
-    };
-
-    if (!gatewayRuntime.serviceRegistered) {
-      const serviceStopHandler = async () => {
-        await getCurrentBridge().stopService?.();
+      noteRegisterTraceValue(globalTrace.seenApiInstanceIds, apiInstanceId);
+      noteRegisterTraceValue(globalTrace.seenRegistryFingerprints, registryFingerprint);
+      globalTrace.lastApiInstanceId = apiInstanceId;
+      globalTrace.lastRegistryFingerprint = registryFingerprint;
+      bridge?.noteRegister?.({
+        source: '@xmoxmo/bncr',
+        pluginVersion,
+        apiRebound: ownerDecision.kind === 'takeover' && !created && !rebuilt,
+        apiInstanceId: meta.apiInstanceId,
+        registryFingerprint: meta.registryFingerprint,
+      });
+      const debugLog = (...args: unknown[]) => {
+        const rendered = args
+          .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+          .join(' ')
+          .trim();
+        if (!rendered) return;
+        emitBncrLogLine('info', `[bncr] debug ${rendered}`, { debugOnly: true }, () =>
+          Boolean(bridge?.isDebugEnabled?.()),
+        );
       };
-      api.registerService({
-        id: 'bncr-bridge-service',
-        start: async (ctx) => {
-          const debug = await resolveDebug();
-          await getCurrentBridge().startService(ctx, debug);
-        },
-        stop: serviceStopHandler,
-      });
-      gatewayRuntime.serviceRegistered = true;
-      gatewayRuntime.serviceOwnerApiInstanceId = apiInstanceId;
-      meta.service = true;
-      debugLog(`register service ok ownerApi=${apiInstanceId}`);
-    } else {
-      meta.service = true;
-      debugLog(
-        `register service skip (process singleton already registered by api ${gatewayRuntime.serviceOwnerApiInstanceId || 'unknown'})`,
-      );
-    }
 
-    if (!gatewayRuntime.channelRegistered) {
-      api.registerChannel({
-        plugin: createDynamicChannelPlugin({ loaded: runtime, getCurrentBridge }) as ChannelPlugin,
-      });
-      gatewayRuntime.channelRegistered = true;
-      gatewayRuntime.channelOwnerApiInstanceId = apiInstanceId;
-      meta.channel = true;
-      debugLog(`register channel ok ownerApi=${apiInstanceId}`);
-    } else {
-      meta.channel = true;
       debugLog(
-        `register channel skip (process singleton already registered by api ${gatewayRuntime.channelOwnerApiInstanceId || 'unknown'})`,
+        `register begin bridge=${bridge?.getBridgeId?.() || 'unknown'} created=${created} rebuilt=${rebuilt} ` +
+          `ownerApi=${owner?.apiInstanceId || 'none'} ownerRegistry=${owner?.registryFingerprint || 'none'} ` +
+          `previousOwnerApi=${previousOwner?.apiInstanceId || 'none'} previousOwnerRegistry=${previousOwner?.registryFingerprint || 'none'}`,
       );
-    }
+      debugLog(
+        `register classify mode=${meta.registrationMode || 'unknown'} api=${apiInstanceId} registry=${registryFingerprint} ` +
+          `sameApiAsPrevious=${sameApiAsPrevious} sameRegistryAsPrevious=${sameRegistryAsPrevious} ` +
+          `apiSeenRecently=${apiSeenRecently} registrySeenRecently=${registrySeenRecently}`,
+      );
+      debugLog(
+        `register lifecycle decision=${ownerDecision.kind} reason=${ownerDecision.reason} ` +
+          `generation=${ownerDecision.owner.key.generation} ` +
+          `existingOwnerApi=${previousOwner?.apiInstanceId || 'none'}`,
+      );
+      if (!shouldDeclareLifecycle) {
+        debugLog(
+          `service/channel declaration suppressed for ${ownerDecision.kind} registry=${registryFingerprint}`,
+        );
+      }
 
-    ensureGatewayMethodRegistered(api, 'bncr.connect', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.inbound', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.activity', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.ack', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.diagnostics', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.deadLetter.inspect', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.deadLetter.prune', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.rpc.response', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.init', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.chunk', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.complete', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.abort', debugLog);
-    ensureGatewayMethodRegistered(api, 'bncr.file.ack', debugLog);
-    debugLog('register done');
+      const resolveDebug = async () => {
+        try {
+          const cfg = getOpenClawRuntimeConfig(api) as BncrDebugConfigRoot | null | undefined;
+          return Boolean(cfg?.channels?.bncr?.debug?.verbose);
+        } catch {
+          return false;
+        }
+      };
+
+      const registryGeneration = ownerDecision.owner.key.generation;
+      const registryBridgeGenerationKey = getBridgeGenerationKey(
+        ownerDecision.owner.bridgeGeneration,
+      );
+      /*
+       * A rejected registration must remain fail-closed. Creating a shadow
+       * declaration here would make its gateway methods dispatch to the
+       * current bridge even though the registration never owned a lifecycle.
+       */
+      const registryDeclaration =
+        ownerDecision.kind === 'reject'
+          ? gatewayRuntime.registryDeclarations.get(registryFingerprint)
+          : getRegistryDeclaration(
+              registryFingerprint,
+              registryBridgeGenerationKey,
+              registryGeneration,
+            );
+      const serviceDeclaredForGeneration = registryDeclaration?.service === 'declared';
+      const channelDeclaredForGeneration = registryDeclaration?.channel === 'declared';
+
+      if (shouldDeclareLifecycle && !serviceDeclaredForGeneration) {
+        const serviceStopHandler = async () => {
+          const retirement = beginRetirement(registryFingerprint, registryGeneration);
+          if (!retirement) {
+            debugLog(`service stop suppressed for stale registry=${registryFingerprint}`);
+            return;
+          }
+
+          try {
+            await getCurrentBridge().stopService?.();
+            settleRetirement(registryFingerprint, { ok: true }, registryGeneration);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            settleRetirement(registryFingerprint, { ok: false, error: detail }, registryGeneration);
+            throw error;
+          }
+        };
+        api.registerService({
+          id: 'bncr-bridge-service',
+          start: async (ctx) => {
+            const lifecycleBridge = await getLifecycleBridgeForStart(
+              api,
+              registryFingerprint,
+              registryGeneration,
+            );
+            if (!lifecycleBridge) {
+              debugLog(`service start suppressed for stale registry=${registryFingerprint}`);
+              return;
+            }
+            const debug = await resolveDebug();
+            if (!canStartLifecycleRegistry(registryFingerprint, registryGeneration)) {
+              debugLog(
+                `service start suppressed after await for stale registry=${registryFingerprint}`,
+              );
+              return;
+            }
+            try {
+              const started = await lifecycleBridge.startService(ctx, debug, () =>
+                isLifecycleRegistryCurrent(registryFingerprint, registryGeneration),
+              );
+              if (
+                started === false ||
+                !canStartLifecycleRegistry(registryFingerprint, registryGeneration)
+              ) {
+                debugLog(
+                  `service start suppressed after await for stale registry=${registryFingerprint}`,
+                );
+                return;
+              }
+              probeRegistryRuntimeObservation(
+                registryFingerprint,
+                registryBridgeGenerationKey,
+                registryGeneration,
+              );
+            } catch (error) {
+              failLifecycleStart(registryFingerprint, error, registryGeneration);
+              throw error;
+            }
+          },
+          stop: serviceStopHandler,
+        });
+        markRegistryServiceDeclared(
+          registryFingerprint,
+          registryBridgeGenerationKey,
+          registryGeneration,
+        );
+        meta.service = true;
+        debugLog(`register service ok ownerApi=${apiInstanceId}`);
+      } else {
+        meta.service = registryDeclaration?.service === 'declared';
+        debugLog(
+          `register service skip registry=${registryFingerprint} declared=${registryDeclaration?.service || 'missing'}`,
+        );
+      }
+
+      if (shouldDeclareLifecycle && !channelDeclaredForGeneration) {
+        api.registerChannel({
+          plugin: createDynamicChannelPlugin({
+            loaded: runtime,
+            getCurrentBridge,
+            resolveBridgeForStart: async () => {
+              const lifecycleBridge = await getLifecycleBridgeForStart(
+                api,
+                registryFingerprint,
+                registryGeneration,
+              );
+              if (!lifecycleBridge) {
+                throw new Error(`bncr lifecycle registry is inactive: ${registryFingerprint}`);
+              }
+              return lifecycleBridge;
+            },
+            isBridgeForStartCurrent: () =>
+              canStartLifecycleRegistry(registryFingerprint, registryGeneration),
+            onBridgeStartObserved: () =>
+              probeRegistryRuntimeObservation(
+                registryFingerprint,
+                registryBridgeGenerationKey,
+                registryGeneration,
+              ),
+            resolveBridgeForStop: () => {
+              if (!canStopLifecycleRegistry(registryFingerprint, registryGeneration)) {
+                debugLog(`channel stop suppressed for stale registry=${registryFingerprint}`);
+                return null;
+              }
+              return getCurrentBridge();
+            },
+            isBridgeForStopCurrent: () =>
+              canStopLifecycleRegistry(registryFingerprint, registryGeneration),
+          }) as ChannelPlugin,
+        });
+        markRegistryChannelDeclared(
+          registryFingerprint,
+          registryBridgeGenerationKey,
+          registryGeneration,
+        );
+        meta.channel = true;
+        debugLog(`register channel ok ownerApi=${apiInstanceId}`);
+      } else {
+        meta.channel = registryDeclaration?.channel === 'declared';
+        debugLog(
+          `register channel skip registry=${registryFingerprint} declared=${registryDeclaration?.channel || 'missing'}`,
+        );
+      }
+
+      ensureGatewayMethodRegistered(api, 'bncr.connect', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.inbound', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.activity', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.ack', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.diagnostics', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.deadLetter.inspect', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.deadLetter.prune', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.rpc.response', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.file.init', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.file.chunk', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.file.complete', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.file.abort', debugLog);
+      ensureGatewayMethodRegistered(api, 'bncr.file.ack', debugLog);
+      if (ownerDecision.kind !== 'reject') {
+        markRegistryRegistrationComplete(
+          registryFingerprint,
+          registryBridgeGenerationKey,
+          registryGeneration,
+        );
+      }
+      pruneRegistryLedgers();
+      debugLog('register done');
+    } catch (error) {
+      const recovered = ownerDecision
+        ? recoverLifecycleRegistration(ownerDecision, error)
+        : 'plan-not-committed';
+      emitBncrLogLine(
+        'error',
+        `[bncr] register failed recovered=${recovered} error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   },
 };
 

@@ -87,12 +87,23 @@ test('bridge lifecycle service helpers preserve startup stop and shutdown sequen
     getChannelConfigRoot(cfg) {
       return cfg.channels.bncr;
     },
+    resumeOutboxDrain() {
+      calls.push(['resumeOutboxDrain']);
+    },
   };
 
-  await startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, true);
+  assert.equal(await startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, true), true);
   assert.equal(stopped, false);
   assert.equal(debugVerbose, true);
   assert.match(statePath, /bncr-bridge-state\.json$/);
+  const loadStateIndex = calls.findIndex(([name]) => name === 'loadState');
+  const setRunningIndex = calls.findIndex(
+    ([name, value]) => name === 'setStopped' && value === false,
+  );
+  const resumeDrainIndex = calls.findIndex(([name]) => name === 'resumeOutboxDrain');
+  assert.ok(loadStateIndex >= 0);
+  assert.ok(setRunningIndex > loadStateIndex);
+  assert.ok(resumeDrainIndex > setRunningIndex);
 
   const cleanupCalls = [];
   await stopBncrBridgeService({
@@ -115,6 +126,110 @@ test('bridge lifecycle service helpers preserve startup stop and shutdown sequen
     },
   });
   assert.deepEqual(shutdownCalls, ['shutdown']);
+});
+
+test('bridge lifecycle stale start does not clear stopped or resume outbox drain', async () => {
+  let current = true;
+  let stopped = true;
+  let resumed = false;
+  let releaseLoad;
+  let notifyLoadEntered;
+  const loadGate = new Promise((resolve) => {
+    releaseLoad = resolve;
+  });
+  const loadEntered = new Promise((resolve) => {
+    notifyLoadEntered = resolve;
+  });
+  const runtime = {
+    bridgeId: 'bridge-stale-start',
+    setStopped(value) {
+      stopped = value;
+    },
+    setStatePath() {},
+    getRuntimeConfig() {
+      return { channels: { bncr: { enabled: true } } };
+    },
+    initializeCanonicalAgentId() {},
+    logWarn() {},
+    async loadState() {
+      notifyLoadEntered();
+      await loadGate;
+    },
+    setDebugFlag() {},
+    async refreshDebugFlagFromConfig() {},
+    buildIntegratedDiagnostics() {
+      return {
+        regression: { totalKnownRoutes: 0, ok: true },
+        health: { pending: 0, deadLetter: 0 },
+      };
+    },
+    logInfo() {},
+    getChannelConfigRoot(cfg) {
+      return cfg.channels.bncr;
+    },
+    resumeOutboxDrain() {
+      resumed = true;
+    },
+    isStartCurrent() {
+      return current;
+    },
+  };
+
+  const starting = startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, false);
+  await loadEntered;
+  current = false;
+  releaseLoad();
+
+  assert.equal(await starting, false);
+  assert.equal(stopped, true);
+  assert.equal(resumed, false);
+});
+
+test('bridge lifecycle start failure restores stopped and does not resume outbox drain', async () => {
+  const calls = [];
+  let stopped = false;
+  let resumed = false;
+  const runtime = {
+    bridgeId: 'bridge-failed',
+    setStopped(value) {
+      stopped = value;
+      calls.push(['setStopped', value]);
+    },
+    setStatePath() {},
+    getRuntimeConfig() {
+      return { channels: { bncr: { enabled: true } } };
+    },
+    initializeCanonicalAgentId() {},
+    logWarn() {},
+    async loadState() {},
+    setDebugFlag() {},
+    async refreshDebugFlagFromConfig() {},
+    buildIntegratedDiagnostics() {
+      throw new Error('diagnostics failed');
+    },
+    logInfo() {},
+    getChannelConfigRoot(cfg) {
+      return cfg.channels.bncr;
+    },
+    resumeOutboxDrain() {
+      resumed = true;
+    },
+  };
+
+  await assert.rejects(
+    startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, false),
+    /diagnostics failed/,
+  );
+
+  assert.equal(stopped, true);
+  assert.equal(resumed, false);
+  assert.deepEqual(
+    calls.filter(([name]) => name === 'setStopped'),
+    [
+      ['setStopped', false],
+      ['setStopped', true],
+    ],
+  );
 });
 
 test('bridge lifecycle service runs sqlite cutover when maintenance env is set', async () => {

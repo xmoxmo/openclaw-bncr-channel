@@ -18,7 +18,9 @@ const requiredScriptFiles = [
 const requiredSourceFiles = [
   'src/bootstrap/channel-plugin-runtime.ts',
   'src/bootstrap/cli.ts',
+  'src/bootstrap/register-lifecycle.ts',
   'src/bootstrap/register-runtime-helpers.ts',
+  'src/bootstrap/register-runtime-observation.ts',
   'src/bootstrap/register-runtime.ts',
   'src/bootstrap/runtime-discovery.ts',
   'src/bootstrap/runtime-loader.ts',

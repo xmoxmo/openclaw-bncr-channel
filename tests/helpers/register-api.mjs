@@ -6,6 +6,10 @@ export function resetBncrRegisterGlobals() {
 }
 
 export function createRegisterApiStub(overrides = {}) {
+  // `reuseRegistry` models a single registry object surviving across code
+  // generations. The current OpenClaw host allocates a fresh api per register
+  // pass, so it is off by default and only enabled by defense-in-depth tests.
+  const { reuseRegistry = false, ...rest } = overrides;
   const currentConfig = overrides.currentConfig ?? {
     channels: { bncr: { debug: { verbose: false } } },
   };
@@ -110,9 +114,25 @@ export function createRegisterApiStub(overrides = {}) {
     channels: [],
     methods: [],
     registerService(def) {
+      // Host contract: service ids are unique per registry and the first
+      // registration wins; a same-plugin re-registration is silently ignored.
+      const id = typeof def?.id === 'string' ? def.id.trim() : '';
+      if (!reuseRegistry && id && this.services.some((entry) => entry?.id?.trim() === id)) {
+        return;
+      }
       this.services.push(def);
     },
     registerChannel(def) {
+      // Host contract: channel ids are unique per registry; a same-plugin
+      // re-registration replaces the previous channel plugin object.
+      const id = def?.plugin?.id;
+      if (!reuseRegistry && id) {
+        const existing = this.channels.findIndex((entry) => entry?.plugin?.id === id);
+        if (existing >= 0) {
+          this.channels[existing] = def;
+          return;
+        }
+      }
       this.channels.push(def);
     },
     registerGatewayMethod(name, handler) {
@@ -125,7 +145,7 @@ export function createRegisterApiStub(overrides = {}) {
     mutateCalls,
     writeCalls,
     currentConfig,
-    ...overrides,
+    ...rest,
   };
 }
 

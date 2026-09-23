@@ -2,10 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  getProcessOwnerApiInstanceId,
   hydrateBridgeRegisterState,
   sameBridgeOwner,
-  shouldAdoptProcessOwner,
   snapshotBridgeRegisterState,
 } from '../../src/bootstrap/register-runtime-helpers.ts';
 
@@ -45,7 +43,7 @@ test('register-runtime helpers snapshot and hydrate preserve bounded register st
   assert.deepEqual(target.registerTraceRecent, [{ id: 1 }, { id: 2 }]);
 });
 
-test('register-runtime helpers compare owners and owner-adopt policy correctly', () => {
+test('register-runtime helpers compare bridge owners correctly', () => {
   const ownerA = {
     moduleEpoch: 'epoch',
     bridgeFactoryId: 'factory',
@@ -57,29 +55,4 @@ test('register-runtime helpers compare owners and owner-adopt policy correctly',
 
   assert.equal(sameBridgeOwner(ownerA, ownerB), true);
   assert.equal(sameBridgeOwner(ownerA, ownerC), false);
-  assert.equal(getProcessOwnerApiInstanceId({ channelOwnerApiInstanceId: 'api-2' }), 'api-2');
-  assert.equal(
-    shouldAdoptProcessOwner({
-      apiInstanceId: 'api-1',
-      serviceRegistered: false,
-      channelRegistered: false,
-    }).reason,
-    'no-singleton-owner',
-  );
-  assert.equal(
-    shouldAdoptProcessOwner({
-      apiInstanceId: 'api-1',
-      serviceRegistered: true,
-      serviceOwnerApiInstanceId: 'api-1',
-    }).reason,
-    'same-owner-api',
-  );
-  assert.equal(
-    shouldAdoptProcessOwner({
-      apiInstanceId: 'api-2',
-      serviceRegistered: true,
-      serviceOwnerApiInstanceId: 'api-1',
-    }).adoptOwner,
-    false,
-  );
 });

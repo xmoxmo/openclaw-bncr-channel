@@ -10,8 +10,17 @@ type LoadedRuntime = {
 export function createDynamicChannelPlugin(args: {
   loaded: LoadedRuntime;
   getCurrentBridge: () => BridgeSingleton;
+  resolveBridgeForStart?: () => BridgeSingleton | Promise<BridgeSingleton>;
+  isBridgeForStartCurrent?: () => boolean;
+  onBridgeStartObserved?: () => void;
+  resolveBridgeForStop?: () => BridgeSingleton | null | Promise<BridgeSingleton | null>;
+  isBridgeForStopCurrent?: () => boolean;
 }): ChannelPlugin {
   const { loaded, getCurrentBridge } = args;
+  const resolveBridgeForStart = args.resolveBridgeForStart || getCurrentBridge;
+  const isBridgeForStartCurrent = args.isBridgeForStartCurrent || (() => true);
+  const resolveBridgeForStop = args.resolveBridgeForStop || getCurrentBridge;
+  const isBridgeForStopCurrent = args.isBridgeForStopCurrent || (() => true);
   const base = loaded.createBncrChannelPlugin(() => getCurrentBridge());
   const plugin = { ...base } as ChannelPlugin;
   const outbound = base.outbound as ChannelPlugin['outbound'];
@@ -67,14 +76,26 @@ export function createDynamicChannelPlugin(args: {
 
   plugin.gateway = {
     ...baseGateway,
-    startAccount: (ctx: GatewayStartAccountArgs) =>
-      getCurrentBridge().channelStartAccount(
+    startAccount: async (ctx: GatewayStartAccountArgs) => {
+      const bridge = await resolveBridgeForStart();
+      if (!isBridgeForStartCurrent()) return;
+      const task = bridge.channelStartAccount(
         ctx as Parameters<BridgeSingleton['channelStartAccount']>[0],
-      ),
-    stopAccount: (ctx: GatewayStopAccountArgs) =>
-      getCurrentBridge().channelStopAccount(
-        ctx as Parameters<BridgeSingleton['channelStopAccount']>[0],
-      ),
+      );
+      if (isBridgeForStartCurrent()) {
+        try {
+          args.onBridgeStartObserved?.();
+        } catch {
+          // Observation is diagnostic-only and must not fail channel startup.
+        }
+      }
+      return task;
+    },
+    stopAccount: async (ctx: GatewayStopAccountArgs) => {
+      const bridge = await resolveBridgeForStop();
+      if (!bridge || !isBridgeForStopCurrent()) return;
+      return bridge.channelStopAccount(ctx as Parameters<BridgeSingleton['channelStopAccount']>[0]);
+    },
   };
 
   return plugin;

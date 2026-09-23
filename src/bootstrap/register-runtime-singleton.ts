@@ -2,7 +2,6 @@ import {
   type BridgeOwner,
   type BridgeRegisterStateCarrier,
   hydrateBridgeRegisterState,
-  sameBridgeOwner,
   snapshotBridgeRegisterState,
 } from './register-runtime-helpers.ts';
 import type { ChannelModule, LoadedRuntime } from './runtime-loader.ts';
@@ -16,6 +15,8 @@ type BridgeOwnedCarrier = BridgeRegisterStateCarrier & {
   bindRuntimePaths?: (paths: { pluginRoot: string; pluginFile: string }) => void;
 };
 type GlobalBridgeStore = typeof globalThis & { __bncrBridge?: BridgeSingleton };
+
+export type BridgeAdoptionMode = 'create' | 'reuse' | 'replace';
 
 function isBridgeOwner(value: unknown): value is BridgeOwner {
   return Boolean(
@@ -48,10 +49,13 @@ export function createBncrBridgeSingletonManager(runtime: {
     return bridge;
   };
 
-  const getBridgeSingleton = (api: OpenClawPluginApi) => {
+  const adoptBridgeSingleton = (
+    api: OpenClawPluginApi,
+    owner: BridgeOwner,
+    mode: BridgeAdoptionMode,
+  ) => {
     const loaded = runtime.loadBncrRuntimeSync();
     const g = globalThis as GlobalBridgeStore;
-    const owner = runtime.getBridgeOwner(api, loaded);
     const previousOwnerRaw = g.__bncrBridge
       ? getBridgeOwnedCarrier(g.__bncrBridge)[runtime.bridgeOwnerSymbol]
       : undefined;
@@ -59,57 +63,56 @@ export function createBncrBridgeSingletonManager(runtime: {
 
     let created = false;
     let rebuilt = false;
+    let bridge: BridgeSingleton | undefined;
 
-    if (g.__bncrBridge) {
-      const mustRebuild =
-        !sameBridgeOwner(previousOwner, owner) &&
-        (previousOwner?.moduleEpoch !== owner.moduleEpoch ||
-          previousOwner?.bridgeFactoryId !== owner.bridgeFactoryId ||
-          previousOwner?.registrationMode !== owner.registrationMode ||
-          previousOwner?.apiInstanceId !== owner.apiInstanceId ||
-          previousOwner?.registryFingerprint !== owner.registryFingerprint);
-
-      if (mustRebuild) {
-        const registerState = snapshotBridgeRegisterState(
-          getBridgeRegisterStateCarrier(g.__bncrBridge),
-        );
-        try {
-          g.__bncrBridge.stopService?.();
-        } catch {
-          // ignore stop errors during hot-restart recovery
-        }
-        const rebuiltBridge = assignBridgeOwner(
-          loaded.createBncrBridge(api, {
-            pluginRoot: runtime.pluginRoot,
-            pluginFile: runtime.pluginFile,
-          }),
-          owner,
-        );
-        hydrateBridgeRegisterState(getBridgeRegisterStateCarrier(rebuiltBridge), registerState);
-        g.__bncrBridge = rebuiltBridge;
-        created = true;
-        rebuilt = true;
-      } else {
-        g.__bncrBridge.bindApi?.(api);
-        assignBridgeOwner(g.__bncrBridge, owner);
-      }
-    } else {
-      g.__bncrBridge = assignBridgeOwner(
+    if (!g.__bncrBridge || mode === 'create' || mode === 'replace') {
+      const registerState =
+        mode === 'replace' && g.__bncrBridge
+          ? snapshotBridgeRegisterState(getBridgeRegisterStateCarrier(g.__bncrBridge))
+          : null;
+      bridge = assignBridgeOwner(
         loaded.createBncrBridge(api, {
           pluginRoot: runtime.pluginRoot,
           pluginFile: runtime.pluginFile,
         }),
         owner,
       );
+      hydrateBridgeRegisterState(getBridgeRegisterStateCarrier(bridge), registerState);
+      g.__bncrBridge = bridge;
       created = true;
+      rebuilt = mode === 'replace' && Boolean(previousOwner);
+    } else {
+      bridge = g.__bncrBridge;
+      bridge.bindApi?.(api);
+      assignBridgeOwner(bridge, owner);
     }
 
-    g.__bncrBridge?.bindRuntimePaths?.({
+    bridge.bindRuntimePaths?.({
       pluginRoot: runtime.pluginRoot,
       pluginFile: runtime.pluginFile,
     });
 
-    return { bridge: g.__bncrBridge, runtime: loaded, created, rebuilt, owner, previousOwner };
+    return { bridge, runtime: loaded, created, rebuilt, owner, previousOwner };
+  };
+
+  const getBridgeSingleton = (api: OpenClawPluginApi) => {
+    const loaded = runtime.loadBncrRuntimeSync();
+    const owner = runtime.getBridgeOwner(api, loaded);
+    const g = globalThis as GlobalBridgeStore;
+    const previous = getBridgeOwnerFromBridge(g.__bncrBridge);
+    const sameGeneration =
+      previous?.moduleEpoch === owner.moduleEpoch &&
+      previous?.bridgeFactoryId === owner.bridgeFactoryId &&
+      previous?.pluginVersion === owner.pluginVersion &&
+      previous?.registrationMode === owner.registrationMode &&
+      previous?.pluginRoot === owner.pluginRoot &&
+      previous?.pluginFile === owner.pluginFile;
+    const mode: BridgeAdoptionMode = !g.__bncrBridge
+      ? 'create'
+      : sameGeneration
+        ? 'reuse'
+        : 'replace';
+    return adoptBridgeSingleton(api, owner, mode);
   };
 
   const getExistingBridgeSingleton = () => {
@@ -129,6 +132,7 @@ export function createBncrBridgeSingletonManager(runtime: {
 
   return {
     assignBridgeOwner,
+    adoptBridgeSingleton,
     getBridgeRegisterStateCarrier,
     getBridgeSingleton,
     getExistingBridgeSingleton,
