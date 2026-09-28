@@ -15,8 +15,7 @@ function formatBncrHumanDisplay(route: BncrRoute): string {
 }
 
 type BncrMessagingRuntimeBridge = {
-  canonicalAgentId?: string;
-  ensureCanonicalAgentId: (params: { cfg: BncrChannelConfigRoot; accountId: string }) => string;
+  resolveOutboundAgentId: (route: BncrRoute) => string;
   resolveRouteBySession: (raw: string, accountId: string) => BncrRoute | null;
 };
 
@@ -44,6 +43,7 @@ type BncrMessagingSessionTargetArgs = {
 };
 
 type BncrMessagingOutboundSessionRouteArgs = {
+  /** Host-reported owner. BNCR resolves ownership from its persisted scene registry instead. */
   agentId: string;
   target: string;
   resolvedTarget?: { to?: string } | null;
@@ -99,21 +99,9 @@ function resolveMessagingAccountId(accountId: unknown) {
   return normalizeAccountId(asSanitizedString(accountId || BNCR_DEFAULT_ACCOUNT_ID));
 }
 
-function resolveMessagingCanonicalAgentId(
-  runtimeBridge: BncrMessagingRuntimeBridge,
-  cfg: BncrChannelConfigRoot,
-  accountId: string,
-) {
-  return runtimeBridge.canonicalAgentId || runtimeBridge.ensureCanonicalAgentId({ cfg, accountId });
-}
-
-export function createBncrMessagingExplicitTargetParser(
-  getBridge: () => BncrMessagingRuntimeBridge,
-) {
+export function createBncrMessagingExplicitTargetParser() {
   return ({ raw }: BncrMessagingExplicitTargetArgs) => {
-    const runtimeBridge = getBridge();
-    const canonicalAgentId = runtimeBridge.canonicalAgentId || 'main';
-    const parsed = parseExplicitTarget(asSanitizedString(raw).trim(), { canonicalAgentId });
+    const parsed = parseExplicitTarget(asSanitizedString(raw).trim());
     if (!parsed) return null;
     const chatType: ChatType = parsed.route?.groupId ? 'group' : 'direct';
     return {
@@ -125,16 +113,12 @@ export function createBncrMessagingExplicitTargetParser(
   };
 }
 
-export function createBncrMessagingSessionTargetResolver(
-  getBridge: () => BncrMessagingRuntimeBridge,
-) {
+export function createBncrMessagingSessionTargetResolver() {
   return ({ id }: BncrMessagingSessionTargetArgs) => {
     const raw = asSanitizedString(id).trim();
     if (!raw) return undefined;
-    const runtimeBridge = getBridge();
-    const canonicalAgentId = runtimeBridge.canonicalAgentId || 'main';
 
-    const parsed = parseExplicitTarget(raw, { canonicalAgentId });
+    const parsed = parseExplicitTarget(raw);
     if (!parsed) {
       return raw || undefined;
     }
@@ -146,17 +130,10 @@ export function createBncrMessagingOutboundSessionRouteResolver(
   getBridge: () => BncrMessagingRuntimeBridge,
 ) {
   return (params: BncrMessagingOutboundSessionRouteArgs) => {
-    const accountId = resolveMessagingAccountId(params?.accountId);
     const runtimeBridge = getBridge();
-    const canonicalAgentId = resolveMessagingCanonicalAgentId(
-      runtimeBridge,
-      params?.cfg,
-      accountId,
-    );
     return resolveBncrOutboundSessionRoute({
       channel: 'bncr',
       cfg: params.cfg,
-      agentId: params.agentId,
       accountId: params.accountId ?? undefined,
       target: params.target,
       resolvedTarget: params.resolvedTarget,
@@ -164,7 +141,7 @@ export function createBncrMessagingOutboundSessionRouteResolver(
         params.threadId === null || params.threadId === undefined
           ? undefined
           : asSanitizedString(params.threadId),
-      canonicalAgentId,
+      resolveAgentId: (route) => runtimeBridge.resolveOutboundAgentId(route),
       resolveRouteBySession: (raw: string, acc: string) =>
         runtimeBridge.resolveRouteBySession(raw, acc),
     });
@@ -175,9 +152,9 @@ export function createBncrMessagingSurface(getBridge: () => BncrMessagingRuntime
   return {
     // 接收任意标签输入；不在 normalize 阶段做格式门槛，统一下沉到发送前验证。
     normalizeTarget: normalizeBncrMessagingTarget,
-    parseExplicitTarget: createBncrMessagingExplicitTargetParser(getBridge),
+    parseExplicitTarget: createBncrMessagingExplicitTargetParser(),
     formatTargetDisplay: formatBncrMessagingTargetDisplay,
-    resolveSessionTarget: createBncrMessagingSessionTargetResolver(getBridge),
+    resolveSessionTarget: createBncrMessagingSessionTargetResolver(),
     resolveOutboundSessionRoute: createBncrMessagingOutboundSessionRouteResolver(getBridge),
     targetResolver: createBncrMessagingTargetResolver(getBridge),
   };

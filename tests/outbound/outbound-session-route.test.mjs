@@ -14,8 +14,7 @@ test('resolveBncrOutboundSessionRoute returns canonical direct hex route for dir
   const resolved = resolveBncrOutboundSessionRoute({
     cfg,
     channel,
-    agentId,
-    canonicalAgentId: agentId,
+    resolveAgentId: () => agentId,
     accountId: 'Primary',
     target: 'Bncr:tgBot:0:10001',
   });
@@ -41,8 +40,7 @@ test('resolveBncrOutboundSessionRoute returns canonical group hex route for grou
   const resolved = resolveBncrOutboundSessionRoute({
     cfg,
     channel,
-    agentId,
-    canonicalAgentId: agentId,
+    resolveAgentId: () => agentId,
     accountId: 'Primary',
     target: 'Bncr:tgBot:-1001:0',
   });
@@ -68,8 +66,7 @@ test('resolveBncrOutboundSessionRoute normalizes legacy group route with non-zer
   const resolved = resolveBncrOutboundSessionRoute({
     cfg,
     channel,
-    agentId,
-    canonicalAgentId: agentId,
+    resolveAgentId: () => agentId,
     accountId: 'Primary',
     target: 'Bncr:tgBot:-1001:10001',
   });
@@ -87,8 +84,7 @@ test('resolveBncrOutboundSessionRoute can resolve legacy/strict session input ba
   const resolved = resolveBncrOutboundSessionRoute({
     cfg,
     channel,
-    agentId,
-    canonicalAgentId: agentId,
+    resolveAgentId: () => agentId,
     accountId: 'Primary',
     target: 'agent:main:bncr:direct:tgBot:0:10001',
     resolveRouteBySession: () => routeDirect,
@@ -112,8 +108,7 @@ test('resolveBncrOutboundSessionRoute can use resolveRouteBySession fallback', (
   const resolved = resolveBncrOutboundSessionRoute({
     cfg,
     channel,
-    agentId,
-    canonicalAgentId: agentId,
+    resolveAgentId: () => agentId,
     accountId: 'Primary',
     target: 'agent:orion:bncr:group:7467426f743a2d31303031',
     resolveRouteBySession: () => routeGroup,
@@ -137,8 +132,7 @@ test('resolveBncrOutboundSessionRoute preserves thread route ref when threadId i
   const resolved = resolveBncrOutboundSessionRoute({
     cfg,
     channel,
-    agentId,
-    canonicalAgentId: agentId,
+    resolveAgentId: () => agentId,
     accountId: 'Primary',
     target: 'Bncr:tgBot:0:10001',
     threadId: 'topic-123',

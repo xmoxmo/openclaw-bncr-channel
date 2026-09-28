@@ -27,12 +27,11 @@ type BncrOutboundSessionRoute = ChannelOutboundSessionRoute & BncrChannelRouteRe
 type ResolveBncrOutboundSessionRouteParams = {
   cfg: BncrChannelConfigRoot;
   channel: string;
-  agentId: string;
   accountId?: string;
   target: string;
   resolvedTarget?: { to?: string } | null;
   threadId?: string | number | null;
-  canonicalAgentId: string;
+  resolveAgentId: (route: BncrRoute) => string;
   resolveRouteBySession?: (raw: string, accountId: string) => BncrRoute | null;
 };
 
@@ -76,15 +75,14 @@ export function resolveBncrOutboundSessionRoute(params: ResolveBncrOutboundSessi
 
   if (!route) return null;
 
-  const canonicalAgentId =
-    asString(params.canonicalAgentId).trim() || asString(params.agentId).trim() || 'main';
+  const agentId = asString(params.resolveAgentId(route)).trim() || 'public';
   const peerId = routeScopeToHex(route);
-  const sessionKey = buildCanonicalBncrSessionKey(route, canonicalAgentId);
+  const sessionKey = buildCanonicalBncrSessionKey(route, agentId);
   const displayTo = formatDisplayScope(route);
 
   const built = buildOpenClawChannelOutboundSessionRoute({
     cfg: params.cfg,
-    agentId: canonicalAgentId,
+    agentId,
     channel: params.channel,
     accountId: params.accountId,
     peer: {

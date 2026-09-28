@@ -201,6 +201,7 @@ import {
   createBncrOutboxDiagnosticsHelpers,
   createBncrRuntimeAckObservabilityBuilder,
 } from './plugin/runtime-diagnostics-snapshot.ts';
+import { buildRouteSceneKey } from './plugin/scene-registry.ts';
 import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
 import type { BncrHistoryShardRow } from './plugin/sqlite-state.ts';
 import { createBncrStateTransientRuntimeGroup } from './plugin/state-transient-runtime-group.ts';
@@ -308,6 +309,12 @@ class BncrBridgeRuntime {
   private sceneRegistry = new Map<string, BncrSceneRecord>();
   getSceneRegistry(): Map<string, BncrSceneRecord> {
     return this.sceneRegistry;
+  }
+  resolveOutboundAgentId(route: BncrRoute): string {
+    return (
+      asString(this.sceneRegistry.get(buildRouteSceneKey(route))?.agentId).trim() ||
+      this.defaultPublicAgentId()
+    );
   }
   private conversationHistories: BncrConversationHistoryMap = new Map();
   private outboundReplayCache: BncrOutboundReplayCache = new Map();

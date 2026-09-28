@@ -30,6 +30,10 @@ function createBridge() {
       calls.push(['ensureCanonicalAgentId', args]);
       return 'orion';
     },
+    resolveOutboundAgentId(route) {
+      calls.push(['resolveOutboundAgentId', route]);
+      return 'public';
+    },
     resolveRouteBySession(raw, accountId) {
       calls.push(['resolveRouteBySession', raw, accountId]);
       return { userId: '10001' };
@@ -93,8 +97,10 @@ test('bridge group injects channel peer and default-account fallbacks correctly'
   assert.equal(group.getMessageSendBridge().channelMessageSendText({ hello: true }), 'text');
   assert.equal(group.getOutboundBridge().channelSendMedia({ world: true }), 'sendMedia');
   assert.equal(
-    group.getMessagingBridge().ensureCanonicalAgentId({ cfg: {}, accountId: 'AccountA' }),
-    'orion',
+    group
+      .getMessagingBridge()
+      .resolveOutboundAgentId({ platform: 'tgBot', groupId: '-1001', userId: '0' }),
+    'public',
   );
   assert.deepEqual(group.getStatusBridge().getAccountRuntimeSnapshot(), {
     accountId: 'Primary',
@@ -111,13 +117,8 @@ test('bridge group injects channel peer and default-account fallbacks correctly'
   group.getGatewayBridge().channelStartAccount({ accountId: 'Primary' });
 
   assert.deepEqual(calls[2], [
-    'ensureCanonicalAgentId',
-    {
-      cfg: {},
-      accountId: 'AccountA',
-      channelId: 'bncr',
-      peer: { kind: 'direct', id: 'AccountA' },
-    },
+    'resolveOutboundAgentId',
+    { platform: 'tgBot', groupId: '-1001', userId: '0' },
   ]);
   assert.deepEqual(calls[3], ['getAccountRuntimeSnapshot', 'Primary']);
   assert.deepEqual(calls[4], ['getStatusHeadline', 'Primary']);

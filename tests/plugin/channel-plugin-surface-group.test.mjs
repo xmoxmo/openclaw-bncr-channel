@@ -16,9 +16,8 @@ function createRuntime(overrides = {}) {
       channelSendMedia() {},
     }),
     getMessagingBridge: () => ({
-      canonicalAgentId: undefined,
-      ensureCanonicalAgentId() {
-        return 'orion';
+      resolveOutboundAgentId() {
+        return 'public';
       },
       resolveRouteBySession() {
         return null;

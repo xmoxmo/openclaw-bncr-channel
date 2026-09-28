@@ -3,13 +3,13 @@ import { Type } from 'typebox';
 import { listAccountIds, normalizeAccountId, resolveAccount } from '../core/accounts.ts';
 import { BncrConfigSchema } from '../core/config-schema.ts';
 import { resolveBncrChannelPolicy } from '../core/policy.ts';
+import type { BncrRoute } from '../core/types.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
 import { readOpenClawStringParam } from '../openclaw/sdk-helpers.ts';
 import type { BncrBridgeCallBridge } from './bridge-call.ts';
 import type {
-  BncrChannelConfigRoot,
   BncrChannelSendContext,
   BncrMessageToolSchemaContribution,
   BncrSceneRecord,
@@ -81,8 +81,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
   };
   getOutboundBridge: () => BncrOutboundBridge;
   getMessagingBridge: () => {
-    canonicalAgentId: undefined;
-    ensureCanonicalAgentId: (params: { cfg: BncrChannelConfigRoot; accountId: string }) => string;
+    resolveOutboundAgentId: (route: BncrRoute) => string;
     resolveRouteBySession: (raw: string, accountId: string) => BncrVerifiedTarget['route'] | null;
   };
   getStatusBridge: () => {

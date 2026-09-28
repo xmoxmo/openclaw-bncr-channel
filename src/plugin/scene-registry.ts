@@ -1,3 +1,5 @@
+import type { BncrRoute } from '../core/types.ts';
+import { asString } from '../core/value-sanitize.ts';
 import type {
   BncrGroupReplyMode,
   BncrSceneKind,
@@ -30,10 +32,19 @@ function defaultGroupReplyMode(kind: BncrSceneKind): BncrGroupReplyMode | undefi
   return kind === 'group' ? 'admin' : undefined;
 }
 
+export function buildRouteSceneKey(route: BncrRoute): string {
+  const platform = asString(route.platform).trim();
+  const groupId = asString(route.groupId).trim() || '0';
+  const userId = asString(route.userId).trim() || '0';
+  return groupId !== '0' ? `${platform}:${groupId}` : `${platform}:${userId}`;
+}
+
 export function buildSceneKey(parsed: ParsedInbound): string {
-  return parsed.peer.kind === 'group'
-    ? `${parsed.platform}:${parsed.groupId}`
-    : `${parsed.platform}:${parsed.userId}`;
+  return buildRouteSceneKey({
+    platform: parsed.platform,
+    groupId: parsed.groupId || '0',
+    userId: parsed.userId || '0',
+  });
 }
 
 function buildSceneRecord(args: {
