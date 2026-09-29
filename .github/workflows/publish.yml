@@ -1,5 +1,12 @@
 name: Publish to npm (OIDC trusted publishing)
 
+# 职责边界（2026-09-29 定调）：
+#   本地工作仓 plugins/bncr   → 开发 + fullcheck + build + 提交（门禁在这里）
+#   本地发布仓 exports/bncr-public → 同步后复检 fullcheck / build / dist 一致性 / pack
+#   远端 CI（本文件）         → 只把「已检查完毕的代码」发出去，不跑任何检查
+# 因此本 workflow 只保留 checkout + setup-node + npm publish。
+# dist/index.js 已在本地验证并与源码一致后提交入库，远端不再重建。
+
 on:
   push:
     tags:
@@ -22,24 +29,6 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-
-      - name: Install deps
-        run: npm ci
-
-      - name: Full check
-        run: npm run fullcheck
-
-      - name: Check release version policy
-        run: npm run selfcheck:release
-
-      - name: Build
-        run: npm run build
-
-      - name: Verify committed dist
-        run: git diff --exit-code -- dist/index.js
-
-      - name: Verify package
-        run: npm pack --dry-run
 
       - name: Publish to npm (OIDC trusted publishing)
         run: npm publish --provenance --access public
