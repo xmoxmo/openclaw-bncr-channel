@@ -13,6 +13,7 @@ const requiredScriptFiles = [
   'scripts/check-pack.mjs',
   'scripts/check-register-drift.mjs',
   'scripts/selfcheck.mjs',
+  'scripts/version-policy.mjs',
 ];
 
 const requiredSourceFiles = [

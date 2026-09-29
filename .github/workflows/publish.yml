@@ -26,8 +26,20 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Full check
+        run: npm run fullcheck
+
+      - name: Check release version policy
+        run: npm run selfcheck:release
+
       - name: Build
         run: npm run build
+
+      - name: Verify committed dist
+        run: git diff --exit-code -- dist/index.js
+
+      - name: Verify package
+        run: npm pack --dry-run
 
       - name: Publish to npm (OIDC trusted publishing)
         run: npm publish --provenance --access public

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateReleaseVersionPolicy, validateVersionSyntax } from './version-policy.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,6 +11,7 @@ const root = path.resolve(__dirname, '..');
 const require = createRequire(import.meta.url);
 
 const requiredRootFiles = ['index.ts', 'openclaw.plugin.json'];
+const requiredScriptFiles = ['scripts/version-policy.mjs'];
 
 const requiredSourceFiles = [
   'src/bootstrap/channel-plugin-runtime.ts',
@@ -213,7 +215,7 @@ const requiredSourceFiles = [
   'src/runtime/status-worker.ts',
 ];
 
-const requiredFiles = [...requiredRootFiles, ...requiredSourceFiles];
+const requiredFiles = [...requiredRootFiles, ...requiredScriptFiles, ...requiredSourceFiles];
 
 const readPackageVersion = () => {
   const pkgPath = path.join(root, 'package.json');
@@ -245,6 +247,7 @@ const requiredOpenClawSdkSubpaths = [
   'openclaw/plugin-sdk/core',
   'openclaw/plugin-sdk/json-store',
   'openclaw/plugin-sdk/param-readers',
+  'openclaw/plugin-sdk/media-runtime',
   'openclaw/plugin-sdk/security-runtime',
   'openclaw/plugin-sdk/status-helpers',
   'openclaw/plugin-sdk/tool-send',
@@ -266,120 +269,14 @@ const resolveOpenClawSdkSubpaths = () => {
   });
 };
 
-const validateVersionPolicy = (version, latestVersion) => {
-  const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
-  if (!match) {
-    return {
-      ok: false,
-      reason: 'version must be strict semver x.y.z',
-      version,
-    };
-  }
-
-  const patch = Number.parseInt(match[3], 10);
-  if (patch > 9) {
-    return {
-      ok: false,
-      reason: 'patch version must stay within 0-9; bump minor instead',
-      version,
-    };
-  }
-
-  // Prevent jumping minor when current minor still has unused patch slots
-  if (latestVersion) {
-    const lm = latestVersion.match(/^(\d+)\.(\d+)\.(\d+)$/);
-    if (lm) {
-      const vMajor = Number.parseInt(match[1], 10);
-      const vMinor = Number.parseInt(match[2], 10);
-      const lMajor = Number.parseInt(lm[1], 10);
-      const lMinor = Number.parseInt(lm[2], 10);
-      const lPatch = Number.parseInt(lm[3], 10);
-
-      // Version unchanged
-      if (vMajor === lMajor && vMinor === lMinor && patch === lPatch) {
-        return { ok: false, reason: `version unchanged: ${version}`, version };
-      }
-
-      // Downgrade: any component decreased
-      if (
-        vMajor < lMajor ||
-        (vMajor === lMajor && vMinor < lMinor) ||
-        (vMajor === lMajor && vMinor === lMinor && patch < lPatch)
-      ) {
-        return { ok: false, reason: `downgrade from ${latestVersion} to ${version}`, version };
-      }
-
-      // Patch bump: same major and minor, patch must increment by exactly +1
-      if (vMajor === lMajor && vMinor === lMinor) {
-        if (patch === lPatch + 1) return { ok: true, version };
-        return {
-          ok: false,
-          reason: `patch jump from ${latestVersion} to ${version} (delta=${patch - lPatch}); expected ${lMajor}.${lMinor}.${lPatch + 1}`,
-          version,
-        };
-      }
-
-      // Minor bump: same major, minor + 1
-      if (vMajor === lMajor && vMinor === lMinor + 1) {
-        if (lPatch === 9 && patch === 0) return { ok: true, version };
-        if (lPatch !== 9)
-          return {
-            ok: false,
-            reason: `minor bumped from ${latestVersion} to ${version} but ${9 - lPatch} patch slots remain in ${lMajor}.${lMinor}; prefer ${lMajor}.${lMinor}.${lPatch + 1}`,
-            version,
-          };
-        return {
-          ok: false,
-          reason: `minor bump must reset patch to 0; got ${vMajor}.${vMinor}.${patch}`,
-          version,
-        };
-      }
-
-      // Minor jumped by more than 1
-      if (vMajor === lMajor && vMinor > lMinor + 1) {
-        return {
-          ok: false,
-          reason: `minor jumped from ${latestVersion} to ${version}; expected ${lMajor}.${lMinor + 1}.0`,
-          version,
-        };
-      }
-
-      // Major bump: major + 1, requires previous minor fully exhausted
-      if (vMajor === lMajor + 1) {
-        if (lMinor === 9 && lPatch === 9 && vMinor === 0 && patch === 0)
-          return { ok: true, version };
-        if (lMinor !== 9 || lPatch !== 9)
-          return {
-            ok: false,
-            reason: `major bumped from ${latestVersion} to ${version} but previous major series not exhausted; expected ${lMajor + 1}.0.0 after ${lMajor}.9.9`,
-            version,
-          };
-        return {
-          ok: false,
-          reason: `major bump must reset to .0.0; got ${vMajor}.${vMinor}.${patch}`,
-          version,
-        };
-      }
-
-      // Major jumped by more than 1
-      if (vMajor > lMajor + 1) {
-        return {
-          ok: false,
-          reason: `major jumped from ${latestVersion} to ${version}; expected ${lMajor + 1}.0.0`,
-          version,
-        };
-      }
-    }
-  }
-
-  return { ok: true, version };
-};
-
 const missing = requiredFiles.filter((rel) => !fs.existsSync(path.join(root, rel)));
 const version = readPackageVersion();
 const packageName = '@xmoxmo/bncr';
-const latestVersion = readNpmLatestVersion(packageName);
-const versionPolicy = validateVersionPolicy(version, latestVersion);
+const releaseMode = process.argv.includes('--release');
+const latestVersion = releaseMode ? readNpmLatestVersion(packageName) : null;
+const versionPolicy = releaseMode
+  ? validateReleaseVersionPolicy(version, latestVersion)
+  : validateVersionSyntax(version);
 const sdkSubpaths = resolveOpenClawSdkSubpaths();
 const missingSdkSubpaths = sdkSubpaths.filter((entry) => !entry.ok);
 const result = {
@@ -388,6 +285,8 @@ const result = {
   requiredCount: requiredFiles.length,
   missing,
   version,
+  versionMode: releaseMode ? 'release' : 'development',
+  latestVersion,
   versionPolicy,
   sdkSubpaths,
 };

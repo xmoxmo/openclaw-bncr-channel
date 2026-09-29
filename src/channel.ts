@@ -231,6 +231,10 @@ class BncrBridgeRuntime {
   // Identity / lifecycle ----------------------------------------------------
   private api: OpenClawPluginApi;
 
+  getApi(): OpenClawPluginApi {
+    return this.api;
+  }
+
   private get runtimeApi(): OpenClawPluginApi {
     return this.api;
   }
@@ -3235,6 +3239,7 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
   return createBncrChannelPluginSurfaceGroup({
     channelId: CHANNEL_ID,
     sceneRegistry: getBridge().getSceneRegistry(),
+    getApi: () => getBridge().getApi(),
     getMessageSendBridge: bridgeGroup.getMessageSendBridge,
     getOutboundBridge: bridgeGroup.getOutboundBridge,
     getMessagingBridge: bridgeGroup.getMessagingBridge,

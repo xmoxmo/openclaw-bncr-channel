@@ -88,6 +88,110 @@ test('loadOpenClawWebMedia resolves relative paths against localRoots', async ()
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('loadOpenClawWebMedia resolves sandbox /workspace paths against localRoots', async () => {
+  const dir = path.join(tmpdir(), `bncr-media-workspace-test-${Date.now()}`);
+  const workspaceRoot = path.join(dir, 'workspace');
+  const agentRoot = path.join(workspaceRoot, 'public');
+  const pluginDir = path.join(agentRoot, 'bncr', 'plugins');
+  const filePath = path.join(pluginDir, 'MemoNote.js');
+  mkdirSync(pluginDir, { recursive: true });
+  writeFileSync(filePath, 'plugin-content');
+
+  const calls = [];
+  const api = {
+    runtime: {
+      media: {
+        async loadWebMedia(mediaUrl, options) {
+          calls.push(['loadWebMedia', mediaUrl, options]);
+          return { buffer: Buffer.from('resolved'), contentType: 'text/javascript' };
+        },
+      },
+    },
+  };
+
+  const result = await loadOpenClawWebMedia(api, '/workspace/bncr/plugins/MemoNote.js', {
+    localRoots: [workspaceRoot, '/workspace', agentRoot],
+  });
+
+  assert.equal(result.buffer.toString(), 'resolved');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1], filePath);
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('loadOpenClawWebMedia prefers the most specific workspace root', async () => {
+  const dir = path.join(tmpdir(), `bncr-media-root-priority-test-${Date.now()}`);
+  const workspaceRoot = path.join(dir, 'workspace');
+  const agentRoot = path.join(workspaceRoot, 'public');
+  const sharedFile = path.join(workspaceRoot, 'same.js');
+  const agentFile = path.join(agentRoot, 'same.js');
+  mkdirSync(agentRoot, { recursive: true });
+  writeFileSync(sharedFile, 'shared');
+  writeFileSync(agentFile, 'agent');
+
+  const calls = [];
+  const api = {
+    runtime: {
+      media: {
+        async loadWebMedia(mediaUrl) {
+          calls.push(mediaUrl);
+          return { buffer: Buffer.from('resolved'), contentType: 'text/javascript' };
+        },
+      },
+    },
+  };
+
+  await loadOpenClawWebMedia(api, '/workspace/same.js', { localRoots: [workspaceRoot, agentRoot] });
+  assert.equal(calls[0], agentFile);
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('loadOpenClawWebMedia does not escape workspace roots while resolving', async () => {
+  const dir = path.join(tmpdir(), `bncr-media-root-boundary-test-${Date.now()}`);
+  const agentRoot = path.join(dir, 'public');
+  const escapedFile = path.join(dir, 'escaped.js');
+  mkdirSync(agentRoot, { recursive: true });
+  writeFileSync(escapedFile, 'outside');
+
+  const calls = [];
+  const api = {
+    runtime: {
+      media: {
+        async loadWebMedia(mediaUrl) {
+          calls.push(mediaUrl);
+          return { buffer: Buffer.from('resolved'), contentType: 'text/javascript' };
+        },
+      },
+    },
+  };
+
+  await loadOpenClawWebMedia(api, '/workspace/../escaped.js', { localRoots: [agentRoot] });
+  assert.equal(calls[0], '/workspace/../escaped.js');
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('loadOpenClawWebMedia leaves unmatched sandbox workspace paths unchanged', async () => {
+  const calls = [];
+  const api = {
+    runtime: {
+      media: {
+        async loadWebMedia(mediaUrl) {
+          calls.push(mediaUrl);
+          return { buffer: Buffer.from('resolved'), contentType: 'text/javascript' };
+        },
+      },
+    },
+  };
+
+  await loadOpenClawWebMedia(api, '/workspace/missing/file.js', {
+    localRoots: ['/tmp/openclaw'],
+  });
+  assert.equal(calls[0], '/workspace/missing/file.js');
+});
+
 test('loadOpenClawWebMedia passes absolute paths through unchanged', async () => {
   const calls = [];
   const api = {

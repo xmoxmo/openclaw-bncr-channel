@@ -6,6 +6,7 @@ import { createBncrChannelPluginSurfaceGroup } from '../../src/plugin/channel-pl
 function createRuntime(overrides = {}) {
   return {
     channelId: 'bncr',
+    getApi: () => ({}),
     getMessageSendBridge: () => ({
       channelMessageSendText() {},
       channelMessageSendMedia() {},
@@ -169,6 +170,158 @@ test('handleAction forwards structured extra/type/downloadMedia into outbound br
   assert.deepEqual(calls[0].extra, { customBadge: 'VIP' });
   assert.equal(calls[0].type, 'appmsg');
   assert.equal(calls[0].downloadMedia, true);
+});
+
+test('handleAction saves a preserved data-uri buffer and forwards its real path', async () => {
+  const saved = [];
+  const calls = [];
+  const { messageActions } = createBncrChannelPluginSurfaceGroup(
+    createRuntime({
+      getApi: () => ({
+        runtime: {
+          channel: {
+            media: {
+              async saveMediaBuffer(buffer, mimeType, direction, maxBytes, fileName) {
+                saved.push({ buffer, mimeType, direction, maxBytes, fileName });
+                return { path: '/state/media/outbound/hello.txt' };
+              },
+            },
+          },
+        },
+      }),
+      getOutboundBridge: () => ({
+        channelSendText: async (ctx) => {
+          calls.push(ctx);
+          return { ok: true, messageId: 'm1' };
+        },
+        channelSendMedia: async () => {},
+      }),
+    }),
+  );
+
+  await messageActions.handleAction({
+    action: 'send',
+    accountId: 'Primary',
+    params: {
+      to: 'Bncr:tgBot:0:10001',
+      message: 'caption',
+      mediaUrl: 'buffer://message-send/attachment',
+      mediaUrls: ['buffer://message-send/attachment'],
+      buffer: 'data:text/plain;base64,aGVsbG8=',
+      filename: 'hello.txt',
+      contentType: 'text/plain',
+    },
+  });
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].buffer.toString(), 'hello');
+  assert.equal(saved[0].mimeType, 'text/plain');
+  assert.equal(saved[0].direction, 'outbound');
+  assert.equal(saved[0].maxBytes, 50 * 1024 * 1024);
+  assert.equal(saved[0].fileName, 'hello.txt');
+  assert.equal(calls[0].mediaUrl, '/state/media/outbound/hello.txt');
+  assert.deepEqual(calls[0].mediaUrls, ['/state/media/outbound/hello.txt']);
+});
+
+test('handleAction saves an ordinary base64 buffer without a media sentinel', async () => {
+  const saved = [];
+  const calls = [];
+  const { messageActions } = createBncrChannelPluginSurfaceGroup(
+    createRuntime({
+      getApi: () => ({
+        runtime: {
+          channel: {
+            media: {
+              async saveMediaBuffer(buffer, mimeType, direction, maxBytes, fileName) {
+                saved.push({ buffer, mimeType, direction, maxBytes, fileName });
+                return { path: '/state/media/outbound/script.js' };
+              },
+            },
+          },
+        },
+      }),
+      getOutboundBridge: () => ({
+        channelSendText: async (ctx) => {
+          calls.push(ctx);
+          return { ok: true, messageId: 'm1' };
+        },
+        channelSendMedia: async () => {},
+      }),
+    }),
+  );
+
+  await messageActions.handleAction({
+    action: 'send',
+    accountId: 'Primary',
+    params: {
+      to: 'Bncr:tgBot:0:10001',
+      buffer: Buffer.from('console.log("ok")').toString('base64'),
+      mimeType: 'text/javascript',
+      fileName: 'script.js',
+    },
+  });
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].buffer.toString(), 'console.log("ok")');
+  assert.equal(saved[0].mimeType, 'text/javascript');
+  assert.equal(saved[0].fileName, 'script.js');
+  assert.equal(calls[0].mediaUrl, '/state/media/outbound/script.js');
+});
+
+test('handleAction rejects invalid and empty send buffers before outbound enqueue', async () => {
+  let sendCalled = false;
+  let saveCalled = false;
+  const { messageActions } = createBncrChannelPluginSurfaceGroup(
+    createRuntime({
+      getApi: () => ({
+        runtime: {
+          channel: {
+            media: {
+              async saveMediaBuffer() {
+                saveCalled = true;
+                return { path: '/state/media/outbound/invalid.bin' };
+              },
+            },
+          },
+        },
+      }),
+      getOutboundBridge: () => ({
+        channelSendText: async () => {
+          sendCalled = true;
+          return { ok: true, messageId: 'm1' };
+        },
+        channelSendMedia: async () => {},
+      }),
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      messageActions.handleAction({
+        action: 'send',
+        accountId: 'Primary',
+        params: {
+          to: 'Bncr:tgBot:0:10001',
+          buffer: 'not-valid-base64!',
+        },
+      }),
+    /invalid base64/,
+  );
+  await assert.rejects(
+    () =>
+      messageActions.handleAction({
+        action: 'send',
+        accountId: 'Primary',
+        params: {
+          to: 'Bncr:tgBot:0:10001',
+          buffer: 'data:text/plain;base64,',
+        },
+      }),
+    /empty buffer/,
+  );
+
+  assert.equal(saveCalled, false);
+  assert.equal(sendCalled, false);
 });
 
 test('handleAction bridgeMethod calls the bridge with extra args without sending', async () => {

@@ -6,6 +6,12 @@ import { resolveBncrChannelPolicy } from '../core/policy.ts';
 import type { BncrRoute } from '../core/types.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
+import {
+  decodeOpenClawSendBuffer,
+  isOpenClawSendBufferMediaUrl,
+  OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES,
+  saveOpenClawChannelMediaBuffer,
+} from '../openclaw/media-runtime.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
 import { readOpenClawStringParam } from '../openclaw/sdk-helpers.ts';
 import type { BncrBridgeCallBridge } from './bridge-call.ts';
@@ -68,6 +74,7 @@ const BNCR_MESSAGE_TOOL_SCHEMA: BncrMessageToolSchemaContribution = {
 export function createBncrChannelPluginSurfaceGroup(runtime: {
   channelId: string;
   sceneRegistry: Map<string, BncrSceneRecord>;
+  getApi: () => Parameters<typeof saveOpenClawChannelMediaBuffer>[0];
   getMessageSendBridge: () => {
     channelMessageSendText: (
       ctx: Record<string, unknown>,
@@ -222,20 +229,49 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
       }
 
       const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
-      const toolMediaUrl =
+      const rawBuffer = typeof paramsObj.buffer === 'string' ? paramsObj.buffer : '';
+      const rawMediaUrl =
         (typeof paramsObj.mediaUrl === 'string' ? paramsObj.mediaUrl : '') ||
         (typeof paramsObj.media === 'string' ? paramsObj.media : '') ||
         (typeof paramsObj.path === 'string' ? paramsObj.path : '') ||
         (typeof paramsObj.filePath === 'string' ? paramsObj.filePath : '');
+      const rawMediaUrls = paramsObj.mediaUrls;
+      const declaredMediaUrls = Array.isArray(rawMediaUrls)
+        ? rawMediaUrls.filter((u): u is string => typeof u === 'string')
+        : undefined;
+      const hasExplicitMedia = [rawMediaUrl, ...(declaredMediaUrls ?? [])].some(
+        (mediaUrl) => Boolean(mediaUrl) && !isOpenClawSendBufferMediaUrl(mediaUrl),
+      );
+      let toolMediaUrl = rawMediaUrl;
+      let mediaUrls = declaredMediaUrls;
+      if (rawBuffer && !hasExplicitMedia) {
+        const decoded = decodeOpenClawSendBuffer({
+          buffer: rawBuffer,
+          contentType:
+            typeof paramsObj.contentType === 'string' ? paramsObj.contentType : undefined,
+          mimeType: typeof paramsObj.mimeType === 'string' ? paramsObj.mimeType : undefined,
+          filename: typeof paramsObj.filename === 'string' ? paramsObj.filename : undefined,
+          fileName: typeof paramsObj.fileName === 'string' ? paramsObj.fileName : undefined,
+          maxBytes: OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES,
+        });
+        const saved = await saveOpenClawChannelMediaBuffer(
+          runtime.getApi(),
+          decoded.buffer,
+          decoded.mimeType,
+          'outbound',
+          OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES,
+          decoded.fileName,
+        );
+        toolMediaUrl = saved.path;
+        mediaUrls = declaredMediaUrls?.map((mediaUrl) =>
+          isOpenClawSendBufferMediaUrl(mediaUrl) ? saved.path : mediaUrl,
+        );
+      }
       const rawExtra = paramsObj.extra;
       const extra =
         rawExtra && typeof rawExtra === 'object' && !Array.isArray(rawExtra)
           ? (rawExtra as Record<string, unknown>)
           : undefined;
-      const rawMediaUrls = paramsObj.mediaUrls;
-      const mediaUrls = Array.isArray(rawMediaUrls)
-        ? rawMediaUrls.filter((u): u is string => typeof u === 'string')
-        : undefined;
 
       const toolMessage = readOpenClawStringParam(paramsObj, 'message', { allowEmpty: true }) ?? '';
       const toolCaption = readOpenClawStringParam(paramsObj, 'caption', { allowEmpty: true }) ?? '';
