@@ -1,4 +1,4 @@
-import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-message';
+import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-outbound';
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import type { BncrRecentOutboundEntry, BncrRoute } from '../core/types.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';

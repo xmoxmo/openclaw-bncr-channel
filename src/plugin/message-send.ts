@@ -1,4 +1,4 @@
-import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-message';
+import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-outbound';
 import type { BncrChannelSendContext } from './channel-runtime-types.ts';
 
 export type BncrMessageSendBridge = {

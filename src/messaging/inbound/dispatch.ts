@@ -271,7 +271,11 @@ export async function dispatchBncrInbound(params: {
         mediaContentType: mediaContentType || mimeType,
         historyLimit: resolvedHistoryLimit,
       });
-      if (historyKey) {
+      // A silent history flush repurposes the current turn as a context carrier
+      // and suppresses its outbound. Only a turn we would not reply to anyway
+      // may carry the flush; a reply-expected turn must reach the channel, and
+      // its backlog is flushed by the outbound path after the reply instead.
+      if (historyKey && !initialShouldDispatch && !forceSilentHistoryFlush) {
         const entries = conversationHistories.get(historyKey);
         if (entries && resolvedHistoryLimit > 0 && entries.length >= resolvedHistoryLimit) {
           const sceneForHistory = sceneRegistry.get(buildSceneKey(parsed));
@@ -279,6 +283,10 @@ export async function dispatchBncrInbound(params: {
           if (historyForce) {
             silentHistoryFlush = true;
             shouldDispatch = true;
+            emitBncrLogLine(
+              'info',
+              `history silent flush|key=${historyKey}|limit=${resolvedHistoryLimit}|entries=${entries.length}|carrier=${msgId ?? '-'}`,
+            );
           }
         }
       }

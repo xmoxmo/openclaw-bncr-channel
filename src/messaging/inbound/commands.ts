@@ -1,4 +1,4 @@
-import { hasControlCommand } from 'openclaw/plugin-sdk/command-auth';
+import { hasControlCommand } from 'openclaw/plugin-sdk/command-detection';
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import { formatDisplayScope } from '../../core/targets.ts';

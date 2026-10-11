@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { hasControlCommand } from 'openclaw/plugin-sdk/command-auth';
+import { hasControlCommand } from 'openclaw/plugin-sdk/command-detection';
 import {
   formatDisplayScope,
   normalizeInboundSessionKey,

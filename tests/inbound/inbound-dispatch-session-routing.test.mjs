@@ -1634,8 +1634,10 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
   });
 
   assert.equal(calls.turnRuns.length, 2);
-  assert.equal(enqueueCalls.length, 0);
-  assert.equal(calls.turnRuns[1].ctxPayload.SenderId, 'bncr-history-system');
+  // A reply-expected trigger must be delivered, not repurposed as a silent
+  // history-flush carrier, even when the accumulated window is already full.
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(calls.turnRuns[1].ctxPayload.SenderId, '10001');
   assert.deepEqual(
     calls.turnRuns[1].ctxPayload.StructuredContextFacts.conversationContext.map(
       (entry) => entry.content,
@@ -1649,6 +1651,9 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
     false,
   );
   assert.deepEqual(conversationHistories.get('Primary:tgBot:-1001'), []);
+
+  // Only dispatches enqueue outbound; the carry flushes below must stay silent.
+  enqueueCalls.length = 0;
 
   const carry = ['测试6', '测试7', '测试8'];
   for (const [index, text] of carry.entries()) {
@@ -1873,7 +1878,7 @@ test('dispatchBncrInbound flushes pending direct history at the direct scene his
   );
 });
 
-test('dispatchBncrInbound force-flushes a dispatched direct message when accumulated history reaches the limit', async () => {
+test('dispatchBncrInbound dispatches a reply-expected direct message instead of silently flushing a full window', async () => {
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
   const sceneRegistry = new Map([
@@ -1969,8 +1974,8 @@ test('dispatchBncrInbound force-flushes a dispatched direct message when accumul
   });
 
   assert.equal(calls.turnRuns.length, 1);
-  assert.equal(enqueueCalls.length, 0);
-  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, '10001');
   assert.deepEqual(
     calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
       (entry) => entry.messageId,
@@ -1978,6 +1983,99 @@ test('dispatchBncrInbound force-flushes a dispatched direct message when accumul
     ['direct-dispatched-limit-1', 'direct-dispatched-limit-bot-1', 'direct-dispatched-limit-2'],
   );
   assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
+});
+
+test('dispatchBncrInbound delivers a reply-expected group trigger even when the accumulated window is full', async () => {
+  const { api, calls } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const enqueueCalls = [];
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        agentId: 'public',
+        groupReplyMode: 'mention',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+
+  for (const [index, text] of ['闲1', '闲2'].entries()) {
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed: parseBncrInboundParams({
+        accountId: 'Primary',
+        clientId: 'client-1',
+        platform: 'tgBot',
+        groupId: '-1001',
+        userId: '10001',
+        userName: 'xmo',
+        isGroup: true,
+        shouldRespond: false,
+        type: 'text',
+        msg: text,
+        mimeType: 'text/plain',
+        msgId: `trigger-full-window-idle-${index + 1}`,
+      }),
+      canonicalAgentId: 'public',
+      shouldDispatch: false,
+      shouldAccumulate: true,
+      sceneRegistry,
+      conversationHistories,
+      rememberSessionRoute() {},
+      enqueueFromReply: async (args) => {
+        enqueueCalls.push(args);
+      },
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+  }
+  assert.equal(calls.turnRuns.length, 0);
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed: parseBncrInboundParams({
+      accountId: 'Primary',
+      clientId: 'client-1',
+      platform: 'tgBot',
+      groupId: '-1001',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: true,
+      shouldRespond: true,
+      type: 'text',
+      msg: '@bot 在吗',
+      mimeType: 'text/plain',
+      msgId: 'trigger-full-window-3',
+    }),
+    canonicalAgentId: 'public',
+    shouldDispatch: true,
+    sceneRegistry,
+    conversationHistories,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, '10001');
+  assert.doesNotMatch(String(calls.turnRuns[0].ctxPayload.BodyForAgent), /NO_REPLY/);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'reply from agent');
 });
 
 test('raw outbound replay recording does not dispatch history flush by itself', async () => {
@@ -3418,7 +3516,7 @@ test('dispatchBncrInbound truncates merged assistant history to the limit and ke
   });
 
   assert.equal(calls.turnRuns.length, 1);
-  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, '10001');
   assert.deepEqual(
     calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
       (entry) => entry.messageId,

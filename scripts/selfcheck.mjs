@@ -240,7 +240,6 @@ const readNpmLatestVersion = (packageName) => {
 const requiredOpenClawSdkSubpaths = [
   'openclaw/plugin-sdk/channel-outbound',
   'openclaw/plugin-sdk/channel-ingress-runtime',
-  'openclaw/plugin-sdk/channel-message',
   'openclaw/plugin-sdk/routing',
   'openclaw/plugin-sdk/conversation-runtime',
   'openclaw/plugin-sdk/session-store-runtime',
@@ -251,7 +250,7 @@ const requiredOpenClawSdkSubpaths = [
   'openclaw/plugin-sdk/security-runtime',
   'openclaw/plugin-sdk/status-helpers',
   'openclaw/plugin-sdk/tool-send',
-  'openclaw/plugin-sdk/command-auth',
+  'openclaw/plugin-sdk/command-detection',
   'openclaw/plugin-sdk/reply-history',
 ];
 

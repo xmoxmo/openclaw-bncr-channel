@@ -1,4 +1,4 @@
-import { hasControlCommand } from 'openclaw/plugin-sdk/command-auth';
+import { hasControlCommand } from 'openclaw/plugin-sdk/command-detection';
 import { resolveAccount } from '../core/accounts.ts';
 import { checkBncrMessageGate } from '../messaging/inbound/gate.ts';
 import {

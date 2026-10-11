@@ -1,4 +1,4 @@
-import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-message';
+import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-outbound';
 import { Type } from 'typebox';
 import { listAccountIds, normalizeAccountId, resolveAccount } from '../core/accounts.ts';
 import { BncrConfigSchema } from '../core/config-schema.ts';
