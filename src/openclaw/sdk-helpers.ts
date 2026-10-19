@@ -1,10 +1,11 @@
+import { access } from 'node:fs/promises';
 import {
   applyAccountNameToChannelSection as sdkApplyAccountNameToChannelSection,
   jsonResult as sdkJsonResult,
   setAccountEnabledInConfigSection as sdkSetAccountEnabledInConfigSection,
 } from 'openclaw/plugin-sdk/core';
 import {
-  readJsonFileWithFallback as sdkReadJsonFileWithFallback,
+  loadJsonFile as sdkLoadJsonFile,
   writeJsonFileAtomically as sdkWriteJsonFileAtomically,
 } from 'openclaw/plugin-sdk/json-store';
 import { readStringParam as sdkReadStringParam } from 'openclaw/plugin-sdk/param-readers';
@@ -15,7 +16,19 @@ import { extractToolSend as sdkExtractToolSend } from 'openclaw/plugin-sdk/tool-
 export type OpenClawChannelToolSend = ChannelToolSend;
 
 export const readOpenClawStringParam = sdkReadStringParam;
-export const readOpenClawJsonFileWithFallback = sdkReadJsonFileWithFallback;
+export async function readOpenClawJsonFileWithFallback<T>(
+  filePath: string,
+  fallback: T,
+): Promise<{ value: T; exists: boolean }> {
+  const value = sdkLoadJsonFile<T>(filePath);
+  if (value !== undefined) return { value, exists: true };
+  try {
+    await access(filePath);
+    return { value: fallback, exists: true };
+  } catch {
+    return { value: fallback, exists: false };
+  }
+}
 export const writeOpenClawJsonFileAtomically = sdkWriteJsonFileAtomically;
 export const createOpenClawDefaultChannelRuntimeState = sdkCreateDefaultChannelRuntimeState;
 export const extractOpenClawToolSend = (
