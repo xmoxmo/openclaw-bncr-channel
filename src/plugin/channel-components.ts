@@ -16,6 +16,7 @@ import { createBncrConnectionHandlers } from './connection-handlers.ts';
 import { createBncrDiagnosticsHandlers } from './diagnostics-handlers.ts';
 import { createBncrFileInboundHandlers } from './file-inbound-handlers.ts';
 import { createBncrInboundHandlers } from './inbound-handlers.ts';
+import type { BncrHistoryShardQueue } from './sqlite-state.ts';
 
 export function createBncrConnectionHandlersComponent(
   runtime: Parameters<typeof createBncrConnectionHandlers>[0],
@@ -212,7 +213,9 @@ export function createBncrInboundHandlersComponent(runtime: {
   defaultPublicAgentId: Parameters<typeof createBncrInboundHandlers>[0]['defaultPublicAgentId'];
   sceneRegistry: Parameters<typeof createBncrInboundHandlers>[0]['sceneRegistry'];
   conversationHistories: BncrConversationHistoryMap;
+  conversationHistoryVersions?: Map<string, number>;
   outboundReplayCache: BncrOutboundReplayCache;
+  historyShardQueue?: BncrHistoryShardQueue;
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlers
   >[0]['prepareInboundAcceptance'];
@@ -258,7 +261,9 @@ export function createBncrInboundHandlersComponent(runtime: {
     defaultPublicAgentId: runtime.defaultPublicAgentId,
     sceneRegistry: runtime.sceneRegistry,
     conversationHistories: runtime.conversationHistories,
+    conversationHistoryVersions: runtime.conversationHistoryVersions,
     outboundReplayCache: runtime.outboundReplayCache,
+    historyShardQueue: runtime.historyShardQueue,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     formatDisplayScope,
     logInboundSummary: runtime.logInboundSummary,
@@ -278,7 +283,9 @@ export function createBncrInboundHandlersComponent(runtime: {
       shouldAccumulate,
       sceneRegistry,
       conversationHistories,
+      conversationHistoryVersions,
       outboundReplayCache,
+      historyShardQueue,
       defaultAdminAgentId,
       defaultPublicAgentId,
       now,
@@ -294,7 +301,9 @@ export function createBncrInboundHandlersComponent(runtime: {
         shouldAccumulate,
         sceneRegistry,
         conversationHistories,
+        conversationHistoryVersions,
         outboundReplayCache,
+        historyShardQueue,
         defaultAdminAgentId,
         defaultPublicAgentId,
         now,

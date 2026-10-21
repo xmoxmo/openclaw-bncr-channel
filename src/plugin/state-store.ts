@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, rename } from 'node:fs/promises';
+import { chmod, link, readFile, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import {
   dumpRegisterDriftSnapshot,
@@ -7,7 +7,6 @@ import {
 } from '../core/register-trace.ts';
 import type { BncrRoute, OutboxEntry } from '../core/types.ts';
 import {
-  type BncrConversationHistoryMap,
   buildBncrBotReplyMessageId,
   buildBncrConversationHistoryKeyFromRoute,
   normalizePersistedHistoryKey,
@@ -81,21 +80,6 @@ type PersistedConversationHistoryEntryInput = Partial<BncrPersistedConversationH
 type PersistedOutboundReplayBucketInput = Partial<BncrPersistedOutboundReplayBucket>;
 type PersistedOutboundReplayEntryInput = Partial<BncrOutboundReplayEntry>;
 
-const bncrHistoryShardQueues = new WeakMap<BncrConversationHistoryMap, BncrHistoryShardQueue>();
-
-export function registerBncrHistoryShardQueue(
-  historyMap: BncrConversationHistoryMap,
-  queue: BncrHistoryShardQueue,
-): void {
-  bncrHistoryShardQueues.set(historyMap, queue);
-}
-
-export function getBncrHistoryShardQueue(
-  historyMap: BncrConversationHistoryMap,
-): BncrHistoryShardQueue | undefined {
-  return bncrHistoryShardQueues.get(historyMap);
-}
-
 function buildMigratedHistoryMessageId(seed: string): string {
   const digest = createHash('sha1').update(seed).digest('hex').slice(0, 24);
   return `bncr-synthetic:migrated:${digest}`;
@@ -112,6 +96,32 @@ function formatSqliteCutoverTimestamp(timestamp: number): string {
     pad(date.getMinutes()),
     pad(date.getSeconds()),
   ].join('');
+}
+
+async function moveStateFileToExclusiveBackup(
+  statePath: string,
+  preferredBackupPath: string,
+): Promise<string | null> {
+  for (let suffix = 0; ; suffix += 1) {
+    const candidate =
+      suffix === 0
+        ? preferredBackupPath
+        : preferredBackupPath.replace(/\.json$/, `-${suffix}.json`);
+    let linked = false;
+    try {
+      await link(statePath, candidate);
+      linked = true;
+      await chmod(candidate, 0o600);
+      await unlink(statePath);
+      return candidate;
+    } catch (error) {
+      if (linked) await unlink(candidate).catch(() => {});
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' && !linked) return null;
+      if (code === 'EEXIST' && !linked) continue;
+      throw error;
+    }
+  }
 }
 
 export function createBncrStateStore(runtime: {
@@ -137,6 +147,7 @@ export function createBncrStateStore(runtime: {
   maxAccountActivityEntries: number;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: Map<string, BncrPersistedConversationHistoryEntry[]>;
+  conversationHistoryVersions?: Map<string, number>;
   outboundReplayCache?: Map<string, BncrPersistedOutboundReplayEntry[]>;
   outbox: Map<string, OutboxEntry>;
   getDeadLetter: () => OutboxEntry[];
@@ -156,16 +167,89 @@ export function createBncrStateStore(runtime: {
 }) {
   const outboundReplayCache =
     runtime.outboundReplayCache ?? new Map<string, BncrPersistedOutboundReplayEntry[]>();
+  const conversationHistoryVersions =
+    runtime.conversationHistoryVersions ?? new Map<string, number>();
   let sqliteState: BncrSqliteStateDatabase | undefined;
+  let sqliteStatePromise:
+    | {
+        generation: number;
+        promise: Promise<BncrSqliteStateDatabase | undefined>;
+      }
+    | undefined;
+  let ownsSqliteState = false;
+  let sqliteLifecycleGeneration = 0;
+  let sqliteLifecycleClosed = false;
+
+  function closeOwnedSqliteState(state: BncrSqliteStateDatabase | undefined): void {
+    if (!state || !ownsSqliteState) return;
+    try {
+      state.close();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.toLowerCase().includes('not open')) throw error;
+    }
+  }
+
+  function beginSqliteLifecycle(): number {
+    sqliteLifecycleGeneration += 1;
+    sqliteLifecycleClosed = false;
+    return sqliteLifecycleGeneration;
+  }
+
+  async function closeSqliteLifecycle(generation?: number): Promise<boolean> {
+    if (generation !== undefined && generation !== sqliteLifecycleGeneration) return false;
+    if (generation === undefined) sqliteLifecycleGeneration += 1;
+    sqliteLifecycleClosed = true;
+
+    const activeState = sqliteState;
+    sqliteState = undefined;
+    const openingState = sqliteStatePromise?.promise;
+    closeOwnedSqliteState(activeState);
+
+    if (openingState) {
+      try {
+        const openedState = await openingState;
+        if (openedState !== activeState) closeOwnedSqliteState(openedState);
+      } catch {
+        // Startup owns the primary error. Cleanup is best effort here.
+      }
+    }
+    return true;
+  }
 
   async function resolveSqliteState(
     statePath: string | null,
   ): Promise<BncrSqliteStateDatabase | undefined> {
-    if (!sqliteState) {
-      sqliteState =
-        runtime.sqliteState ?? (await runtime.createSqliteState?.(statePath)) ?? undefined;
+    if (sqliteLifecycleClosed) return undefined;
+    if (sqliteState) return sqliteState;
+    const openingGeneration = sqliteLifecycleGeneration;
+    if (sqliteStatePromise?.generation === openingGeneration) {
+      return sqliteStatePromise.promise;
     }
-    return sqliteState;
+    if (!sqliteStatePromise || sqliteStatePromise.generation !== openingGeneration) {
+      const pending = {
+        generation: openingGeneration,
+        promise: Promise.resolve(runtime.sqliteState ?? runtime.createSqliteState?.(statePath))
+          .then((state) => {
+            const resolved = state ?? undefined;
+            ownsSqliteState = Boolean(resolved && !runtime.sqliteState);
+            if (
+              resolved &&
+              (sqliteLifecycleClosed || openingGeneration !== sqliteLifecycleGeneration)
+            ) {
+              closeOwnedSqliteState(resolved);
+              return undefined;
+            }
+            sqliteState = resolved;
+            return resolved;
+          })
+          .finally(() => {
+            if (sqliteStatePromise === pending) sqliteStatePromise = undefined;
+          }),
+      };
+      sqliteStatePromise = pending;
+    }
+    return sqliteStatePromise.promise;
   }
 
   function resolvePersistedConversationHistoryLimit(key: string): number {
@@ -404,7 +488,7 @@ export function createBncrStateStore(runtime: {
       options,
     );
     // Persisted replacement invalidates freshness markers used by queued flushes.
-    resetConversationHistoryVersions(runtime.conversationHistories);
+    resetConversationHistoryVersions(conversationHistoryVersions);
   }
 
   function collectPersistedOutboundAssistantMessageIds(
@@ -1118,18 +1202,18 @@ export function createBncrStateStore(runtime: {
       mode === 'sqlite'
         ? (sqlite.getMeta('sqlite_cutover_backup_path') ?? computedBackupPath)
         : computedBackupPath;
+    let resolvedBackupPath = backupPath;
     if (statePath && mode !== 'sqlite') {
-      try {
-        await rename(statePath, backupPath!);
-        sqlite.setMeta('sqlite_cutover_backup_path', backupPath!);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const publishedBackupPath = await moveStateFileToExclusiveBackup(statePath, backupPath!);
+      if (publishedBackupPath) {
+        resolvedBackupPath = publishedBackupPath;
+        sqlite.setMeta('sqlite_cutover_backup_path', publishedBackupPath);
       }
     }
 
     sqlite.setStoreMode('sqlite');
     sqlite.setMeta('sqlite_cutover_at', String(runtime.now()));
-    return { backupPath, storeMode: sqlite.getStoreMode() ?? 'sqlite' };
+    return { backupPath: resolvedBackupPath, storeMode: sqlite.getStoreMode() ?? 'sqlite' };
   }
 
   const historyShardQueue: BncrHistoryShardQueue = {
@@ -1185,8 +1269,6 @@ export function createBncrStateStore(runtime: {
       sqliteState?.renewHistoryShardLease(shardId, owner || getConversationHistorySerialOwner()) ??
       false,
   };
-  registerBncrHistoryShardQueue(runtime.conversationHistories, historyShardQueue);
-
   return {
     loadPersistedAccountTimestampMap,
     dumpPersistedAccountTimestampMap,
@@ -1203,6 +1285,8 @@ export function createBncrStateStore(runtime: {
     backfillAccountActivityFromSessionRoutes,
     loadState,
     flushState,
+    beginSqliteLifecycle,
+    closeSqliteLifecycle,
     exportSqliteStateToJson,
     cutoverToSqlite,
     createHistoryShard,

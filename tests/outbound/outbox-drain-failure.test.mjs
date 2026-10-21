@@ -19,7 +19,7 @@ function makeEntry(overrides = {}) {
 
 function createFailureHandler(mocks = {}) {
   const outbox = new Map();
-  const calls = { logWarn: [], logInfo: [], scheduleSave: false };
+  const calls = { logWarn: [], logInfo: [], scheduleSave: false, pushDrainDelays: [] };
 
   const handler = createBncrOutboxDrainFailure({
     backoffMs: () => 10_000,
@@ -44,6 +44,9 @@ function createFailureHandler(mocks = {}) {
     outboxDrainSchedule: { scheduleAccountWait: () => null },
     maxRetry: 10,
     prePushGuardRetryDelayMs: 5_000,
+    schedulePushDrain: (delayMs) => {
+      calls.pushDrainDelays.push(delayMs);
+    },
     ...mocks.runtime,
   });
 
@@ -82,6 +85,7 @@ test('correction fixes bad accountId from session route on retry', () => {
   assert.equal(parsed.lastError, 'no active bncr client');
 
   assert.equal(calls.scheduleSave, true);
+  assert.deepEqual(calls.pushDrainDelays, [0]);
   assert.equal(outbox.get('msg-1').accountId, 'Primary');
 });
 
@@ -102,6 +106,7 @@ test('does not correct when retryCount is 0', () => {
   assert.equal(entry.retryCount, 0);
   assert.equal(calls.logWarn.length, 0);
   assert.equal(calls.scheduleSave, false);
+  assert.deepEqual(calls.pushDrainDelays, []);
 });
 
 test('does not correct when accountId already matches session route', () => {
@@ -123,6 +128,7 @@ test('does not correct when accountId already matches session route', () => {
 
   assert.equal(entry.accountId, 'Primary');
   assert.equal(calls.logWarn.length, 0);
+  assert.deepEqual(calls.pushDrainDelays, []);
 });
 
 test('does not correct when session route returns null', () => {
@@ -142,6 +148,35 @@ test('does not correct when session route returns null', () => {
 
   assert.equal(entry.accountId, 'Bncr:tgBot:0:user');
   assert.equal(calls.logWarn.length, 0);
+  assert.deepEqual(calls.pushDrainDelays, []);
+});
+
+test('does not switch to another connected account without a verified session route', () => {
+  const { handler, outbox, calls } = createFailureHandler({
+    resolveResult: null,
+    runtime: {
+      resolveActiveAccountIds: () => ['Primary'],
+      resolvePushConnIds: () => ['conn-primary'],
+    },
+  });
+  const entry = makeEntry({ retryCount: 1, lastError: 'no active bncr client' });
+  outbox.set(entry.messageId, entry);
+
+  const result = handler({
+    accountId: 'Bncr:tgBot:0:user',
+    entry,
+    localNextDelay: null,
+    attemptedAt: 2_000,
+    updateMinOutboxDelay: () => null,
+  });
+
+  assert.equal(entry.accountId, 'Bncr:tgBot:0:user');
+  assert.equal(entry.retryCount, 1);
+  assert.equal(entry.lastError, 'no active bncr client');
+  assert.equal(result.action, 'break');
+  assert.equal(calls.logWarn.length, 0);
+  assert.equal(calls.scheduleSave, false);
+  assert.deepEqual(calls.pushDrainDelays, []);
 });
 
 test('does not correct when lastError is not pre-push guard deferral', () => {
@@ -159,4 +194,5 @@ test('does not correct when lastError is not pre-push guard deferral', () => {
 
   assert.equal(entry.accountId, 'Bncr:tgBot:0:user');
   assert.equal(calls.logWarn.length, 0);
+  assert.deepEqual(calls.pushDrainDelays, []);
 });

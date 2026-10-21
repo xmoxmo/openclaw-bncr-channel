@@ -18,6 +18,7 @@ import type {
 import type { LeaseEventPayload } from './connection-handlers.ts';
 import type { BncrActiveConnectionDebugEntry } from './connection-state.ts';
 import type { createBncrFileInboundHandlers } from './file-inbound-handlers.ts';
+import type { BncrHistoryShardQueue } from './sqlite-state.ts';
 
 // Delivery-side wiring catalog.
 //
@@ -108,7 +109,9 @@ export function buildBncrInboundSurfaceRuntime(deps: {
   defaultPublicAgentId: () => string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: BncrConversationHistoryMap;
+  conversationHistoryVersions?: Map<string, number>;
   outboundReplayCache: BncrOutboundReplayCache;
+  historyShardQueue?: BncrHistoryShardQueue;
   prepareInboundAcceptance: (args: {
     parsed: ReturnType<typeof parseBncrInboundParams>;
     canonicalAgentId: string;

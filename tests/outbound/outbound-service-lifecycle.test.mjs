@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createBncrSqliteStateDatabase } from '../../src/plugin/sqlite-state.ts';
 import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
 
 async function assertResolvesWithin(promise, ms, label) {
@@ -60,6 +61,38 @@ test('startService reopens runtime scheduling after stopService cleanup', async 
 
     bridge.schedulePushDrain(1_000);
     assert.ok(bridge.pushTimer, 'schedulePushDrain should work after restart');
+  } finally {
+    cleanupBridge(bridge);
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('startService migrates sqlite state and supports repeated stop and restart', async () => {
+  const bridge = createBridge();
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bncr-start-stop-sqlite-'));
+  const legacyDbPath = path.join(stateDir, 'bncr.sqlite3');
+  const migratedDbPath = path.join(stateDir, 'plugins', 'bncr', 'bncr.sqlite3');
+  const legacyDb = createBncrSqliteStateDatabase(legacyDbPath);
+  legacyDb.close();
+
+  try {
+    await bridge.startService({ stateDir }, false);
+    assert.equal(
+      bridge.statePath,
+      path.join(stateDir, 'plugins', 'bncr', 'bncr-bridge-state.json'),
+    );
+    assert.equal(await fs.stat(migratedDbPath).then((value) => value.isFile()), true);
+
+    await bridge.stopService();
+    await bridge.stopService();
+    assert.equal(bridge.stopped, true);
+
+    await bridge.startService({ stateDir }, false);
+    assert.equal(bridge.stopped, false);
+    bridge.schedulePushDrain(1_000);
+    assert.ok(bridge.pushTimer, 'sqlite-backed bridge should restart after close');
+
+    await bridge.stopService();
   } finally {
     cleanupBridge(bridge);
     await fs.rm(stateDir, { recursive: true, force: true });

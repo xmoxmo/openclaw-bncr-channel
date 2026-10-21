@@ -16,10 +16,9 @@ export type BncrHistoryEntry = HistoryEntry & {
 };
 
 export type BncrConversationHistoryMap = Map<string, BncrHistoryEntry[]>;
+export type BncrConversationHistoryVersions = Map<string, number>;
 
 type BncrHistoryMediaKind = NonNullable<HistoryMediaEntry['kind']>;
-
-const conversationHistoryVersions = new WeakMap<BncrConversationHistoryMap, Map<string, number>>();
 
 function buildSyntheticHistoryMessageId(seed: string): string {
   const digest = createHash('sha1').update(seed).digest('hex').slice(0, 24);
@@ -50,28 +49,23 @@ export function buildBncrBotReplyMessageId(args: {
 }
 
 function bumpConversationHistoryVersion(
-  historyMap: BncrConversationHistoryMap,
+  versions: BncrConversationHistoryVersions,
   historyKey: string,
 ): number {
-  let versions = conversationHistoryVersions.get(historyMap);
-  if (!versions) {
-    versions = new Map();
-    conversationHistoryVersions.set(historyMap, versions);
-  }
   const next = (versions.get(historyKey) || 0) + 1;
   versions.set(historyKey, next);
   return next;
 }
 
 export function readConversationHistoryVersion(
-  historyMap: BncrConversationHistoryMap,
+  versions: BncrConversationHistoryVersions,
   historyKey: string,
 ): number {
-  return conversationHistoryVersions.get(historyMap)?.get(historyKey) ?? 0;
+  return versions.get(historyKey) ?? 0;
 }
 
-export function resetConversationHistoryVersions(historyMap: BncrConversationHistoryMap): void {
-  conversationHistoryVersions.delete(historyMap);
+export function resetConversationHistoryVersions(versions: BncrConversationHistoryVersions): void {
+  versions.clear();
 }
 
 function normalizeTextBody(value: string): string {
@@ -169,6 +163,7 @@ export function resolveBncrConversationHistoryMessageId(parsed: ParsedInbound): 
 
 export function recordBncrPendingConversationText(args: {
   historyMap: BncrConversationHistoryMap;
+  conversationHistoryVersions?: BncrConversationHistoryVersions;
   parsed: ParsedInbound;
   senderDisplayName: string;
   senderId: string;
@@ -196,7 +191,7 @@ export function recordBncrPendingConversationText(args: {
       role: 'user',
     },
   });
-  bumpConversationHistoryVersion(args.historyMap, historyKey);
+  bumpConversationHistoryVersion(args.conversationHistoryVersions ?? new Map(), historyKey);
 }
 
 function inferBncrHistoryMediaKind(args: {
@@ -224,6 +219,7 @@ function buildBncrHistoryMediaBody(kind: BncrHistoryMediaKind): string {
 
 export function recordBncrPendingConversationMedia(args: {
   historyMap: BncrConversationHistoryMap;
+  conversationHistoryVersions?: BncrConversationHistoryVersions;
   parsed: ParsedInbound;
   senderDisplayName: string;
   senderId: string;
@@ -274,7 +270,7 @@ export function recordBncrPendingConversationMedia(args: {
         role: 'user',
       },
     });
-    bumpConversationHistoryVersion(args.historyMap, historyKey);
+    bumpConversationHistoryVersion(args.conversationHistoryVersions ?? new Map(), historyKey);
     return;
   }
   const messageId = resolveBncrConversationHistoryMessageId(args.parsed);
@@ -303,11 +299,12 @@ export function recordBncrPendingConversationMedia(args: {
       ),
     },
   });
-  bumpConversationHistoryVersion(args.historyMap, historyKey);
+  bumpConversationHistoryVersion(args.conversationHistoryVersions ?? new Map(), historyKey);
 }
 
 export function recordBncrBotReply(args: {
   historyMap: BncrConversationHistoryMap;
+  conversationHistoryVersions?: BncrConversationHistoryVersions;
   historyKey: string;
   sender: string;
   senderId?: string;
@@ -353,7 +350,7 @@ export function recordBncrBotReply(args: {
         : {}),
     },
   });
-  bumpConversationHistoryVersion(args.historyMap, args.historyKey);
+  bumpConversationHistoryVersion(args.conversationHistoryVersions ?? new Map(), args.historyKey);
   return true;
 }
 
@@ -455,6 +452,7 @@ export function buildBncrConversationContextFromEntries(args: {
 
 export function clearBncrPendingConversationHistory(args: {
   historyMap: BncrConversationHistoryMap;
+  conversationHistoryVersions?: BncrConversationHistoryVersions;
   parsed: ParsedInbound;
   historyLimit?: number;
 }) {
@@ -465,7 +463,7 @@ export function clearBncrPendingConversationHistory(args: {
     historyKey,
     limit: limit,
   });
-  bumpConversationHistoryVersion(args.historyMap, historyKey);
+  bumpConversationHistoryVersion(args.conversationHistoryVersions ?? new Map(), historyKey);
 }
 
 export function removeBncrConversationHistoryMessageIds(args: {

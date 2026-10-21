@@ -8,10 +8,11 @@ import test from 'node:test';
 import { normalizePersistedOutboxEntry } from '../../src/core/persisted-outbox-entry.ts';
 import { removeBncrConversationHistoryMessageIds } from '../../src/messaging/inbound/conversation-history.ts';
 import { createBncrSqliteStateDatabase } from '../../src/plugin/sqlite-state.ts';
-import { createBncrStateStore, getBncrHistoryShardQueue } from '../../src/plugin/state-store.ts';
+import { createBncrStateStore } from '../../src/plugin/state-store.ts';
 
 function createStore() {
   let deadLetter = [];
+  const conversationHistoryVersions = new Map();
   const runtime = {
     getStatePath: () => null,
     now: () => 1000,
@@ -45,6 +46,7 @@ function createStore() {
     maxAccountActivityEntries: 100,
     sceneRegistry: new Map(),
     conversationHistories: new Map(),
+    conversationHistoryVersions,
     outboundReplayCache: new Map(),
     outbox: new Map(),
     getDeadLetter: () => deadLetter,
@@ -61,7 +63,7 @@ function createStore() {
     setLastDriftSnapshot: () => {},
   };
 
-  return { runtime, store: createBncrStateStore(runtime) };
+  return { runtime, store: createBncrStateStore(runtime), conversationHistoryVersions };
 }
 
 function buildOutboxEntry(messageId, overrides = {}) {
@@ -78,9 +80,108 @@ function buildOutboxEntry(messageId, overrides = {}) {
   };
 }
 
-test('createBncrStateStore registers a shard queue for its history map', () => {
+function formatCutoverTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  const pad = (value) => String(value).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join('');
+}
+
+test('createBncrStateStore closes sqlite idempotently and reopens on the next lifecycle', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-lifecycle-'));
   const { runtime, store } = createStore();
-  assert.equal(getBncrHistoryShardQueue(runtime.conversationHistories), store.historyShardQueue);
+  const opened = [];
+  runtime.getStatePath = () => join(dir, 'state.json');
+  runtime.createSqliteState = () => {
+    const fake = {
+      closed: false,
+      close() {
+        if (this.closed) throw new Error('database is not open');
+        this.closed = true;
+      },
+      getStoreMode: () => 'dual',
+      saveControlState() {},
+      loadHistoryState: () => ({ historyBuckets: [], replayBuckets: [] }),
+      getHistoryStateRevision: () => 0,
+      saveHistoryState() {},
+      isOutboundImported: () => true,
+      saveOutboundState() {},
+    };
+    opened.push(fake);
+    return fake;
+  };
+
+  try {
+    const firstLifecycle = store.beginSqliteLifecycle();
+    await store.flushState();
+    assert.equal(opened.length, 1);
+
+    assert.equal(await store.closeSqliteLifecycle(firstLifecycle), true);
+    assert.equal(await store.closeSqliteLifecycle(firstLifecycle), true);
+    assert.equal(opened[0].closed, true);
+
+    const secondLifecycle = store.beginSqliteLifecycle();
+    await store.flushState();
+    assert.equal(opened.length, 2);
+    assert.equal(opened[1].closed, false);
+
+    assert.equal(await store.closeSqliteLifecycle(secondLifecycle), true);
+    assert.equal(opened[1].closed, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('createBncrStateStore closes a sqlite connection that finishes opening after stop', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-lifecycle-race-'));
+  const { runtime, store } = createStore();
+  let releaseOpen;
+  let markOpenStarted;
+  const openStarted = new Promise((resolve) => {
+    markOpenStarted = resolve;
+  });
+  const openGate = new Promise((resolve) => {
+    releaseOpen = resolve;
+  });
+  const opened = {
+    closed: false,
+    close() {
+      this.closed = true;
+    },
+    getStoreMode: () => 'dual',
+    saveControlState() {},
+    loadHistoryState: () => ({ historyBuckets: [], replayBuckets: [] }),
+    getHistoryStateRevision: () => 0,
+    saveHistoryState() {},
+    isOutboundImported: () => true,
+    saveOutboundState() {},
+  };
+  runtime.getStatePath = () => join(dir, 'state.json');
+  runtime.createSqliteState = async () => {
+    markOpenStarted();
+    await openGate;
+    return opened;
+  };
+
+  try {
+    store.beginSqliteLifecycle();
+    const flushing = store.flushState();
+    await openStarted;
+    const closing = store.closeSqliteLifecycle();
+    releaseOpen();
+
+    await Promise.all([flushing, closing]);
+    assert.equal(opened.closed, true);
+  } finally {
+    releaseOpen?.();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('createBncrStateStore skips non-object entries in persisted account timestamp arrays', () => {
@@ -284,6 +385,15 @@ test('createBncrStateStore preserves senderId in persisted conversation historie
       ],
     },
   ]);
+});
+
+test('createBncrStateStore clears the injected history version tracker on persisted replacement', () => {
+  const { store, conversationHistoryVersions } = createStore();
+  conversationHistoryVersions.set('Primary:tgBot:10001', 9);
+
+  store.loadPersistedConversationHistories([]);
+
+  assert.equal(conversationHistoryVersions.size, 0);
 });
 
 test('createBncrStateStore migrates legacy scene-only history keys to account-scoped keys', () => {
@@ -1988,5 +2098,34 @@ test('createBncrStateStore cutoverToSqlite backs up json and stops rewriting it'
   assert.equal(exported.conversationHistories[0].entries[0].body, 'hello');
 
   sqlite.close();
+
+  const collisionStatePath = join(dir, 'collision-state.json');
+  const collisionDbPath = join(dir, 'collision-state.sqlite3');
+  const collisionBasePath = join(
+    dir,
+    `collision-state.pre-sqlite-${formatCutoverTimestamp(1000)}.json`,
+  );
+  await writeFile(collisionStatePath, JSON.stringify(persisted), 'utf8');
+  await writeFile(collisionBasePath, 'existing-backup', 'utf8');
+  const collisionFixture = createStore();
+  collisionFixture.runtime.getStatePath = () => collisionStatePath;
+  collisionFixture.runtime.normalizePersistedOutboxEntry = (entry) =>
+    normalizePersistedOutboxEntry({
+      entry,
+      canonicalAgentId: 'orion',
+      now: () => 1000,
+    });
+  const collisionSqlite = createBncrSqliteStateDatabase(collisionDbPath);
+  collisionFixture.runtime.sqliteState = collisionSqlite;
+  await collisionFixture.store.loadState();
+  const collisionResult = await collisionFixture.store.cutoverToSqlite();
+  assert.equal(collisionResult.backupPath, collisionBasePath.replace(/\.json$/, '-1.json'));
+  assert.equal(await readFile(collisionBasePath, 'utf8'), 'existing-backup');
+  assert.equal(
+    JSON.parse(await readFile(collisionResult.backupPath, 'utf8')).outbox[0].messageId,
+    'cutover-1',
+  );
+  collisionSqlite.close();
+
   await rm(dir, { recursive: true, force: true });
 });

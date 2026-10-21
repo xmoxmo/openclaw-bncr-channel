@@ -52,6 +52,16 @@ test('target runtime remembers session route and alias with normalized account i
   assert.deepEqual(calls.markActivity[0], ['Primary', 1234]);
 });
 
+test('target runtime resolves account only from an exact remembered session route', () => {
+  const { runtime } = createRuntime();
+  const targetRuntime = createBncrTargetRuntime(runtime);
+  const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
+
+  assert.equal(targetRuntime.resolveSessionAccountId('missing-session'), null);
+  targetRuntime.rememberSessionRoute('session-1', 'Primary', route);
+  assert.equal(targetRuntime.resolveSessionAccountId('session-1'), 'Primary');
+});
+
 test('target runtime resolves strict session route through alias fallback', () => {
   const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
   const strict = 'agent:legacy:bncr:direct:7467426f743a303a3130303031';

@@ -1132,6 +1132,7 @@ test('dispatchBncrInbound drops non-accumulating group turns without writing pen
 test('admin mode drops non-admin inbound but still accumulates bot replies for outbound history flush', async () => {
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
   const outboundReplayCache = new Map();
   const sceneRegistry = new Map([
     [
@@ -1187,6 +1188,7 @@ test('admin mode drops non-admin inbound but still accumulates bot replies for o
     recordBncrOutboundReplay({
       cache: outboundReplayCache,
       conversationHistories,
+      conversationHistoryVersions,
       historyLimit: 3,
       entry: makeOutboundReplayEntry(`admin-mode-bot-${index}`, route, {
         lastPushAt: 1000 + index,
@@ -1204,6 +1206,7 @@ test('admin mode drops non-admin inbound but still accumulates bot replies for o
     canonicalAgentId: 'public',
     sceneRegistry,
     conversationHistories,
+    conversationHistoryVersions,
     outboundReplayCache,
     defaultAdminAgentId: 'public',
     defaultPublicAgentId: 'public',
@@ -2608,6 +2611,7 @@ test('dispatchBncrOutboundHistoryFlush does not run an empty system flush', asyn
 test('dispatchBncrOutboundHistoryFlush keeps the triggering bot reply on out-of-order timestamps', async () => {
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
   const outboundReplayCache = new Map();
   const sceneRegistry = new Map([
     [
@@ -2630,6 +2634,7 @@ test('dispatchBncrOutboundHistoryFlush keeps the triggering bot reply on out-of-
   recordBncrOutboundReplay({
     cache: outboundReplayCache,
     conversationHistories,
+    conversationHistoryVersions,
     historyLimit: 2,
     entry: makeOutboundReplayEntry('out-of-order-bot-1', route, {
       lastPushAt: 1000,
@@ -2778,6 +2783,7 @@ test('dispatchBncrOutboundHistoryFlush skips a stale snapshot when history chang
   const gate = createDeferred();
   const { api, calls } = createInboundApiStub();
   const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
   const outboundReplayCache = new Map();
   const sceneRegistry = new Map([
     [
@@ -2802,6 +2808,7 @@ test('dispatchBncrOutboundHistoryFlush skips a stale snapshot when history chang
     const replay = recordBncrOutboundReplay({
       cache: outboundReplayCache,
       conversationHistories,
+      conversationHistoryVersions,
       historyLimit: 3,
       entry: makeOutboundReplayEntry(`stale-flush-bot-${index}`, route, {
         lastPushAt: 1000 + index,
@@ -2823,6 +2830,7 @@ test('dispatchBncrOutboundHistoryFlush skips a stale snapshot when history chang
     canonicalAgentId: 'public',
     sceneRegistry,
     conversationHistories,
+    conversationHistoryVersions,
     outboundReplayCache,
     defaultAdminAgentId: 'public',
     defaultPublicAgentId: 'public',
@@ -2837,6 +2845,7 @@ test('dispatchBncrOutboundHistoryFlush skips a stale snapshot when history chang
   recordBncrOutboundReplay({
     cache: outboundReplayCache,
     conversationHistories,
+    conversationHistoryVersions,
     historyLimit: 3,
     entry: makeOutboundReplayEntry('stale-flush-bot-4', route, {
       lastPushAt: 1004,
@@ -2931,6 +2940,7 @@ test('dispatch outbound flush queued during an upload is not invalidated by that
     },
   });
   const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
   const outboundReplayCache = new Map();
   const sceneRegistry = new Map([
     [
@@ -2953,6 +2963,7 @@ test('dispatch outbound flush queued during an upload is not invalidated by that
   recordBncrOutboundReplay({
     cache: outboundReplayCache,
     conversationHistories,
+    conversationHistoryVersions,
     historyLimit: 2,
     entry: makeOutboundReplayEntry('upload-flush-bot-1', route, {
       lastPushAt: 1001,
@@ -2963,6 +2974,7 @@ test('dispatch outbound flush queued during an upload is not invalidated by that
   recordBncrOutboundReplay({
     cache: outboundReplayCache,
     conversationHistories,
+    conversationHistoryVersions,
     historyLimit: 2,
     entry: makeOutboundReplayEntry('upload-flush-bot-2', route, {
       lastPushAt: 1002,
@@ -2993,6 +3005,7 @@ test('dispatch outbound flush queued during an upload is not invalidated by that
     shouldAccumulate: true,
     sceneRegistry,
     conversationHistories,
+    conversationHistoryVersions,
     outboundReplayCache,
     rememberSessionRoute() {},
     enqueueFromReply: async () => {},
@@ -3004,6 +3017,7 @@ test('dispatch outbound flush queued during an upload is not invalidated by that
   const replay = recordBncrOutboundReplay({
     cache: outboundReplayCache,
     conversationHistories,
+    conversationHistoryVersions,
     historyLimit: 2,
     entry: makeOutboundReplayEntry('upload-flush-bot-3', route, {
       lastPushAt: 1003,
@@ -3023,6 +3037,7 @@ test('dispatch outbound flush queued during an upload is not invalidated by that
     canonicalAgentId: 'public',
     sceneRegistry,
     conversationHistories,
+    conversationHistoryVersions,
     outboundReplayCache,
     defaultAdminAgentId: 'public',
     defaultPublicAgentId: 'public',

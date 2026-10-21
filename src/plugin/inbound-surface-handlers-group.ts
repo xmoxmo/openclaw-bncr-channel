@@ -10,6 +10,7 @@ import type {
   buildInboundResponsePayload,
 } from './channel-inbound-helpers.ts';
 import type { createBncrFileInboundHandlers } from './file-inbound-handlers.ts';
+import type { BncrHistoryShardQueue } from './sqlite-state.ts';
 
 export function createBncrInboundSurfaceHandlersGroup(runtime: {
   getApi: Parameters<typeof createBncrFileInboundHandlersComponent>[0]['getApi'];
@@ -89,7 +90,11 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
   conversationHistories: Parameters<
     typeof createBncrInboundHandlersComponent
   >[0]['conversationHistories'];
+  conversationHistoryVersions?: Parameters<
+    typeof createBncrInboundHandlersComponent
+  >[0]['conversationHistoryVersions'];
   outboundReplayCache: BncrOutboundReplayCache;
+  historyShardQueue?: BncrHistoryShardQueue;
   prepareInboundAcceptance: Parameters<
     typeof createBncrInboundHandlersComponent
   >[0]['prepareInboundAcceptance'];
@@ -156,7 +161,9 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     defaultPublicAgentId: runtime.defaultPublicAgentId,
     sceneRegistry: runtime.sceneRegistry,
     conversationHistories: runtime.conversationHistories,
+    conversationHistoryVersions: runtime.conversationHistoryVersions,
     outboundReplayCache: runtime.outboundReplayCache,
+    historyShardQueue: runtime.historyShardQueue,
     prepareInboundAcceptance: runtime.prepareInboundAcceptance,
     logInboundSummary: runtime.logInboundSummary,
     flushPushQueueBestEffort: runtime.flushPushQueueBestEffort,

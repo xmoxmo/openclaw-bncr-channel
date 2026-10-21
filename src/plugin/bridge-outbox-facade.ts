@@ -44,6 +44,7 @@ export function createBncrBridgeOutboxFacade(runtime: {
   lastOutboundByAccount: Map<string, number>;
   outboundReplayCache?: BncrOutboundReplayCache;
   conversationHistories?: BncrConversationHistoryMap;
+  conversationHistoryVersions?: Map<string, number>;
   resolveOutboundHistoryLimit?: (entry: OutboxEntry) => number;
   resolveOutboundHistoryForce?: (entry: OutboxEntry) => boolean;
   resolveOutboundSender?: (entry: OutboxEntry) => { sender: string; senderId?: string };
@@ -71,6 +72,9 @@ export function createBncrBridgeOutboxFacade(runtime: {
       cache: runtime.outboundReplayCache,
       ...(runtime.conversationHistories
         ? { conversationHistories: runtime.conversationHistories }
+        : {}),
+      ...(runtime.conversationHistoryVersions
+        ? { conversationHistoryVersions: runtime.conversationHistoryVersions }
         : {}),
       ...(runtime.resolveOutboundHistoryLimit
         ? { historyLimit: runtime.resolveOutboundHistoryLimit(entry) }

@@ -257,47 +257,66 @@ test('history snapshot backfills stable synthetic ids for legacy bot entries wit
 
 test('conversation history version increments only for new writes and clears', () => {
   const historyMap = new Map();
+  const conversationHistoryVersions = new Map();
 
   recordBncrPendingConversationText({
     historyMap,
+    conversationHistoryVersions,
     parsed: makeDirectParsed('version-user-1', 'hello'),
     senderDisplayName: 'xmo',
     senderId: '10001',
     bodyText: 'hello',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 1);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    1,
+  );
 
   recordBncrBotReply({
     historyMap,
+    conversationHistoryVersions,
     historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot hello',
     messageId: 'version-bot-1',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    2,
+  );
 
   recordBncrBotReply({
     historyMap,
+    conversationHistoryVersions,
     historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot hello',
     messageId: 'version-bot-1',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    2,
+  );
 
   clearBncrPendingConversationHistory({
     historyMap,
+    conversationHistoryVersions,
     parsed: makeDirectParsed('version-user-1', 'hello'),
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 3);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    3,
+  );
 });
 
 test('snapshot cleanup removal does not advance history version', () => {
   const historyMap = new Map();
+  const conversationHistoryVersions = new Map();
   recordBncrPendingConversationText({
     historyMap,
+    conversationHistoryVersions,
     parsed: makeDirectParsed('cleanup-version-user-1', 'hello'),
     senderDisplayName: 'xmo',
     senderId: '10001',
@@ -305,13 +324,17 @@ test('snapshot cleanup removal does not advance history version', () => {
   });
   recordBncrBotReply({
     historyMap,
+    conversationHistoryVersions,
     historyKey: 'Primary:tgBot:10001',
     sender: 'OpenClaw',
     senderId: 'Primary',
     body: 'bot hello',
     messageId: 'cleanup-version-bot-1',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    2,
+  );
 
   removeBncrConversationHistoryMessageIds({
     historyMap,
@@ -319,22 +342,33 @@ test('snapshot cleanup removal does not advance history version', () => {
     messageIds: ['cleanup-version-user-1', 'cleanup-version-bot-1'],
   });
 
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 2);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    2,
+  );
   assert.deepEqual(historyMap.get('Primary:tgBot:10001'), []);
 });
 
 test('conversation history version resets when persisted history is replaced', () => {
   const historyMap = new Map();
+  const conversationHistoryVersions = new Map();
 
   recordBncrPendingConversationText({
     historyMap,
+    conversationHistoryVersions,
     parsed: makeDirectParsed('version-reset-1', 'hello'),
     senderDisplayName: 'xmo',
     senderId: '10001',
     bodyText: 'hello',
   });
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 1);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    1,
+  );
 
-  resetConversationHistoryVersions(historyMap);
-  assert.equal(readConversationHistoryVersion(historyMap, 'Primary:tgBot:10001'), 0);
+  resetConversationHistoryVersions(conversationHistoryVersions);
+  assert.equal(
+    readConversationHistoryVersion(conversationHistoryVersions, 'Primary:tgBot:10001'),
+    0,
+  );
 });

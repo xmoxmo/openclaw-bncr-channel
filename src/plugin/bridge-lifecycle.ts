@@ -1,9 +1,9 @@
-import path from 'node:path';
 import type { OpenClawPluginServiceContext } from 'openclaw/plugin-sdk/core';
 import { BNCR_DEFAULT_ACCOUNT_ID } from '../core/accounts.ts';
 import type { BncrChannelPolicyConfig } from '../core/policy.ts';
 import { resolveBncrConfigWarnings } from '../core/policy.ts';
 import type { BncrChannelConfigRoot } from './channel-runtime-types.ts';
+import { resolveBncrStatePaths } from './state-path-migration.ts';
 
 export function buildBncrBridgeCleanupDebugInfo(args: {
   bridgeId: string;
@@ -61,52 +61,66 @@ export function startBncrBridgeService(
     ) => BncrChannelPolicyConfig | null | undefined;
     resumeOutboxDrain?: () => void;
     isStartCurrent?: () => boolean;
+    closeState?: () => Promise<void> | void;
   },
   ctx: OpenClawPluginServiceContext,
   debug?: boolean,
 ) {
-  runtime.setStatePath(path.join(ctx.stateDir, 'bncr-bridge-state.json'));
+  runtime.setStatePath(resolveBncrStatePaths(ctx.stateDir).statePath);
   return (async () => {
+    let started = false;
     const isStartCurrent = () => runtime.isStartCurrent?.() ?? true;
     try {
-      const cfg = runtime.getRuntimeConfig();
-      runtime.initializeCanonicalAgentId(cfg);
-      for (const warning of resolveBncrConfigWarnings(runtime.getChannelConfigRoot(cfg))) {
-        runtime.logWarn('config', warning);
+      try {
+        const cfg = runtime.getRuntimeConfig();
+        runtime.initializeCanonicalAgentId(cfg);
+        for (const warning of resolveBncrConfigWarnings(runtime.getChannelConfigRoot(cfg))) {
+          runtime.logWarn('config', warning);
+        }
+      } catch {
+        // ignore startup canonical agent initialization errors
       }
-    } catch {
-      // ignore startup canonical agent initialization errors
-    }
-    await runtime.loadState();
-    if (!isStartCurrent()) return false;
-    if (process.env.BNCR_SQLITE_CUTOVER === '1' && runtime.cutoverToSqlite) {
-      const cutover = await runtime.cutoverToSqlite();
+      await runtime.loadState();
       if (!isStartCurrent()) return false;
+      if (process.env.BNCR_SQLITE_CUTOVER === '1' && runtime.cutoverToSqlite) {
+        const cutover = await runtime.cutoverToSqlite();
+        if (!isStartCurrent()) return false;
+        runtime.logInfo(
+          'sqlite',
+          `cutover completed backup=${cutover.backupPath || 'none'} storeMode=${cutover.storeMode}`,
+        );
+      }
+      if (typeof debug === 'boolean') runtime.setDebugFlag(debug);
+      await runtime.refreshDebugFlagFromConfig({ forceLog: true });
+      if (!isStartCurrent()) return false;
+      runtime.setStopped(false);
+      const bootDiag = runtime.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
       runtime.logInfo(
-        'sqlite',
-        `cutover completed backup=${cutover.backupPath || 'none'} storeMode=${cutover.storeMode}`,
+        'startup',
+        `bridge=${runtime.bridgeId} routes=${bootDiag.regression.totalKnownRoutes}`,
       );
+      runtime.logInfo(
+        'debug',
+        `service started bridge=${runtime.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter}`,
+        { debugOnly: true },
+      );
+      runtime.resumeOutboxDrain?.();
+      started = true;
+      return true;
+    } catch (error) {
+      runtime.setStopped(true);
+      throw error;
+    } finally {
+      if (!started) {
+        try {
+          await runtime.closeState?.();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          runtime.logWarn('state', `startup state cleanup failed: ${detail}`);
+        }
+      }
     }
-    if (typeof debug === 'boolean') runtime.setDebugFlag(debug);
-    await runtime.refreshDebugFlagFromConfig({ forceLog: true });
-    if (!isStartCurrent()) return false;
-    runtime.setStopped(false);
-    const bootDiag = runtime.buildIntegratedDiagnostics(BNCR_DEFAULT_ACCOUNT_ID);
-    runtime.logInfo(
-      'startup',
-      `bridge=${runtime.bridgeId} routes=${bootDiag.regression.totalKnownRoutes}`,
-    );
-    runtime.logInfo(
-      'debug',
-      `service started bridge=${runtime.bridgeId} diag.ok=${bootDiag.regression.ok} routes=${bootDiag.regression.totalKnownRoutes} pending=${bootDiag.health.pending} dead=${bootDiag.health.deadLetter}`,
-      { debugOnly: true },
-    );
-    runtime.resumeOutboxDrain?.();
-    return true;
-  })().catch((error) => {
-    runtime.setStopped(true);
-    throw error;
-  });
+  })();
 }
 
 export function cleanupBncrBridgeRuntime(
@@ -163,13 +177,43 @@ export function cleanupBncrBridgeRuntime(
 export async function stopBncrBridgeService(runtime: {
   cleanupRuntime: (reason: string) => void;
   flushState: () => Promise<void>;
+  closeState?: () => Promise<void> | void;
   logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) => void;
 }) {
   runtime.cleanupRuntime('service stopped');
-  await runtime.flushState();
+  let flushError: unknown;
+  try {
+    await runtime.flushState();
+  } catch (error) {
+    flushError = error;
+  }
+  try {
+    await runtime.closeState?.();
+  } catch (error) {
+    if (!flushError) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    runtime.logInfo('state', `service stop cleanup failed: ${detail}`);
+  }
+  if (flushError) throw flushError;
   runtime.logInfo('debug', 'service stopped', { debugOnly: true });
 }
 
-export function shutdownBncrBridgeService(runtime: { cleanupRuntime: (reason: string) => void }) {
+export function shutdownBncrBridgeService(runtime: {
+  cleanupRuntime: (reason: string) => void;
+  closeState?: () => Promise<void> | void;
+  logInfo?: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) => void;
+}) {
   runtime.cleanupRuntime('shutdown');
+  try {
+    const closing = runtime.closeState?.();
+    if (closing && typeof closing.then === 'function') {
+      void closing.catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        runtime.logInfo?.('state', `shutdown state cleanup failed: ${detail}`);
+      });
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    runtime.logInfo?.('state', `shutdown state cleanup failed: ${detail}`);
+  }
 }

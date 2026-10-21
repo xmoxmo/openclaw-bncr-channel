@@ -192,7 +192,6 @@ import { createBncrInboundSurfaceHandlersGroup } from './plugin/inbound-surface-
 import { createBncrMediaOrchestratorsRuntimeGroup } from './plugin/media-orchestrators-runtime-group.ts';
 import { BNCR_CHANNEL_META } from './plugin/meta.ts';
 import type { BncrOutboxAckOkTelemetryPatch } from './plugin/outbox-ack-outcome.ts';
-
 import { createBncrOutboxPushRouteRuntimeGroup } from './plugin/outbox-push-route-runtime-group.ts';
 import { runBncrOutboxPush } from './plugin/outbox-unified-push-flow.ts';
 import {
@@ -204,6 +203,7 @@ import {
 import { buildRouteSceneKey } from './plugin/scene-registry.ts';
 import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
 import type { BncrHistoryShardRow } from './plugin/sqlite-state.ts';
+import { prepareBncrStateDirectory } from './plugin/state-path-migration.ts';
 import { createBncrStateTransientRuntimeGroup } from './plugin/state-transient-runtime-group.ts';
 import { createBncrTargetStatusRuntimeGroup } from './plugin/target-status-runtime-group.ts';
 import { shouldEmitDedupLog as shouldEmitDedupLogFromRuntime } from './runtime/log-dedupe.ts';
@@ -321,6 +321,7 @@ class BncrBridgeRuntime {
     );
   }
   private conversationHistories: BncrConversationHistoryMap = new Map();
+  private conversationHistoryVersions = new Map<string, number>();
   private outboundReplayCache: BncrOutboundReplayCache = new Map();
   private routeAliases = new Map<
     string,
@@ -866,49 +867,75 @@ class BncrBridgeRuntime {
     debug?: boolean,
     isStartCurrent?: () => boolean,
   ) => {
-    const started = await startBncrBridgeService(
-      {
-        bridgeId: this.bridgeId,
-        setStopped: (value) => {
-          this.stopped = value;
+    const sqliteLifecycle = this.stateStore.beginSqliteLifecycle();
+    try {
+      const prepared = await prepareBncrStateDirectory(ctx.stateDir);
+      if (prepared.copied.length > 0) {
+        this.logInfo('state', `migrated legacy state files=${prepared.copied.length}`, {
+          debugOnly: true,
+        });
+      }
+      if (!(isStartCurrent?.() ?? true)) {
+        await this.stateStore.closeSqliteLifecycle(sqliteLifecycle);
+        return false;
+      }
+
+      const started = await startBncrBridgeService(
+        {
+          bridgeId: this.bridgeId,
+          setStopped: (value) => {
+            this.stopped = value;
+          },
+          setStatePath: (value) => {
+            this.statePath = value;
+          },
+          getRuntimeConfig: () => getOpenClawRuntimeConfig(this.api),
+          initializeCanonicalAgentId: (cfg) => this.initializeCanonicalAgentId(cfg),
+          logWarn: (scope, message, options) => this.logWarn(scope, message, options),
+          loadState: () => this.loadState(),
+          cutoverToSqlite: () => this.stateStore.cutoverToSqlite(),
+          setDebugFlag: (value) => {
+            BNCR_DEBUG_VERBOSE = value;
+          },
+          refreshDebugFlagFromConfig: (options) => this.refreshDebugFlagFromConfig(options),
+          buildIntegratedDiagnostics: (accountId) => this.buildIntegratedDiagnostics(accountId),
+          logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+          getChannelConfigRoot: (cfg) =>
+            (((cfg as BncrChannelConfigRoot | null | undefined)?.channels || null)?.[CHANNEL_ID] as
+              | Record<string, unknown>
+              | undefined) || {},
+          resumeOutboxDrain: () => {
+            if (this.outbox.size === 0 || this.connections.size === 0) return;
+            this.schedulePushDrain(0);
+          },
+          isStartCurrent,
+          closeState: async () => {
+            await this.stateStore.closeSqliteLifecycle(sqliteLifecycle);
+          },
         },
-        setStatePath: (value) => {
-          this.statePath = value;
-        },
-        getRuntimeConfig: () => getOpenClawRuntimeConfig(this.api),
-        initializeCanonicalAgentId: (cfg) => this.initializeCanonicalAgentId(cfg),
-        logWarn: (scope, message, options) => this.logWarn(scope, message, options),
-        loadState: () => this.loadState(),
-        cutoverToSqlite: () => this.stateStore.cutoverToSqlite(),
-        setDebugFlag: (value) => {
-          BNCR_DEBUG_VERBOSE = value;
-        },
-        refreshDebugFlagFromConfig: (options) => this.refreshDebugFlagFromConfig(options),
-        buildIntegratedDiagnostics: (accountId) => this.buildIntegratedDiagnostics(accountId),
-        logInfo: (scope, message, options) => this.logInfo(scope, message, options),
-        getChannelConfigRoot: (cfg) =>
-          (((cfg as BncrChannelConfigRoot | null | undefined)?.channels || null)?.[CHANNEL_ID] as
-            | Record<string, unknown>
-            | undefined) || {},
-        resumeOutboxDrain: () => {
-          if (this.outbox.size === 0 || this.connections.size === 0) return;
-          this.schedulePushDrain(0);
-        },
-        isStartCurrent,
-      },
-      ctx,
-      debug,
-    );
-    if (!started || this.stopped || !(isStartCurrent?.() ?? true)) return false;
-    this.startHistoryShardWorker();
-    this.serviceStarted = true;
-    return true;
+        ctx,
+        debug,
+      );
+      if (!started || this.stopped || !(isStartCurrent?.() ?? true)) {
+        await this.stateStore.closeSqliteLifecycle(sqliteLifecycle);
+        return false;
+      }
+      this.startHistoryShardWorker();
+      this.serviceStarted = true;
+      return true;
+    } catch (error) {
+      await this.stateStore.closeSqliteLifecycle(sqliteLifecycle).catch(() => {});
+      throw error;
+    }
   };
 
   stopService = async () => {
     await stopBncrBridgeService({
       cleanupRuntime: (reason) => this.cleanupRuntimeWaitersAndTimers(reason),
       flushState: () => this.flushState(),
+      closeState: async () => {
+        await this.stateStore.closeSqliteLifecycle();
+      },
       logInfo: (scope, message, options) => this.logInfo(scope, message, options),
     });
   };
@@ -916,6 +943,10 @@ class BncrBridgeRuntime {
   shutdown() {
     shutdownBncrBridgeService({
       cleanupRuntime: (reason) => this.cleanupRuntimeWaitersAndTimers(reason),
+      closeState: async () => {
+        await this.stateStore.closeSqliteLifecycle();
+      },
+      logInfo: (scope, message, options) => this.logInfo(scope, message, options),
     });
   }
 
@@ -1885,11 +1916,8 @@ class BncrBridgeRuntime {
     handleFileTransferPushFailure: (args) => this.handleFileTransferPushFailure(args),
     handleTextPushFailure: (args) => this.handleTextPushFailure(args),
     isPrePushGuardDeferral: (entry) => this.isPrePushGuardDeferral(entry),
-    resolveActiveAccountIds: () => this.activeConnectionByAccount.keys(),
-    resolveAccountIdForSession: (sessionKey) => {
-      const hit = this.sessionRoutes.get(sessionKey);
-      return hit ? hit.accountId : BNCR_DEFAULT_ACCOUNT_ID;
-    },
+    resolveAccountIdForSession: (sessionKey) =>
+      this.targetRuntime.resolveSessionAccountId(sessionKey),
     scheduleSave: () => this.scheduleSave(),
     logInfo: (scope, message, options) => this.logInfo(scope, message, options),
     logWarn: (scope, message, options) => this.logWarn(scope, message, options),
@@ -2029,6 +2057,7 @@ class BncrBridgeRuntime {
     maxAccountActivityEntries: MAX_ACCOUNT_ACTIVITY_ENTRIES,
     sceneRegistry: this.sceneRegistry,
     conversationHistories: this.conversationHistories,
+    conversationHistoryVersions: this.conversationHistoryVersions,
     outboundReplayCache: this.outboundReplayCache,
     outbox: this.outbox,
     getDeadLetter: () => this.deadLetter,
@@ -2296,6 +2325,7 @@ class BncrBridgeRuntime {
     lastOutboundByAccount: this.lastOutboundByAccount,
     outboundReplayCache: this.outboundReplayCache,
     conversationHistories: this.conversationHistories,
+    conversationHistoryVersions: this.conversationHistoryVersions,
     resolveOutboundHistoryLimit: (entry) => {
       const platform = entry.route?.platform || '';
       const groupId = entry.route?.groupId || '0';
@@ -2919,7 +2949,9 @@ class BncrBridgeRuntime {
       canonicalAgentId,
       sceneRegistry: this.sceneRegistry,
       conversationHistories: this.conversationHistories,
+      conversationHistoryVersions: this.conversationHistoryVersions,
       outboundReplayCache: this.outboundReplayCache,
+      historyShardQueue: this.stateStore.historyShardQueue,
       defaultAdminAgentId: canonicalAgentId,
       defaultPublicAgentId: this.defaultPublicAgentId(),
       now,
@@ -3067,7 +3099,9 @@ class BncrBridgeRuntime {
       defaultPublicAgentId: () => this.defaultPublicAgentId(),
       sceneRegistry: this.sceneRegistry,
       conversationHistories: this.conversationHistories,
+      conversationHistoryVersions: this.conversationHistoryVersions,
       outboundReplayCache: this.outboundReplayCache,
+      historyShardQueue: this.stateStore.historyShardQueue,
       prepareInboundAcceptance: (args) => this.prepareInboundAcceptance(args),
       logInboundSummary: (args) => this.logInboundSummary(args),
       flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -163,7 +163,9 @@ function buildOutboundState() {
 test('createBncrSqliteStateDatabase creates schema and reports json store mode', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-'));
   try {
-    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    const dbPath = join(dir, 'bncr.sqlite3');
+    const db = createBncrSqliteStateDatabase(dbPath);
+    assert.equal((await stat(dbPath)).mode & 0o777, 0o600);
     assert.equal(db.getStoreMode(), null);
     const checksumRows = validateSqliteMigrationChecksums(db.getPath());
     assert.equal(checksumRows.length, 5);
@@ -174,9 +176,80 @@ test('createBncrSqliteStateDatabase creates schema and reports json store mode',
     assert.match(checksumRows[4], /^5:[0-9a-f]{64}$/);
     db.close();
 
-    const reopened = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    const reopened = createBncrSqliteStateDatabase(dbPath);
     assert.equal(reopened.getStoreMode(), null);
     reopened.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('createBncrSqliteStateDatabase hardens database, wal, and shm permissions', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-modes-'));
+  const dbPath = join(dir, 'bncr.sqlite3');
+  const seed = new DatabaseSync(dbPath);
+  try {
+    seed.exec('PRAGMA journal_mode=WAL');
+    seed.exec('CREATE TABLE seed_table (id INTEGER)');
+    seed.exec('INSERT INTO seed_table (id) VALUES (1)');
+    for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+      await chmod(filePath, 0o644);
+    }
+
+    const db = createBncrSqliteStateDatabase(dbPath);
+    try {
+      for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+        assert.equal((await stat(filePath)).mode & 0o777, 0o600);
+      }
+    } finally {
+      db.close();
+    }
+  } finally {
+    seed.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('createBncrSqliteStateDatabase rejects migration checksum drift on reopen', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-checksum-'));
+  const dbPath = join(dir, 'bncr.sqlite3');
+  try {
+    const db = createBncrSqliteStateDatabase(dbPath);
+    db.close();
+
+    const raw = new DatabaseSync(dbPath);
+    raw.prepare("UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 1").run();
+    raw.close();
+
+    assert.throws(
+      () => createBncrSqliteStateDatabase(dbPath),
+      /bncr sqlite migration 1 checksum mismatch/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('createBncrSqliteStateDatabase rejects migrations newer than this plugin supports', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-future-migration-'));
+  const dbPath = join(dir, 'bncr.sqlite3');
+  try {
+    const db = createBncrSqliteStateDatabase(dbPath);
+    db.close();
+
+    const raw = new DatabaseSync(dbPath);
+    raw
+      .prepare(
+        `INSERT INTO schema_migrations (version, name, checksum, applied_at)
+         VALUES (999, 'future', 'future', 1)`,
+      )
+      .run();
+    raw.close();
+
+    assert.throws(
+      () => createBncrSqliteStateDatabase(dbPath),
+      /bncr sqlite migration 999 is newer than this plugin supports/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1058,7 +1131,8 @@ test('history shard lease renewal extends an active processing claim', async () 
 test('terminal failed history shards are restored to the active window on load', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-shard-terminal-'));
   try {
-    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    const dbPath = join(dir, 'bncr.sqlite3');
+    const db = createBncrSqliteStateDatabase(dbPath, { now: () => 2_000 });
     db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
     db.importHistoryState(buildHistoryState().historyBuckets, buildHistoryState().replayBuckets);
     assert.equal(db.getHistoryStateRevision(), 1);
@@ -1082,6 +1156,15 @@ test('terminal failed history shards are restored to the active window on load',
     assert.equal(restored.replayBuckets[0].entries.length, 1);
     assert.equal(db.listHistoryShards().length, 0);
     assert.equal(db.getHistoryStateRevision(), 2);
+    const raw = new DatabaseSync(dbPath);
+    try {
+      const revision = raw
+        .prepare("SELECT updated_at FROM state_meta WHERE meta_key = 'history_revision'")
+        .get();
+      assert.equal(revision.updated_at, 2_000);
+    } finally {
+      raw.close();
+    }
     assert.throws(() => db.saveHistoryState([], [], 1), /history revision conflict/);
     db.close();
   } finally {

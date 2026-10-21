@@ -47,6 +47,7 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
   maxAccountActivityEntries: number;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: Map<string, BncrPersistedConversationHistoryEntry[]>;
+  conversationHistoryVersions?: Map<string, number>;
   outboundReplayCache?: Map<string, BncrPersistedOutboundReplayEntry[]>;
   outbox: Map<string, OutboxEntry>;
   getDeadLetter: () => OutboxEntry[];
@@ -88,6 +89,7 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
     maxAccountActivityEntries: runtime.maxAccountActivityEntries,
     sceneRegistry: runtime.sceneRegistry,
     conversationHistories: runtime.conversationHistories,
+    conversationHistoryVersions: runtime.conversationHistoryVersions,
     outboundReplayCache:
       runtime.outboundReplayCache ?? new Map<string, BncrPersistedOutboundReplayEntry[]>(),
     outbox: runtime.outbox,

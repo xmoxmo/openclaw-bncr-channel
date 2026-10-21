@@ -4,7 +4,6 @@ import type { OutboxEntry } from '../../core/types.ts';
 import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
 import { buildSceneKey } from '../../plugin/scene-registry.ts';
 import type { BncrHistoryShardQueue } from '../../plugin/sqlite-state.ts';
-import { getBncrHistoryShardQueue } from '../../plugin/state-store.ts';
 import { handleBncrNativeCommand } from './commands.ts';
 import type {
   BncrEnqueueFromReply,
@@ -15,6 +14,7 @@ import type {
 } from './contracts.ts';
 import {
   type BncrConversationHistoryMap,
+  type BncrConversationHistoryVersions,
   type BncrHistoryEntry,
   buildBncrConversationHistoryKey,
   readBncrPendingConversationHistorySnapshot,
@@ -71,6 +71,7 @@ export async function dispatchBncrInbound(params: {
   resolvedAgentId?: string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: BncrConversationHistoryMap;
+  conversationHistoryVersions?: BncrConversationHistoryVersions;
   outboundReplayCache?: BncrOutboundReplayCache;
   historyShardQueue?: BncrHistoryShardQueue;
   defaultAdminAgentId: string;
@@ -96,6 +97,7 @@ export async function dispatchBncrInbound(params: {
     resolvedAgentId,
     sceneRegistry = new Map(),
     conversationHistories = new Map(),
+    conversationHistoryVersions = new Map(),
     outboundReplayCache = new Map(),
     defaultAdminAgentId,
     defaultPublicAgentId,
@@ -106,8 +108,7 @@ export async function dispatchBncrInbound(params: {
     scheduleSave,
     logger,
   } = params;
-  const historyShardQueue =
-    params.historyShardQueue ?? getBncrHistoryShardQueue(conversationHistories) ?? undefined;
+  const historyShardQueue = params.historyShardQueue;
   const { accountId, clientId, msgId, extracted, mimeType, peer } = parsed;
   let shouldDispatch = initialShouldDispatch || forceSilentHistoryFlush;
 
@@ -238,7 +239,7 @@ export async function dispatchBncrInbound(params: {
     let uploadSettled = false;
     if (historyKey && forceSilentHistoryFlushVersion !== undefined) {
       const currentHistoryVersion = readConversationHistoryVersion(
-        conversationHistories,
+        conversationHistoryVersions,
         historyKey,
       );
       if (currentHistoryVersion !== forceSilentHistoryFlushVersion) {
@@ -255,6 +256,7 @@ export async function dispatchBncrInbound(params: {
       // Record the message first so overflow context includes it
       recordBncrPendingConversationText({
         historyMap: conversationHistories,
+        conversationHistoryVersions,
         parsed,
         senderDisplayName,
         senderId: senderIdForContext,
@@ -263,6 +265,7 @@ export async function dispatchBncrInbound(params: {
       });
       recordBncrPendingConversationMedia({
         historyMap: conversationHistories,
+        conversationHistoryVersions,
         parsed,
         senderDisplayName,
         senderId: senderIdForContext,
@@ -675,6 +678,7 @@ export async function dispatchBncrOutboundHistoryFlush(params: {
   canonicalAgentId: string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: BncrConversationHistoryMap;
+  conversationHistoryVersions?: BncrConversationHistoryVersions;
   outboundReplayCache?: BncrOutboundReplayCache;
   historyShardQueue?: BncrHistoryShardQueue;
   defaultAdminAgentId: string;
@@ -726,6 +730,7 @@ export async function dispatchBncrOutboundHistoryFlush(params: {
       : {}),
     sceneRegistry: params.sceneRegistry,
     conversationHistories: params.conversationHistories,
+    conversationHistoryVersions: params.conversationHistoryVersions,
     outboundReplayCache: params.outboundReplayCache,
     historyShardQueue: params.historyShardQueue,
     defaultAdminAgentId: params.defaultAdminAgentId,

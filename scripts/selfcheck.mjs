@@ -198,6 +198,7 @@ const requiredSourceFiles = [
   'src/plugin/runtime-diagnostics-snapshot.ts',
   'src/plugin/scene-registry.ts',
   'src/plugin/setup.ts',
+  'src/plugin/state-path-migration.ts',
   'src/plugin/state-store.ts',
   'src/plugin/sqlite-state.ts',
   'src/plugin/state-transient-runtime-group.ts',

@@ -183,6 +183,7 @@ export type BncrOutboundReplayRecordResult = {
 export function recordBncrOutboundReplay(args: {
   cache: BncrOutboundReplayCache;
   conversationHistories?: BncrConversationHistoryMap;
+  conversationHistoryVersions?: Map<string, number>;
   historyLimit?: number;
   entry: OutboxEntry;
   sender: string;
@@ -242,8 +243,10 @@ export function recordBncrOutboundReplay(args: {
 
   if (args.conversationHistories) {
     if (historyKey) {
+      const conversationHistoryVersions = args.conversationHistoryVersions ?? new Map();
       recordBncrBotReply({
         historyMap: args.conversationHistories,
+        conversationHistoryVersions,
         historyKey,
         sender: args.sender,
         senderId: args.senderId,
@@ -270,7 +273,7 @@ export function recordBncrOutboundReplay(args: {
       // repeated ack must still be able to force a flush.
       historyOverflow = entries.length >= limit;
       if (historyOverflow) {
-        historyVersion = readConversationHistoryVersion(args.conversationHistories, historyKey);
+        historyVersion = readConversationHistoryVersion(conversationHistoryVersions, historyKey);
       }
       const cacheRecorded = recordOutboundReplayEntry({
         cache: args.cache,

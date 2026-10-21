@@ -12,6 +12,7 @@ import type {
 } from './channel-inbound-helpers.ts';
 import type { BncrChannelConfigRoot, BncrSceneRecord } from './channel-runtime-types.ts';
 import { buildBncrGatewayEventContext } from './gateway-event-context.ts';
+import type { BncrHistoryShardQueue } from './sqlite-state.ts';
 
 type InboundLifecycleStage = 'accepted';
 type LeaseEventKind =
@@ -136,7 +137,9 @@ export type BncrInboundHandlersRuntime = {
   defaultPublicAgentId: () => string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: BncrConversationHistoryMap;
+  conversationHistoryVersions?: Map<string, number>;
   outboundReplayCache: BncrOutboundReplayCache;
+  historyShardQueue?: BncrHistoryShardQueue;
   prepareInboundAcceptance: (args: {
     parsed: ParsedInboundParams;
     canonicalAgentId: string;
@@ -167,7 +170,9 @@ export type BncrInboundHandlersRuntime = {
     shouldAccumulate: boolean;
     sceneRegistry: Map<string, BncrSceneRecord>;
     conversationHistories: BncrConversationHistoryMap;
+    conversationHistoryVersions?: Map<string, number>;
     outboundReplayCache: BncrOutboundReplayCache;
+    historyShardQueue?: BncrHistoryShardQueue;
     defaultAdminAgentId: string;
     defaultPublicAgentId: string;
     now: () => number;
@@ -342,7 +347,9 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           shouldAccumulate,
           sceneRegistry: runtime.sceneRegistry,
           conversationHistories: runtime.conversationHistories,
+          conversationHistoryVersions: runtime.conversationHistoryVersions,
           outboundReplayCache: runtime.outboundReplayCache,
+          historyShardQueue: runtime.historyShardQueue,
           defaultAdminAgentId,
           defaultPublicAgentId: runtime.defaultPublicAgentId(),
           now: runtime.now,

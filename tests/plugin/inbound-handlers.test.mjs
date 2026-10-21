@@ -105,7 +105,8 @@ function createRuntime(overrides = {}) {
 }
 
 test('inbound handlers accept inbound and flush/dispatch with canonical agent id', async () => {
-  const { runtime, calls } = createRuntime();
+  const historyShardQueue = { marker: 'queue-1' };
+  const { runtime, calls } = createRuntime({ historyShardQueue });
   const handlers = createBncrInboundHandlers(runtime);
   const responses = [];
 
@@ -124,6 +125,7 @@ test('inbound handlers accept inbound and flush/dispatch with canonical agent id
   assert.deepEqual(calls.markLastInboundAt, ['Primary']);
   assert.deepEqual(calls.flushed, ['Primary']);
   assert.equal(calls.dispatched[0].canonicalAgentId, 'orion');
+  assert.equal(calls.dispatched[0].historyShardQueue, historyShardQueue);
 });
 
 test('inbound handlers run post-ack dispatch through an independent work runner', async () => {

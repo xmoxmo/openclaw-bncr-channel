@@ -311,6 +311,7 @@ test('outbound replay key normalizes a missing account id to the default account
 test('outbound replay signals history overflow only when an outbound reaches the limit', () => {
   const cache = new Map();
   const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
   const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
   const results = [];
 
@@ -319,6 +320,7 @@ test('outbound replay signals history overflow only when an outbound reaches the
       recordBncrOutboundReplay({
         cache,
         conversationHistories,
+        conversationHistoryVersions,
         historyLimit: 3,
         entry: makeOutboundEntry(`overflow-${index}`, route),
         sender: 'OpenClaw',
@@ -337,6 +339,7 @@ test('outbound replay signals history overflow only when an outbound reaches the
     recordBncrOutboundReplay({
       cache,
       conversationHistories,
+      conversationHistoryVersions,
       historyLimit: 3,
       entry: makeOutboundEntry('overflow-3', route),
       sender: 'OpenClaw',
@@ -349,6 +352,7 @@ test('outbound replay signals history overflow only when an outbound reaches the
 test('outbound replay still signals overflow when history is new but cache already has the message id', () => {
   const cache = new Map();
   const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
   const route = { platform: 'tgBot', groupId: '0', userId: '10001' };
 
   recordBncrOutboundReplay({
@@ -367,6 +371,7 @@ test('outbound replay still signals overflow when history is new but cache alrea
   recordBncrOutboundReplay({
     cache,
     conversationHistories,
+    conversationHistoryVersions,
     historyLimit: 2,
     entry: makeOutboundEntry('cache-only-1', route),
     sender: 'OpenClaw',
@@ -377,6 +382,7 @@ test('outbound replay still signals overflow when history is new but cache alrea
     recordBncrOutboundReplay({
       cache,
       conversationHistories,
+      conversationHistoryVersions,
       historyLimit: 2,
       entry: makeOutboundEntry('cache-only-2', route),
       sender: 'OpenClaw',

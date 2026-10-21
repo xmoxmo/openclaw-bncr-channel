@@ -95,7 +95,7 @@ test('bridge lifecycle service helpers preserve startup stop and shutdown sequen
   assert.equal(await startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, true), true);
   assert.equal(stopped, false);
   assert.equal(debugVerbose, true);
-  assert.match(statePath, /bncr-bridge-state\.json$/);
+  assert.match(statePath, /plugins\/bncr\/bncr-bridge-state\.json$/);
   const loadStateIndex = calls.findIndex(([name]) => name === 'loadState');
   const setRunningIndex = calls.findIndex(
     ([name, value]) => name === 'setStopped' && value === false,
@@ -113,25 +113,40 @@ test('bridge lifecycle service helpers preserve startup stop and shutdown sequen
     async flushState() {
       cleanupCalls.push('flush');
     },
+    async closeState() {
+      cleanupCalls.push('close');
+    },
     logInfo(scope, message) {
       cleanupCalls.push([scope, message]);
     },
   });
-  assert.deepEqual(cleanupCalls, ['service stopped', 'flush', ['debug', 'service stopped']]);
+  assert.deepEqual(cleanupCalls, [
+    'service stopped',
+    'flush',
+    'close',
+    ['debug', 'service stopped'],
+  ]);
 
   const shutdownCalls = [];
   shutdownBncrBridgeService({
     cleanupRuntime(reason) {
       shutdownCalls.push(reason);
     },
+    closeState() {
+      shutdownCalls.push('close');
+    },
+    logInfo(scope, message) {
+      shutdownCalls.push([scope, message]);
+    },
   });
-  assert.deepEqual(shutdownCalls, ['shutdown']);
+  assert.deepEqual(shutdownCalls, ['shutdown', 'close']);
 });
 
 test('bridge lifecycle stale start does not clear stopped or resume outbox drain', async () => {
   let current = true;
   let stopped = true;
   let resumed = false;
+  let closed = false;
   let releaseLoad;
   let notifyLoadEntered;
   const loadGate = new Promise((resolve) => {
@@ -173,6 +188,9 @@ test('bridge lifecycle stale start does not clear stopped or resume outbox drain
     isStartCurrent() {
       return current;
     },
+    async closeState() {
+      closed = true;
+    },
   };
 
   const starting = startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, false);
@@ -183,12 +201,14 @@ test('bridge lifecycle stale start does not clear stopped or resume outbox drain
   assert.equal(await starting, false);
   assert.equal(stopped, true);
   assert.equal(resumed, false);
+  assert.equal(closed, true);
 });
 
 test('bridge lifecycle start failure restores stopped and does not resume outbox drain', async () => {
   const calls = [];
   let stopped = false;
   let resumed = false;
+  let closed = false;
   const runtime = {
     bridgeId: 'bridge-failed',
     setStopped(value) {
@@ -214,6 +234,9 @@ test('bridge lifecycle start failure restores stopped and does not resume outbox
     resumeOutboxDrain() {
       resumed = true;
     },
+    async closeState() {
+      closed = true;
+    },
   };
 
   await assert.rejects(
@@ -223,6 +246,7 @@ test('bridge lifecycle start failure restores stopped and does not resume outbox
 
   assert.equal(stopped, true);
   assert.equal(resumed, false);
+  assert.equal(closed, true);
   assert.deepEqual(
     calls.filter(([name]) => name === 'setStopped'),
     [
@@ -287,7 +311,7 @@ test('bridge lifecycle service runs sqlite cutover when maintenance env is set',
     calls.some((call) => call[0] === 'logInfo' && call[1] === 'startup'),
     true,
   );
-  assert.match(statePath, /bncr-bridge-state\.json$/);
+  assert.match(statePath, /plugins\/bncr\/bncr-bridge-state\.json$/);
 });
 
 test('bridge lifecycle cleanup clears timers waiters and workers through one boundary', () => {

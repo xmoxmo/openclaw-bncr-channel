@@ -132,6 +132,7 @@ test('bridge outbox facade triggers history flush when an outbound reaches the l
   const lastOutboundByAccount = new Map();
   const outboundReplayCache = new Map();
   const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
   const overflows = [];
 
   const facade = createBncrBridgeOutboxFacade({
@@ -158,6 +159,7 @@ test('bridge outbox facade triggers history flush when an outbound reaches the l
     lastOutboundByAccount,
     outboundReplayCache,
     conversationHistories,
+    conversationHistoryVersions,
     resolveOutboundHistoryLimit: () => 3,
     resolveOutboundHistoryForce: () => true,
     onConversationHistoryOverflow: (entry, historyVersion) =>

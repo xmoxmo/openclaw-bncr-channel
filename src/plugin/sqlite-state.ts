@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { chmodSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeAccountId } from '../core/accounts.ts';
 import {
@@ -443,6 +444,25 @@ function migrationChecksum(migration: Migration): string {
     .digest('hex');
 }
 
+type AppliedMigrationRow = {
+  version: number;
+  name: string;
+  checksum: string;
+};
+
+function assertAppliedMigrations(rows: AppliedMigrationRow[]): void {
+  const expectedByVersion = new Map(MIGRATIONS.map((migration) => [migration.version, migration]));
+  for (const row of rows) {
+    const expected = expectedByVersion.get(row.version);
+    if (!expected) {
+      throw new Error(`bncr sqlite migration ${row.version} is newer than this plugin supports`);
+    }
+    if (row.checksum !== migrationChecksum(expected)) {
+      throw new Error(`bncr sqlite migration ${row.version} checksum mismatch`);
+    }
+  }
+}
+
 function applyMigrations(db: DatabaseSync, now: () => number): void {
   db.exec(SCHEMA_MIGRATIONS);
 
@@ -450,15 +470,11 @@ function applyMigrations(db: DatabaseSync, now: () => number): void {
     const checksum = migrationChecksum(migration);
     db.exec('BEGIN IMMEDIATE');
     try {
-      const applied = new Set<number>(
-        (
-          db.prepare('SELECT version, checksum FROM schema_migrations').all() as Array<{
-            version: number;
-            checksum: string;
-          }>
-        ).map((row) => row.version),
-      );
-      if (applied.has(migration.version)) {
+      const rows = db
+        .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC')
+        .all() as AppliedMigrationRow[];
+      assertAppliedMigrations(rows);
+      if (rows.some((row) => row.version === migration.version)) {
         db.exec('COMMIT');
         continue;
       }
@@ -1071,7 +1087,10 @@ function historyStateFromRows(rows: readonly BncrHistoryMessageRow[]): BncrSqlit
   };
 }
 
-function restoreTerminalHistoryShardsToActive(db: DatabaseSync): BncrSqliteHistoryState {
+function restoreTerminalHistoryShardsToActive(
+  db: DatabaseSync,
+  timestamp: number = Date.now(),
+): BncrSqliteHistoryState {
   db.exec('BEGIN IMMEDIATE');
   try {
     const terminal = (
@@ -1128,12 +1147,11 @@ function restoreTerminalHistoryShardsToActive(db: DatabaseSync): BncrSqliteHisto
       .prepare("SELECT meta_value FROM state_meta WHERE meta_key = 'history_revision'")
       .get() as { meta_value: string } | undefined;
     const nextRevision = Number(revisionRow?.meta_value ?? 0) + 1;
-    const restoredAt = Date.now();
     db.prepare(
       `INSERT INTO state_meta (meta_key, meta_value, updated_at)
        VALUES ('history_revision', ?, ?)
        ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at = excluded.updated_at`,
-    ).run(String(nextRevision), restoredAt);
+    ).run(String(nextRevision), timestamp);
     db.exec('COMMIT');
     const isConsumed = db.prepare(
       `SELECT 1 FROM history_message_consumed
@@ -1156,8 +1174,8 @@ function restoreTerminalHistoryShardsToActive(db: DatabaseSync): BncrSqliteHisto
 
 function loadHistoryState(db: DatabaseSync, now: number = Date.now()): BncrSqliteHistoryState {
   cleanupExpiredHistoryMessageTombstones(db, now);
-  cleanupCompletedHistoryShards(db);
-  restoreTerminalHistoryShardsToActive(db);
+  cleanupCompletedHistoryShards(db, now);
+  restoreTerminalHistoryShardsToActive(db, now);
   const rows = db
     .prepare(
       `SELECT cm.id, cm.storage_kind, cm.history_key, cm.buffer_key, cm.account_id,
@@ -1184,7 +1202,7 @@ function cleanupExpiredHistoryMessageTombstones(
   return Number(result.changes);
 }
 
-function cleanupCompletedHistoryShards(db: DatabaseSync): number {
+function cleanupCompletedHistoryShards(db: DatabaseSync, timestamp: number = Date.now()): number {
   let completedCount = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -1200,7 +1218,7 @@ function cleanupCompletedHistoryShards(db: DatabaseSync): number {
     const deleteMessages = db.prepare('DELETE FROM conversation_messages WHERE shard_id = ?');
     const deleteShard = db.prepare('DELETE FROM history_shards WHERE id = ?');
     for (const id of completed) {
-      recordConsumedHistoryShardMessages(db, id, Date.now());
+      recordConsumedHistoryShardMessages(db, id, timestamp);
       deleteMessages.run(id);
       deleteShard.run(id);
     }
@@ -1449,11 +1467,27 @@ export function createBncrSqliteStateDatabase(
 ): BncrSqliteStateDatabase {
   const now = options.now ?? (() => Date.now());
   const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA journal_mode=WAL');
-  db.exec('PRAGMA synchronous=NORMAL');
-  db.exec('PRAGMA foreign_keys=ON');
-  db.exec('PRAGMA busy_timeout=5000');
-  applyMigrations(db, now);
+  try {
+    db.exec('PRAGMA journal_mode=WAL');
+    for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+      try {
+        chmodSync(filePath, 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    db.exec('PRAGMA synchronous=NORMAL');
+    db.exec('PRAGMA foreign_keys=ON');
+    db.exec('PRAGMA busy_timeout=5000');
+    applyMigrations(db, now);
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      // Preserve the startup failure that made the connection unusable.
+    }
+    throw error;
+  }
 
   if (options.storeMode) {
     setMeta('store_mode', options.storeMode);
@@ -2093,9 +2127,9 @@ export function createBncrSqliteStateDatabase(
     completeHistoryShard,
     recoverHistoryShards,
     recoverInFlightHistoryShards,
-    restoreTerminalHistoryShardsToActive: () => restoreTerminalHistoryShardsToActive(db),
+    restoreTerminalHistoryShardsToActive: () => restoreTerminalHistoryShardsToActive(db, now()),
     claimNextHistoryShard,
-    cleanupCompletedHistoryShards: () => cleanupCompletedHistoryShards(db),
+    cleanupCompletedHistoryShards: () => cleanupCompletedHistoryShards(db, now()),
     listHistoryShards,
   };
 }
@@ -2103,18 +2137,11 @@ export function createBncrSqliteStateDatabase(
 export function validateSqliteMigrationChecksums(dbPath: string): string[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    return (
-      db
-        .prepare('SELECT version, checksum FROM schema_migrations ORDER BY version ASC')
-        .all() as Array<{ version: number; checksum: string }>
-    ).map((row) => {
-      const migration = MIGRATIONS.find((item) => item.version === row.version);
-      const expected = migration ? migrationChecksum(migration) : null;
-      if (expected && expected !== row.checksum) {
-        throw new Error(`bncr sqlite migration ${row.version} checksum mismatch`);
-      }
-      return `${row.version}:${expected ?? row.checksum}`;
-    });
+    const rows = db
+      .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC')
+      .all() as AppliedMigrationRow[];
+    assertAppliedMigrations(rows);
+    return rows.map((row) => `${row.version}:${row.checksum}`);
   } finally {
     db.close();
   }

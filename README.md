@@ -19,6 +19,25 @@ openclaw gateway restart
 
 当前兼容 `OpenClaw >= 2026.8.1`。
 
+## 状态目录
+
+Bncr 将持久化状态放在 OpenClaw 状态目录的插件专属子目录：
+
+```text
+<stateDir>/plugins/bncr/
+├── bncr-bridge-state.json
+├── bncr.sqlite3
+└── backups/
+```
+
+从旧版升级时，启动过程会把 `<stateDir>/bncr-bridge-state.json`、
+`<stateDir>/bncr.sqlite3`（包括 WAL 中已提交的数据）和旧版备份复制到新目录。
+旧文件会保留用于回滚，已存在的新文件不会被覆盖。
+插件状态目录会收紧为 `0700`，其中的状态文件为 `0600`。
+
+`BNCR_SQLITE_STORE=1` 强制启用 SQLite，`BNCR_SQLITE_STORE=0` 强制使用 JSON；
+未设置时沿用自动检测。
+
 ## 客户端接入
 
 1. 安装并启用 `openclawclient.js`。
