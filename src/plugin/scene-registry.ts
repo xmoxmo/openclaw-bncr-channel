@@ -51,15 +51,40 @@ export function resolveSceneRecord(
   if (agent) {
     const exact = registry.get(buildAgentSceneRegistryKey(key, agent));
     if (exact) return exact;
+    const unowned = registry.get(buildAgentSceneRegistryKey(key));
+    if (unowned) return unowned;
+    // Scene rows owned by another agent are never reused for a scoped lookup:
+    // admission state, reply mode and history settings belong to their owner.
+    return undefined;
   }
-  const unowned = registry.get(buildAgentSceneRegistryKey(key));
-  if (unowned) return unowned;
+  // Unscoped lookup (global reads and legacy call sites) keeps the previous
+  // behaviour of returning whatever row exists for the key.
   let newest: BncrSceneRecord | undefined;
   for (const record of registry.values()) {
     if (asString(record.sceneKey).trim() !== key) continue;
     if (!newest || (record.lastSeenAt ?? 0) >= (newest.lastSeenAt ?? 0)) newest = record;
   }
   return newest;
+}
+
+/**
+ * Decide which agent serves a scene. The host route wins when it already has
+ * an own row; otherwise an existing row's owner stays authoritative so a bound
+ * or previously admitted scene keeps its agent. Neither path borrows state
+ * across agents: the returned agent only ever reads its own row.
+ */
+export function resolveSceneAgentId(
+  registry: ReadonlyMap<string, BncrSceneRecord>,
+  sceneKey: string,
+  routeAgentId?: string | null,
+): string {
+  const routeAgent = asString(routeAgentId ?? '').trim();
+  if (routeAgent) {
+    const own = resolveSceneRecord(registry, sceneKey, routeAgent);
+    if (own) return asString(own.agentId ?? '').trim() || routeAgent;
+  }
+  const existing = resolveSceneRecord(registry, sceneKey);
+  return asString(existing?.agentId ?? '').trim() || routeAgent;
 }
 
 export function setSceneRecord(
@@ -149,7 +174,13 @@ export function decideSceneAdmission(args: {
     args;
   const sceneKey = buildSceneKey(parsed);
   const kind = asSceneKind(parsed);
-  const existing = resolveSceneRecord(sceneRegistry, sceneKey, sceneAgentId);
+  const resolved = resolveSceneRecord(sceneRegistry, sceneKey, sceneAgentId);
+  // Defence in depth: a row owned by a different agent is not this agent's
+  // admission state, so it must never drive this decision or be overwritten.
+  const existing =
+    resolved && resolved.agentId && sceneAgentId && resolved.agentId !== sceneAgentId
+      ? undefined
+      : resolved;
   const shouldForceDirectNonAdminPublic = (agentId?: string) =>
     kind === 'direct' && parsed.isAdmin !== true && (!agentId || agentId === defaultAdminAgentId);
 

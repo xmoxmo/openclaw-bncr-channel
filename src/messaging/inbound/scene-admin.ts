@@ -462,6 +462,13 @@ export function executeSceneAdminCommand(args: {
   } = args;
   const sceneAgentId = args.agentId;
 
+  // Administrators operate on explicitly named scenes that another agent may
+  // serve, so an admin lookup may fall back to the unscoped row. Everyone else
+  // only ever sees their own agent's rows.
+  const lookupScene = (sceneKey: string) =>
+    resolveSceneRecord(sceneRegistry, sceneKey, sceneAgentId) ??
+    (parsed.isAdmin ? resolveSceneRecord(sceneRegistry, sceneKey) : undefined);
+
   // Admin always passes; non-admin only passes when the caller explicitly
   // opted in via allowNonAdminSelfAdmin (self-admin commands in direct chat).
   if (!parsed.isAdmin && !allowNonAdminSelfAdmin) {
@@ -476,6 +483,12 @@ export function executeSceneAdminCommand(args: {
     if (cmdSceneKey && currentSceneKey && cmdSceneKey !== currentSceneKey) {
       return { ok: false, text: 'You can only manage your own private chat session.' };
     }
+  }
+
+  // The global default applies to every scene, so it stays administrator-only.
+  // Direct-chat self-admin covers the caller's own scene and nothing wider.
+  if (command.kind === 'download-media-global-set' && !parsed.isAdmin) {
+    return { ok: false, text: 'Admin permission required.' };
   }
 
   if (command.kind === 'history-help') {
@@ -512,7 +525,7 @@ export function executeSceneAdminCommand(args: {
     if (!sceneKey) {
       return { ok: false, text: 'Current group mode query only works inside a group chat.' };
     }
-    const existingScene = resolveSceneRecord(sceneRegistry, sceneKey, sceneAgentId);
+    const existingScene = lookupScene(sceneKey);
     if (!existingScene) {
       return { ok: false, text: `Scene not found: ${sceneKey}` };
     }
@@ -530,7 +543,7 @@ export function executeSceneAdminCommand(args: {
     if (!qSceneKey) {
       return { ok: true, text: 'Default history limit is 50.' };
     }
-    const s = resolveSceneRecord(sceneRegistry, qSceneKey, sceneAgentId);
+    const s = lookupScene(qSceneKey);
     if (!s) return { ok: true, text: 'Default history limit is 50.' };
     return {
       ok: true,
@@ -543,7 +556,7 @@ export function executeSceneAdminCommand(args: {
     if (!sSceneKey) {
       return { ok: false, text: 'Current conversation shortcut requires a valid chat.' };
     }
-    const sExisting = resolveSceneRecord(sceneRegistry, sSceneKey, sceneAgentId);
+    const sExisting = lookupScene(sSceneKey);
     if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
     if (command.limit === 'clear') {
       const { historyLimit: _, ...rest } = sExisting;
@@ -580,7 +593,7 @@ export function executeSceneAdminCommand(args: {
     if (!qSceneKey) {
       return { ok: true, text: 'Default history auto flush is on.' };
     }
-    const s = resolveSceneRecord(sceneRegistry, qSceneKey, sceneAgentId);
+    const s = lookupScene(qSceneKey);
     if (!s) return { ok: true, text: 'Default history auto flush is on.' };
     const enabled = s.historyForce !== false;
     return {
@@ -594,7 +607,7 @@ export function executeSceneAdminCommand(args: {
     if (!sSceneKey) {
       return { ok: false, text: 'Current conversation shortcut requires a valid chat.' };
     }
-    const sExisting = resolveSceneRecord(sceneRegistry, sSceneKey, sceneAgentId);
+    const sExisting = lookupScene(sSceneKey);
     if (!sExisting) return { ok: false, text: `Scene not found: ${sSceneKey}` };
     if (command.enabled === 'clear') {
       const { historyForce: _, ...rest } = sExisting;
@@ -613,21 +626,24 @@ export function executeSceneAdminCommand(args: {
   }
 
   if (command.kind === 'download-media-global-get') {
-    const g = resolveSceneRecord(sceneRegistry, GLOBAL_SCENE_KEY, sceneAgentId);
+    const g = lookupScene(GLOBAL_SCENE_KEY);
     const enabled = g?.downloadMedia === true;
     return { ok: true, text: `Global default download remote media is ${enabled ? 'on' : 'off'}.` };
   }
 
   if (command.kind === 'download-media-global-set') {
-    const g = resolveSceneRecord(sceneRegistry, GLOBAL_SCENE_KEY, sceneAgentId);
-    setSceneRecord(sceneRegistry, {
+    const g = lookupScene(GLOBAL_SCENE_KEY);
+    const nextGlobal: BncrSceneRecord = {
       sceneKey: GLOBAL_SCENE_KEY,
       kind: 'group',
       status: 'allowed',
       ...(g || { platform: 'bncr' }),
       downloadMedia: command.enabled,
       lastSeenAt: now(),
-    });
+    };
+    // The global row is shared by every agent, so it must stay unowned.
+    delete nextGlobal.agentId;
+    setSceneRecord(sceneRegistry, nextGlobal);
     return {
       ok: true,
       text: `Global default download remote media set to ${command.enabled ? 'on' : 'off'}.`,
@@ -639,10 +655,10 @@ export function executeSceneAdminCommand(args: {
     if (!qSceneKey) {
       return {
         ok: true,
-        text: `Global default download remote media is ${resolveSceneRecord(sceneRegistry, GLOBAL_SCENE_KEY, sceneAgentId)?.downloadMedia === true ? 'on' : 'off'}.`,
+        text: `Global default download remote media is ${lookupScene(GLOBAL_SCENE_KEY)?.downloadMedia === true ? 'on' : 'off'}.`,
       };
     }
-    const s = resolveSceneRecord(sceneRegistry, qSceneKey, sceneAgentId);
+    const s = lookupScene(qSceneKey);
     if (!s) return { ok: true, text: 'Default download remote media is off.' };
     const enabled = s.downloadMedia === true;
     return {
@@ -656,7 +672,7 @@ export function executeSceneAdminCommand(args: {
     if (!sSceneKey) {
       return { ok: false, text: 'Current group shortcut only works inside a group chat.' };
     }
-    const sExisting = resolveSceneRecord(sceneRegistry, sSceneKey, sceneAgentId);
+    const sExisting = lookupScene(sSceneKey);
     if (command.enabled === undefined) {
       // Clear per-group setting
       if (sExisting) {
@@ -686,13 +702,15 @@ export function executeSceneAdminCommand(args: {
     return { ok: false, text: 'Current group shortcut only works inside a group chat.' };
   }
 
-  const existing = resolveSceneRecord(sceneRegistry, sceneKey, sceneAgentId);
+  const existing = lookupScene(sceneKey);
   if (!existing) {
     return { ok: false, text: `Scene not found: ${sceneKey}` };
   }
 
   if (command.kind === 'revoke') {
-    deleteSceneRecord(sceneRegistry, sceneKey, sceneAgentId);
+    // Remove the row from whichever agent actually owns it; `existing` was
+    // resolved through the command-scoped lookup above.
+    deleteSceneRecord(sceneRegistry, sceneKey, existing.agentId || sceneAgentId);
     return { ok: true, text: `Revoked scene ${sceneKey}.` };
   }
 

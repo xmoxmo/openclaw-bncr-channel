@@ -3140,7 +3140,7 @@ class BncrBridgeRuntime {
           const sc = resolveSceneRecord(this.sceneRegistry, key, this.canonicalAgentId);
           // Scene boolean wins (including explicit false); else fall to global.
           if (typeof sc?.downloadMedia === 'boolean') return sc.downloadMedia;
-          const g = resolveSceneRecord(this.sceneRegistry, '__global__');
+          const g = resolveSceneRecord(this.sceneRegistry, '__global__', this.canonicalAgentId);
           if (typeof g?.downloadMedia === 'boolean') return g.downloadMedia;
         }
         return undefined;

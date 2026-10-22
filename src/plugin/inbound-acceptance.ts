@@ -10,7 +10,7 @@ import type { OpenClawResolvedAgentRoute } from '../openclaw/routing-runtime.ts'
 import type { buildInboundResponsePayload } from './channel-inbound-helpers.ts';
 import { resolveInboundSessionContext } from './channel-inbound-helpers.ts';
 import type { BncrChannelConfigRoot, BncrSceneRecord } from './channel-runtime-types.ts';
-import { decideSceneAdmission } from './scene-registry.ts';
+import { buildSceneKey, decideSceneAdmission, resolveSceneAgentId } from './scene-registry.ts';
 
 type InboundAcceptanceResponsePayload = ReturnType<typeof buildInboundResponsePayload>;
 
@@ -179,7 +179,8 @@ export async function prepareBncrInboundAcceptance(args: {
   } catch {
     resolvedAgentRoute = undefined;
   }
-  const sceneAgentId = args.asString(resolvedAgentRoute?.agentId).trim() || canonicalAgentId;
+  const routeAgentId = args.asString(resolvedAgentRoute?.agentId).trim() || canonicalAgentId;
+  const sceneAgentId = resolveSceneAgentId(args.sceneRegistry, buildSceneKey(parsed), routeAgentId);
 
   const admission = decideSceneAdmission({
     parsed,

@@ -221,6 +221,7 @@ openclaw config get channels.bncr.mediaMaxMb
 - `/bncr` 命令始终由 Bncr 识别；未知或不可用的 Bncr 命令会直接提示，不会转交 Agent。
 - `/bncr help` 会根据当前会话类型和权限，仅展示当前可用的命令。
 - 私聊非管理员使用 `history-*` 或 `download-media` 时，只能操作当前私聊会话，不能通过参数修改其他会话。
+- 全局默认值 `/bncr download-media default on|off` 影响所有会话，仅管理员可设置；非管理员执行会被直接拒绝。
 
 ### 客户端桥接直通
 

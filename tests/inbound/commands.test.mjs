@@ -1156,3 +1156,66 @@ test('executeSceneAdminCommand: download-media global get/set', () => {
   assert.equal(result.ok, true);
   assert.match(result.text, /on/);
 });
+
+test('executeSceneAdminCommand: non-admin cannot change the global download default', () => {
+  const sceneRegistry = new Map();
+  const result = executeSceneAdminCommand({
+    parsed: { isAdmin: false, userId: '10001', peer: { kind: 'direct' }, platform: 'tgBot' },
+    command: { kind: 'download-media-global-set', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 5,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+
+  assert.deepEqual(result, { ok: false, text: 'Admin permission required.' });
+  assert.equal(sceneRegistry.size, 0);
+});
+
+test('executeSceneAdminCommand: non-admin still manages the per-chat download switch', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    agentId: 'public',
+    approvedAt: 1,
+    lastSeenAt: 1,
+  });
+  const parsed = {
+    isAdmin: false,
+    userId: '10001',
+    peer: { kind: 'direct' },
+    platform: 'tgBot',
+  };
+
+  const on = executeSceneAdminCommand({
+    parsed,
+    command: { kind: 'download-media-set', sceneKey: 'tgBot:10001', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+  assert.equal(on.ok, true);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.downloadMedia, true);
+
+  const other = executeSceneAdminCommand({
+    parsed,
+    command: { kind: 'download-media-set', sceneKey: 'tgBot:20002', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 3,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+  assert.equal(other.ok, false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:20002', 'public'), undefined);
+});

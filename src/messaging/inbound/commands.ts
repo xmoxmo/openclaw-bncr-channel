@@ -12,6 +12,7 @@ import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw
 import { resolveOpenClawAgentRoute } from '../../openclaw/routing-runtime.ts';
 import { performBncrGatewaySessionReset } from '../../openclaw/session-reset-runtime.ts';
 import { addNativeElevation, removeNativeElevation } from '../../plugin/config.ts';
+import { buildSceneKey, resolveSceneAgentId } from '../../plugin/scene-registry.ts';
 import { mergeBncrOwnerAllowFromIntoConfig } from './command-owner.ts';
 import type {
   BncrEnqueueFromReply,
@@ -701,7 +702,11 @@ export async function handleBncrNativeCommand(params: {
         defaultPublicAgentId,
         now,
         allowNonAdminSelfAdmin: !!directSelfAdminCommand,
-        agentId: resolvedAgentId || canonicalAgentId,
+        agentId: resolveSceneAgentId(
+          sceneRegistry,
+          buildSceneKey(parsed),
+          resolvedAgentId || canonicalAgentId,
+        ),
       });
       logBncrNativeCommandSummary(
         buildBncrNativeCommandSummary({
