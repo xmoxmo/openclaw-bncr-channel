@@ -63,14 +63,9 @@ export function createBncrFileInboundInitHandler(runtime: BncrFileInboundRuntime
       reject('transferId/sessionKey/fileSize/chunkSize/totalChunks required');
       return;
     }
-    if (fileSize > runtime.inboundFileTransferMaxBytes) {
-      reject(`fileSize too large size=${fileSize} max=${runtime.inboundFileTransferMaxBytes}`);
-      return;
-    }
-    if (totalChunks > runtime.inboundFileTransferMaxChunks) {
-      reject(
-        `totalChunks too large total=${totalChunks} max=${runtime.inboundFileTransferMaxChunks}`,
-      );
+    const maxBytes = runtime.resolveInboundFileTransferMaxBytes(accountId);
+    if (fileSize > maxBytes) {
+      reject(`fileSize too large size=${fileSize} max=${maxBytes}`);
       return;
     }
     const expectedTotalChunks = Math.ceil(fileSize / chunkSize);

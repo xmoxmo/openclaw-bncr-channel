@@ -3,10 +3,12 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { normalizePersistedOutboxEntry } from '../../src/core/persisted-outbox-entry.ts';
 import { removeBncrConversationHistoryMessageIds } from '../../src/messaging/inbound/conversation-history.ts';
+import { deleteSceneRecord, resolveSceneRecord } from '../../src/plugin/scene-registry.ts';
 import { createBncrSqliteStateDatabase } from '../../src/plugin/sqlite-state.ts';
 import { createBncrStateStore } from '../../src/plugin/state-store.ts';
 
@@ -214,15 +216,27 @@ test('createBncrStateStore keeps valid persisted session routes while skipping m
     { accountId: 'A', sessionKey: '', route: {} },
     {
       accountId: 'A',
-      sessionKey: 'session-1',
+      sessionKey: 'agent:orion:bncr:direct:10001',
       route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
       updatedAt: '14',
+    },
+    {
+      accountId: 'B',
+      sessionKey: 'agent:public:bncr:group:20002',
+      route: { platform: 'wxBot', groupId: '20002', userId: '0' },
+      updatedAt: '15',
+    },
+    {
+      accountId: 'C',
+      sessionKey: 'legacy-session-1',
+      route: { platform: 'tgBot', groupId: '-1002', userId: '10003' },
+      updatedAt: '16',
     },
   ]);
 
   assert.deepEqual(Array.from(runtime.sessionRoutes.entries()), [
     [
-      'session-1',
+      'agent:orion:bncr:direct:10001',
       {
         accountId: 'A',
         route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
@@ -238,13 +252,13 @@ test('createBncrStateStore restores aliases and backfills lastSession from norma
   store.loadPersistedSessionRoutes([
     {
       accountId: 'Primary',
-      sessionKey: 'legacy-session-a',
+      sessionKey: 'agent:orion:bncr:direct:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
       updatedAt: '10',
     },
     {
       accountId: 'Primary',
-      sessionKey: 'legacy-session-b',
+      sessionKey: 'agent:orion:bncr:direct:bbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       route: { platform: 'wxBot', groupId: '0', userId: '20002' },
       updatedAt: '20',
     },
@@ -253,7 +267,7 @@ test('createBncrStateStore restores aliases and backfills lastSession from norma
 
   assert.equal(runtime.routeAliases.size, 2);
   assert.deepEqual(runtime.lastSessionByAccount.get('Primary'), {
-    sessionKey: 'legacy-session-b',
+    sessionKey: 'agent:orion:bncr:direct:bbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     scope: 'Bncr:wxBot:0:20002',
     updatedAt: 20,
   });
@@ -261,7 +275,7 @@ test('createBncrStateStore restores aliases and backfills lastSession from norma
   assert.equal(runtime.lastInboundByAccount.get('Primary'), 20);
 });
 
-test('createBncrStateStore restores valid persisted scene registry entries and skips malformed rows', () => {
+test('createBncrStateStore restores persisted scene registry entries for every agent and skips malformed rows', () => {
   const { runtime, store } = createStore();
 
   store.loadPersistedSceneRegistry([
@@ -282,9 +296,18 @@ test('createBncrStateStore restores valid persisted scene registry entries and s
       platform: 'tgBot',
       userId: '10001',
       userName: 'xmo',
-      agentId: 'main',
+      agentId: 'orion',
       downloadMedia: true,
       lastSeenAt: '12',
+    },
+    {
+      sceneKey: 'wxBot:20002',
+      kind: 'group',
+      status: 'denied',
+      platform: 'wxBot',
+      groupId: '20002',
+      agentId: 'public',
+      lastSeenAt: 13,
     },
     {
       sceneKey: 'tgBot:-1001',
@@ -295,40 +318,130 @@ test('createBncrStateStore restores valid persisted scene registry entries and s
       groupName: 'wind_system',
       groupReplyMode: 'mention',
       downloadMedia: false,
-      lastSeenAt: 13,
+      lastSeenAt: 14,
     },
   ]);
 
-  assert.deepEqual(Array.from(runtime.sceneRegistry.entries()), [
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        agentId: 'main',
-        downloadMedia: true,
-        lastSeenAt: 12,
-      },
-    ],
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'denied',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        groupReplyMode: 'mention',
-        downloadMedia: false,
-        lastSeenAt: 13,
-      },
-    ],
+  // Every valid row is restored under its own (agentId, sceneKey) entry, so two
+  // agents watching the same chat never displace each other. Malformed rows are
+  // the only ones skipped.
+  assert.deepEqual(
+    Array.from(runtime.sceneRegistry.keys()).sort(),
+    ['orion\u0000tgBot:10001', 'public\u0000wxBot:20002', 'tgBot:-1001'].sort(),
+  );
+  assert.equal(
+    resolveSceneRecord(runtime.sceneRegistry, 'tgBot:10001', 'orion')?.downloadMedia,
+    true,
+  );
+  assert.equal(
+    resolveSceneRecord(runtime.sceneRegistry, 'wxBot:20002', 'public')?.status,
+    'denied',
+  );
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:-1001')?.groupReplyMode, 'mention');
+});
+
+test('createBncrStateStore keeps per-agent rows for the same chat and resolves by agent', () => {
+  const { runtime, store } = createStore();
+
+  store.loadPersistedSceneRegistry([
+    {
+      sceneKey: 'tgBot:-1001',
+      kind: 'group',
+      status: 'denied',
+      platform: 'tgBot',
+      groupId: '-1001',
+      groupReplyMode: 'admin',
+      lastSeenAt: 200,
+    },
+    {
+      sceneKey: 'tgBot:-1001',
+      kind: 'group',
+      status: 'allowed',
+      platform: 'tgBot',
+      groupId: '-1001',
+      agentId: 'public',
+      groupReplyMode: 'mention',
+      lastSeenAt: 100,
+    },
   ]);
+
+  assert.equal(runtime.sceneRegistry.size, 2, 'both rows survive the load');
+  const owned = resolveSceneRecord(runtime.sceneRegistry, 'tgBot:-1001', 'public');
+  assert.equal(owned?.status, 'allowed');
+  assert.equal(owned?.groupReplyMode, 'mention');
+  assert.equal(owned?.agentId, 'public');
+  const unowned = resolveSceneRecord(runtime.sceneRegistry, 'tgBot:-1001');
+  assert.equal(unowned?.status, 'denied');
+  assert.equal(unowned?.groupReplyMode, 'admin');
+  // An agent without its own row still sees the legacy row instead of nothing.
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:-1001', 'orion')?.status, 'denied');
+});
+
+test('createBncrStateStore keeps every agent scene row through a scoped flush', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-scene-scope-'));
+  const statePath = join(dir, 'state.json');
+  const dbPath = join(dir, 'state.sqlite3');
+  const { runtime, store } = createStore();
+  runtime.getStatePath = () => statePath;
+  const sqlite = createBncrSqliteStateDatabase(dbPath);
+  runtime.sqliteState = sqlite;
+
+  const scene = (agentId, status, groupReplyMode, historyLimit, lastSeenAt) => ({
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status,
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId,
+    groupReplyMode,
+    historyLimit,
+    lastSeenAt,
+  });
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      outbox: [],
+      deadLetter: [],
+      sessionRoutes: [],
+      sceneRegistry: [
+        scene('orion', 'allowed', 'all', 20, 100),
+        scene('public', 'denied', 'mention', 60, 200),
+      ],
+      lastSessionByAccount: [],
+      lastActivityByAccount: [],
+      lastInboundByAccount: [],
+      lastOutboundByAccount: [],
+      lastDriftSnapshot: null,
+    }),
+    'utf8',
+  );
+
+  await store.loadState();
+  assert.equal(
+    resolveSceneRecord(runtime.sceneRegistry, 'tgBot:-1001', 'orion')?.status,
+    'allowed',
+  );
+  assert.equal(
+    resolveSceneRecord(runtime.sceneRegistry, 'tgBot:-1001', 'public')?.groupReplyMode,
+    'mention',
+  );
+
+  // The bridge flushes as its own agent. The other agent's row must survive with
+  // its own settings instead of being deleted and replaced by the effective one.
+  await store.flushState();
+  const reloaded = createBncrSqliteStateDatabase(dbPath);
+  const rows = reloaded
+    .loadControlState()
+    .sceneRegistry.filter((entry) => entry.sceneKey === 'tgBot:-1001')
+    .map((entry) => [entry.agentId, entry.status, entry.groupReplyMode, entry.historyLimit])
+    .sort();
+  assert.deepEqual(rows, [
+    ['orion', 'allowed', 'all', 20],
+    ['public', 'denied', 'mention', 60],
+  ]);
+  reloaded.close();
+  await store.closeSqliteLifecycle();
+  await rm(dir, { recursive: true, force: true });
 });
 
 test('createBncrStateStore preserves senderId in persisted conversation histories', () => {
@@ -588,7 +701,7 @@ test('createBncrStateStore ignores persisted historyLimit zero as an invalid leg
     },
   ]);
 
-  assert.equal(runtime.sceneRegistry.get('tgBot:10001')?.historyLimit, undefined);
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:10001')?.historyLimit, undefined);
 });
 
 test('createBncrStateStore ignores persisted historyLimit one as an invalid legacy value', () => {
@@ -606,7 +719,7 @@ test('createBncrStateStore ignores persisted historyLimit one as an invalid lega
     },
   ]);
 
-  assert.equal(runtime.sceneRegistry.get('tgBot:10001')?.historyLimit, undefined);
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:10001')?.historyLimit, undefined);
 });
 
 test('createBncrStateStore normalizes missing history roles to user', () => {
@@ -1233,14 +1346,14 @@ test('createBncrStateStore imports controls into sqlite and prefers sqlite over 
   assert.equal(sqlite.isHistoryImported(), true);
   assert.equal(sqlite.loadHistoryState().historyBuckets[0].entries.length, 1);
   assert.equal(sqlite.loadHistoryState().replayBuckets[0].entries.length, 1);
-  assert.equal(runtime.sceneRegistry.get('tgBot:10001')?.agentId, 'orion');
-  assert.equal(runtime.sceneRegistry.get('tgBot:10001')?.downloadMedia, true);
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:10001')?.agentId, 'orion');
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:10001')?.downloadMedia, true);
 
   persisted.sceneRegistry[0].agentId = 'stale-json-agent';
   persisted.conversationHistories[0].entries[0].body = 'stale-json-history';
   await writeFile(statePath, JSON.stringify(persisted), 'utf8');
   await store.loadState();
-  assert.equal(runtime.sceneRegistry.get('tgBot:10001')?.agentId, 'orion');
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:10001')?.agentId, 'orion');
   assert.equal(runtime.conversationHistories.get('Primary:tgBot:10001')?.[0]?.body, 'hello');
 
   await store.flushState();
@@ -1993,7 +2106,7 @@ test('createBncrStateStore supports asynchronously created sqlite backends', asy
   await writeFile(statePath, JSON.stringify(persisted), 'utf8');
 
   await store.loadState();
-  assert.equal(runtime.sceneRegistry.get('tgBot:10001')?.agentId, 'orion');
+  assert.equal(resolveSceneRecord(runtime.sceneRegistry, 'tgBot:10001')?.agentId, 'orion');
 
   await store.flushState();
   const writtenJson = JSON.parse(await readFile(statePath, 'utf8'));
@@ -2127,5 +2240,112 @@ test('createBncrStateStore cutoverToSqlite backs up json and stops rewriting it'
   );
   collisionSqlite.close();
 
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('createBncrStateStore persists removal of a scene row owned by another agent', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-scene-remove-'));
+  const statePath = join(dir, 'state.json');
+  const dbPath = join(dir, 'state.sqlite3');
+  const { runtime, store } = createStore();
+  runtime.getStatePath = () => statePath;
+  const sqlite = createBncrSqliteStateDatabase(dbPath);
+  runtime.sqliteState = sqlite;
+  const scene = (agentId, status) => ({
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status,
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId,
+    groupReplyMode: 'admin',
+    lastSeenAt: 100,
+  });
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      outbox: [],
+      deadLetter: [],
+      sessionRoutes: [],
+      sceneRegistry: [scene('orion', 'allowed'), scene('public', 'allowed')],
+      lastSessionByAccount: [],
+      lastActivityByAccount: [],
+      lastInboundByAccount: [],
+      lastOutboundByAccount: [],
+      lastDriftSnapshot: null,
+    }),
+    'utf8',
+  );
+
+  await store.loadState();
+  // A revoke of the public row runs in the orion process; the scoped flush must
+  // still delete it instead of leaving the revoked scene behind.
+  assert.equal(deleteSceneRecord(runtime.sceneRegistry, 'tgBot:-1001', 'public'), true);
+  await store.flushState();
+
+  const reloaded = createBncrSqliteStateDatabase(dbPath);
+  const rows = reloaded
+    .loadControlState()
+    .sceneRegistry.filter((entry) => entry.sceneKey === 'tgBot:-1001')
+    .map((entry) => entry.agentId);
+  assert.deepEqual(rows, ['orion']);
+  reloaded.close();
+  await store.closeSqliteLifecycle();
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('createBncrStateStore keeps a scene row another process re-created after load', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-scene-remove-race-'));
+  const statePath = join(dir, 'state.json');
+  const dbPath = join(dir, 'state.sqlite3');
+  const { runtime, store } = createStore();
+  runtime.getStatePath = () => statePath;
+  const sqlite = createBncrSqliteStateDatabase(dbPath);
+  runtime.sqliteState = sqlite;
+  const scene = (agentId, lastSeenAt) => ({
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId,
+    groupReplyMode: 'admin',
+    lastSeenAt,
+  });
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      outbox: [],
+      deadLetter: [],
+      sessionRoutes: [],
+      sceneRegistry: [scene('orion', 100), scene('public', 100)],
+      lastSessionByAccount: [],
+      lastActivityByAccount: [],
+      lastInboundByAccount: [],
+      lastOutboundByAccount: [],
+      lastDriftSnapshot: null,
+    }),
+    'utf8',
+  );
+
+  await store.loadState();
+  // Another process re-creates the public scene after this process loaded it.
+  const race = new DatabaseSync(dbPath);
+  race
+    .prepare(
+      "UPDATE scenes SET last_seen_at = 500 WHERE scene_key = 'tgBot:-1001' AND agent_id = 'public'",
+    )
+    .run();
+  race.close();
+  assert.equal(deleteSceneRecord(runtime.sceneRegistry, 'tgBot:-1001', 'public'), true);
+  await store.flushState();
+
+  const reloaded = createBncrSqliteStateDatabase(dbPath);
+  const publicRow = reloaded
+    .loadControlState()
+    .sceneRegistry.find((entry) => entry.sceneKey === 'tgBot:-1001' && entry.agentId === 'public');
+  assert.equal(publicRow?.lastSeenAt, 500, 'the newer re-created row survives the stale delete');
+  reloaded.close();
+  await store.closeSqliteLifecycle();
   await rm(dir, { recursive: true, force: true });
 });

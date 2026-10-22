@@ -1,4 +1,3 @@
-export const INBOUND_MEDIA_URL_MAX_BYTES = 200 * 1024 * 1024;
 const INBOUND_MEDIA_URL_TIMEOUT_MS = 30_000;
 
 export function isHttpMediaUrl(value: string): boolean {
@@ -64,7 +63,7 @@ async function readInboundMediaResponseBody(args: {
 
 export async function downloadInboundMediaUrl(
   url: string,
-  maxBytes = INBOUND_MEDIA_URL_MAX_BYTES,
+  maxBytes: number,
   timeoutMs = INBOUND_MEDIA_URL_TIMEOUT_MS,
 ): Promise<{ buffer: Buffer; contentType?: string }> {
   if (typeof fetch !== 'function') {

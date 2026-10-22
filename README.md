@@ -38,6 +38,44 @@ Bncr 将持久化状态放在 OpenClaw 状态目录的插件专属子目录：
 `BNCR_SQLITE_STORE=1` 强制启用 SQLite，`BNCR_SQLITE_STORE=0` 强制使用 JSON；
 未设置时沿用自动检测。
 
+### 快照与启动自愈
+
+每次成功启动后，插件会在 `backups/` 目录发布一份经 `quick_check` 校验的
+SQLite 快照（独占硬链接发布、同秒递增后缀、仅保留最近 3 份）；JSON cutover
+备份不受影响。若启动时主库通过完整性校验失败（打开失败、`quick_check`、
+外键违规或结构契约漂移），插件会自动晋升 14 天窗口内最新且通过全套启动
+校验的快照继续运行，损坏的主库文件归档为 `bncr.sqlite3.corrupt-<时间戳>`
+（保留最近 3 份），并在启动日志与 `state_meta` 留痕。迁移 lineage 失败
+（数据库来自更新版本或迁移名漂移）不参与自动恢复，保持 fail closed。
+
+### 多 agent 共享状态库（agent 作用域持久化）
+
+多个 agent 共用同一个状态目录（同一份 SQLite 库）时，控制态与 outbox
+按 agent 作用域保存，避免互相覆盖：
+
+- `session_routes`：只增删本 agent 键空间（`agent:<id>:bncr:...`）的行；
+  其他 agent 的行不受影响。
+- `scenes`：只增删 `agent_id` 为本 agent 的行；唯一身份是
+  `(agent_id, scene_key)`，两个 agent 服务同一个会话时各自持有自己的
+  status、群回复模式与历史上限，不会互相抢占。
+- `scenes` 运行态同样按 `(agent_id, scene_key)` 保存全部行（一个 bridge
+  可能承载多个 agent 的会话）：入站时按 host 路由到的 agent 取该 agent
+  自己的行，其次才用无归属的遗留行，最后才用同名最新行兜底。运行时新建
+  的场景自动归属当前 agent，不再写成无人认领的行，重启后设置不会回退成
+  默认值。无 agent 归属的遗留行保持不动。
+- 场景回写只覆盖本 agent 的行；他人行原样保留，且较新的他人行不会被本
+  进程的旧副本覆盖。
+- `outbound_messages`：outbox 只重写本 agent 会话前缀的条目；他人条目与
+  无 agent 前缀的遗留条目原样保留，加载侧同样按作用域过滤。
+- `account_activity`（账号级 lastX）是共享表：不做全量替换，按
+  `(account_id, activity_type)` 合并，仅当活动事件时间更新（`event_at`）
+  时才覆盖，避免陈旧实例冲掉新活动。
+- 无 agent 归属（遗留格式）的 session route 与场景不再被任何实例认领：
+  它们留在库中，会话活动时按当前键空间自动重建；宁可不留归属不明的
+  映射。
+- 无 agent 作用域的调用（单 agent 部署、cutover 导入）保持原有全量
+  替换语义。
+
 ## 客户端接入
 
 1. 安装并启用 `openclawclient.js`。
@@ -114,6 +152,19 @@ openclaw bncr miniconfig
 - 状态和投递诊断
 
 Agent 可以使用 OpenClaw 标准消息能力发送文本或媒体。需要指定目标会话时，使用 Bncr 目标地址并同时指定 `accountId`。
+
+### 媒体大小限制
+
+Bncr 的媒体与文件大小只由 OpenClaw 配置层决定，插件内不再维护独立阈值：
+
+```bash
+openclaw config set channels.bncr.mediaMaxMb 2048
+openclaw config set channels.bncr.accounts.<accountId>.mediaMaxMb 1024
+openclaw config get channels.bncr.mediaMaxMb
+```
+
+优先级为 `accounts.<accountId>.mediaMaxMb` > `channels.bncr.mediaMaxMb` > `agents.defaults.mediaMaxMb` > 默认 `2048` MiB。该值同时约束入站媒体、入站文件分片和出站媒体；未显式配置时使用 2 GiB 默认值。传输层仍受分片大小、ACK 超时和网络条件限制。
+
 
 ## 命令
 

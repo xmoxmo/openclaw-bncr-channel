@@ -48,18 +48,26 @@ test('countInvalidOutboxSessionKeys normalizes equivalent account ids before fil
   );
 });
 
-test('countLegacyAccountResidue counts mismatched account residue across runtime indexes', () => {
+test('countLegacyAccountResidue counts mismatched residue on delivery/routing truth only', () => {
   assert.equal(
     countLegacyAccountResidue({
       accountId: 'Primary',
       outboxEntries: [entry(), entry({ accountId: 'Other' })],
       deadLetterEntries: [entry({ accountId: 'Legacy' })],
       sessionRoutes: [{ accountId: 'Primary' }, { accountId: 'Stale' }, {}],
-      lastSessionAccountIds: ['Primary', 'Other'],
-      lastActivityAccountIds: ['default', 'Other'],
-      lastInboundAccountIds: ['', 'Primary'],
-      lastOutboundAccountIds: ['primary', 'Another'],
     }),
-    6,
+    3,
+  );
+});
+
+test('countLegacyAccountResidue treats alias account ids as matched, not residue', () => {
+  assert.equal(
+    countLegacyAccountResidue({
+      accountId: 'Primary',
+      outboxEntries: [entry({ accountId: 'default' }), entry({ accountId: 'primary' })],
+      deadLetterEntries: [entry({ accountId: 'Default' })],
+      sessionRoutes: [{ accountId: 'primary' }, { accountId: 'orion' }],
+    }),
+    1,
   );
 });

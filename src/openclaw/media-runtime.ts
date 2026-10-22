@@ -3,7 +3,6 @@ import path from 'node:path';
 import { canonicalizeBase64, estimateBase64DecodedBytes } from 'openclaw/plugin-sdk/media-runtime';
 
 export const OPENCLAW_SEND_BUFFER_MEDIA_URL = 'buffer://message-send/attachment';
-export const OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 
 type RuntimeMediaLoaded = {
   buffer: Buffer;
@@ -110,7 +109,7 @@ export function decodeOpenClawSendBuffer(params: {
   mimeType?: string;
   filename?: string;
   fileName?: string;
-  maxBytes?: number;
+  maxBytes: number;
 }): OpenClawSendBufferDecodeResult {
   const raw = String(params.buffer || '').trim();
   const match = /^data:([^;,\s]+)(;(?!base64)[^,;\s]+)*;base64,(.*)$/is.exec(raw);
@@ -123,7 +122,7 @@ export function decodeOpenClawSendBuffer(params: {
     throw new Error('send buffer has invalid base64 data');
   }
 
-  const maxBytes = params.maxBytes ?? OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES;
+  const maxBytes = params.maxBytes;
   const estimatedBytes = estimateBase64DecodedBytes(canonical);
   if (estimatedBytes > maxBytes) {
     throw new Error(

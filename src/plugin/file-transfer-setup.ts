@@ -18,6 +18,7 @@ export type BncrFileTransferSetupRuntime = {
   fileInlineThreshold: number;
   normalizeAccountId: (accountId: string) => string;
   loadOutboundTransferMedia: (args: {
+    accountId: string;
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
   }) => Promise<{ loaded: { buffer: Buffer }; size: number; mimeType?: string; fileName: string }>;
@@ -107,6 +108,7 @@ export function createBncrFileTransferSetup(runtime: BncrFileTransferSetupRuntim
     hasGatewayContext: boolean;
   }) => {
     const { loaded, size, mimeType, fileName } = await runtime.loadOutboundTransferMedia({
+      accountId: args.accountId,
       mediaUrl: args.mediaUrl,
       mediaLocalRoots: args.mediaLocalRoots,
     });

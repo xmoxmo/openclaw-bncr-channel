@@ -1,5 +1,5 @@
 import { hasControlCommand } from 'openclaw/plugin-sdk/command-detection';
-import { resolveAccount } from '../core/accounts.ts';
+import { CHANNEL_ID, resolveAccount } from '../core/accounts.ts';
 import { checkBncrMessageGate } from '../messaging/inbound/gate.ts';
 import {
   parseBncrNativeCommand,
@@ -164,12 +164,30 @@ export async function prepareBncrInboundAcceptance(args: {
     };
   }
 
+  // The host decides which agent serves this peer. Resolve that once and reuse
+  // it: the same answer selects the agent's own scene row and builds the
+  // session key, so a chat watched by two agents never borrows the other's
+  // admission state or reply mode.
+  let resolvedAgentRoute: OpenClawResolvedAgentRoute | undefined;
+  try {
+    resolvedAgentRoute = args.resolveAgentRoute({
+      cfg,
+      channel: CHANNEL_ID,
+      accountId,
+      peer,
+    });
+  } catch {
+    resolvedAgentRoute = undefined;
+  }
+  const sceneAgentId = args.asString(resolvedAgentRoute?.agentId).trim() || canonicalAgentId;
+
   const admission = decideSceneAdmission({
     parsed,
     now: args.now(),
     sceneRegistry: args.sceneRegistry,
     defaultAdminAgentId: args.defaultAdminAgentId,
     defaultPublicAgentId: args.defaultPublicAgentId,
+    sceneAgentId,
   });
   if (!admission.allowed) {
     return {
@@ -197,6 +215,7 @@ export async function prepareBncrInboundAcceptance(args: {
     extractedText: extracted.text,
     asString: args.asString,
     resolveAgentRoute: args.resolveAgentRoute,
+    resolvedAgentRoute,
   });
 
   const shouldDispatch = shouldDispatchForScene({ parsed, admission, cfg });

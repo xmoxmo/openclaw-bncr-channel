@@ -300,8 +300,17 @@ test('startService restores persisted scene registry entries', async () => {
           platform: 'tgBot',
           userId: '10001',
           userName: 'xmo',
-          agentId: 'main',
+          agentId: 'orion',
           lastSeenAt: 100,
+        },
+        {
+          sceneKey: 'wxBot:20002',
+          kind: 'group',
+          status: 'denied',
+          platform: 'wxBot',
+          groupId: '20002',
+          agentId: 'public',
+          lastSeenAt: 80,
         },
         {
           sceneKey: 'tgBot:-1001',
@@ -322,9 +331,12 @@ test('startService restores persisted scene registry entries', async () => {
 
     await bridge.startService({ stateDir }, false);
 
+    // A single bridge can route sessions of several agents, so every persisted
+    // scene is restored under its own (agentId, sceneKey) entry instead of
+    // dropping rows owned by another agent or letting them displace each other.
     assert.deepEqual(Array.from(bridge.sceneRegistry.entries()), [
       [
-        'tgBot:10001',
+        'orion\u0000tgBot:10001',
         {
           sceneKey: 'tgBot:10001',
           kind: 'direct',
@@ -332,8 +344,20 @@ test('startService restores persisted scene registry entries', async () => {
           platform: 'tgBot',
           userId: '10001',
           userName: 'xmo',
-          agentId: 'main',
+          agentId: 'orion',
           lastSeenAt: 100,
+        },
+      ],
+      [
+        'public\u0000wxBot:20002',
+        {
+          sceneKey: 'wxBot:20002',
+          kind: 'group',
+          status: 'denied',
+          platform: 'wxBot',
+          groupId: '20002',
+          agentId: 'public',
+          lastSeenAt: 80,
         },
       ],
       [

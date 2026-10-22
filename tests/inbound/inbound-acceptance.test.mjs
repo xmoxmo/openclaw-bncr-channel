@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { prepareBncrInboundAcceptance } from '../../src/plugin/inbound-acceptance.ts';
+import { resolveSceneRecord, setSceneRecord } from '../../src/plugin/scene-registry.ts';
 
 function buildParsed(overrides = {}) {
   return {
@@ -172,7 +173,7 @@ test('prepareBncrInboundAcceptance defaults group scenes to admin-only reply mod
   assert.equal(result.ok, true);
   assert.equal(result.shouldDispatch, true);
   assert.equal(result.shouldAccumulate, true);
-  assert.deepEqual(sceneRegistry.get('tgBot:-1001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:-1001'), {
     sceneKey: 'tgBot:-1001',
     kind: 'group',
     status: 'allowed',
@@ -188,23 +189,19 @@ test('prepareBncrInboundAcceptance defaults group scenes to admin-only reply mod
 });
 
 test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisions', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        agentId: 'public',
-        groupReplyMode: 'admin',
-        historyLimit: 50,
-        historyForce: true,
-        lastSeenAt: 100,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'public',
+    groupReplyMode: 'admin',
+    historyLimit: 50,
+    historyForce: true,
+    lastSeenAt: 100,
+  });
 
   const adminOnly = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -220,8 +217,8 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
   assert.equal(adminOnly.shouldDispatch, false);
   assert.equal(adminOnly.shouldAccumulate, false);
 
-  sceneRegistry.set('tgBot:-1001', {
-    ...sceneRegistry.get('tgBot:-1001'),
+  setSceneRecord(sceneRegistry, {
+    ...resolveSceneRecord(sceneRegistry, 'tgBot:-1001'),
     groupReplyMode: 'mention',
   });
   const mention = await prepareBncrInboundAcceptance(
@@ -238,8 +235,8 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
   assert.equal(mention.shouldDispatch, true);
   assert.equal(mention.shouldAccumulate, true);
 
-  sceneRegistry.set('tgBot:-1001', {
-    ...sceneRegistry.get('tgBot:-1001'),
+  setSceneRecord(sceneRegistry, {
+    ...resolveSceneRecord(sceneRegistry, 'tgBot:-1001'),
     groupReplyMode: 'hybrid',
   });
   const hybrid = await prepareBncrInboundAcceptance(
@@ -269,8 +266,8 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
   assert.equal(hybridAdmin.shouldDispatch, true);
   assert.equal(hybridAdmin.shouldAccumulate, true);
 
-  sceneRegistry.set('tgBot:-1001', {
-    ...sceneRegistry.get('tgBot:-1001'),
+  setSceneRecord(sceneRegistry, {
+    ...resolveSceneRecord(sceneRegistry, 'tgBot:-1001'),
     groupReplyMode: 'mention',
   });
   const mentionAdminStatus = await prepareBncrInboundAcceptance(
@@ -288,8 +285,8 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
   assert.equal(mentionAdminStatus.ok, true);
   assert.equal(mentionAdminStatus.shouldDispatch, true);
 
-  sceneRegistry.set('tgBot:-1001', {
-    ...sceneRegistry.get('tgBot:-1001'),
+  setSceneRecord(sceneRegistry, {
+    ...resolveSceneRecord(sceneRegistry, 'tgBot:-1001'),
     groupReplyMode: 'all',
   });
   const all = await prepareBncrInboundAcceptance(
@@ -305,6 +302,71 @@ test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisio
   assert.equal(all.ok, true);
   assert.equal(all.shouldDispatch, true);
   assert.equal(all.shouldAccumulate, true);
+});
+
+test('prepareBncrInboundAcceptance reads the scene row of the agent the host routes to', async () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'orion',
+    groupReplyMode: 'mention',
+    historyLimit: 20,
+    lastSeenAt: 10,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'denied',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'public',
+    groupReplyMode: 'admin',
+    historyLimit: 60,
+    lastSeenAt: 20,
+  });
+
+  const groupParsed = buildParsed({
+    peer: { kind: 'group', id: '-1001' },
+    isAdmin: false,
+    shouldRespond: false,
+  });
+
+  const orion = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: groupParsed,
+      sceneRegistry,
+      resolveAgentRoute: () => ({
+        sessionKey: 'agent:orion:bncr:group:7467426f743a2d31303031',
+        agentId: 'orion',
+      }),
+    }),
+  );
+  assert.equal(orion.ok, true, 'orion keeps its own allowed row');
+  assert.equal(orion.resolvedAgentId, 'orion');
+  assert.equal(orion.dispatchBy, 'mode-mention-idle');
+  assert.equal(orion.shouldDispatch, false);
+  assert.equal(orion.shouldAccumulate, true);
+
+  const publicAgent = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: groupParsed,
+      sceneRegistry,
+      resolveAgentRoute: () => ({
+        sessionKey: 'agent:public:bncr:group:7467426f743a2d31303031',
+        agentId: 'public',
+      }),
+    }),
+  );
+  assert.equal(publicAgent.ok, false, 'the public row still denies the same chat');
+  assert.equal(publicAgent.payload.reason, 'scene denied');
+
+  // Both rows stay intact; neither agent's admission rewrote the other's row.
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'orion')?.status, 'allowed');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'public')?.status, 'denied');
 });
 
 test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public agent', async () => {
@@ -332,7 +394,7 @@ test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public ag
     shouldAccumulate: true,
     dispatchBy: 'direct',
   });
-  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
     status: 'allowed',
@@ -346,20 +408,16 @@ test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public ag
 });
 
 test('prepareBncrInboundAcceptance lets admin callers recover denied group scenes', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'denied',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        lastSeenAt: 100,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'denied',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    lastSeenAt: 100,
+  });
 
   const result = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -381,7 +439,7 @@ test('prepareBncrInboundAcceptance lets admin callers recover denied group scene
   assert.equal(result.hasMedia, false);
   assert.equal(result.resolvedAgentId, 'public');
   assert.equal(result.shouldDispatch, true);
-  assert.deepEqual(sceneRegistry.get('tgBot:-1001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:-1001'), {
     sceneKey: 'tgBot:-1001',
     kind: 'group',
     status: 'allowed',
@@ -398,22 +456,18 @@ test('prepareBncrInboundAcceptance lets admin callers recover denied group scene
 });
 
 test('prepareBncrInboundAcceptance promotes denied group scenes to public when an admin arrives later', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'denied',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        userId: '10001',
-        userName: 'member-user',
-        lastSeenAt: 100,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'denied',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    userId: '10001',
+    userName: 'member-user',
+    lastSeenAt: 100,
+  });
 
   const result = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -431,7 +485,7 @@ test('prepareBncrInboundAcceptance promotes denied group scenes to public when a
   assert.equal(result.ok, true);
   assert.equal(result.resolvedAgentId, 'public');
   assert.equal(result.sessionKey, 'agent:public:bncr:group:7467426f743a2d31303031');
-  assert.deepEqual(sceneRegistry.get('tgBot:-1001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:-1001'), {
     sceneKey: 'tgBot:-1001',
     kind: 'group',
     status: 'allowed',
@@ -448,21 +502,17 @@ test('prepareBncrInboundAcceptance promotes denied group scenes to public when a
 });
 
 test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes back to public', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'legacy-user',
-        agentId: 'orion',
-        lastSeenAt: 100,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'legacy-user',
+    agentId: 'orion',
+    lastSeenAt: 100,
+  });
 
   const result = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -480,7 +530,7 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
   assert.equal(result.ok, true);
   assert.equal(result.resolvedAgentId, 'public');
   assert.equal(result.sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
-  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
     status: 'allowed',
@@ -495,21 +545,17 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
 });
 
 test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes with empty agent to public', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'legacy-user',
-        agentId: '',
-        lastSeenAt: 100,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'legacy-user',
+    agentId: '',
+    lastSeenAt: 100,
+  });
 
   const result = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -527,7 +573,7 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
   assert.equal(result.ok, true);
   assert.equal(result.resolvedAgentId, 'public');
   assert.equal(result.sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
-  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
     status: 'allowed',
@@ -542,21 +588,17 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
 });
 
 test('prepareBncrInboundAcceptance preserves explicit custom agent on legacy non-admin direct scenes', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'legacy-user',
-        agentId: 'custom-agent',
-        lastSeenAt: 100,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'legacy-user',
+    agentId: 'custom-agent',
+    lastSeenAt: 100,
+  });
 
   const result = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -578,7 +620,7 @@ test('prepareBncrInboundAcceptance preserves explicit custom agent on legacy non
   assert.equal(result.ok, true);
   assert.equal(result.resolvedAgentId, 'custom-agent');
   assert.equal(result.sessionKey, 'agent:custom-agent:bncr:direct:7467426f743a3130303031');
-  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
     status: 'allowed',

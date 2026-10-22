@@ -1,5 +1,5 @@
 import type { OpenClawLoadedMedia } from '../../openclaw/media-runtime.ts';
-import { downloadInboundMediaUrl, INBOUND_MEDIA_URL_MAX_BYTES } from './media-url-download.ts';
+import { downloadInboundMediaUrl } from './media-url-download.ts';
 
 type RuntimeChannelMediaReader = {
   runtime?: {
@@ -39,7 +39,7 @@ async function readRemoteMediaBufferFromRuntime(
 export async function loadInboundRemoteMedia(
   api: RuntimeChannelMediaReader,
   url: string,
-  maxBytes = INBOUND_MEDIA_URL_MAX_BYTES,
+  maxBytes: number,
 ): Promise<OpenClawLoadedMedia> {
   try {
     return await readRemoteMediaBufferFromRuntime(api, url, maxBytes);

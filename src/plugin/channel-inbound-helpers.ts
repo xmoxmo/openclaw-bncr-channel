@@ -66,14 +66,17 @@ export function resolveInboundSessionContext(args: {
     accountId: string;
     peer: unknown;
   }) => OpenClawResolvedAgentRoute;
+  /** Route already resolved by the caller, reused to avoid a second lookup. */
+  resolvedAgentRoute?: OpenClawResolvedAgentRoute;
 }) {
   const resolvedRoute = assertResolvedSessionKey(
-    args.resolveAgentRoute({
-      cfg: args.cfg,
-      channel: CHANNEL_ID,
-      accountId: args.accountId,
-      peer: args.peer,
-    }),
+    args.resolvedAgentRoute ??
+      args.resolveAgentRoute({
+        cfg: args.cfg,
+        channel: CHANNEL_ID,
+        accountId: args.accountId,
+        peer: args.peer,
+      }),
   );
   const normalizedAgentId =
     (args.resolvedAgentId || '').trim() || resolvedRoute.agentId || args.canonicalAgentId;

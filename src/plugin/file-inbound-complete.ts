@@ -114,6 +114,7 @@ export function createBncrFileInboundCompleteHandler(runtime: BncrFileInboundRun
       }
 
       const saved = await runtime.saveInboundMediaBuffer({
+        accountId,
         buffer: merged,
         mimeType: st.mimeType,
         fileName: st.fileName,

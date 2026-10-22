@@ -12,6 +12,13 @@ type OpenClawJsonResultPayload = ReturnType<typeof openClawJsonResult>;
 
 export type BncrChannelConfigRoot = {
   channels?: Record<string, BncrChannelConfigSection | undefined>;
+  agents?: {
+    defaults?: {
+      mediaMaxMb?: number;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
 };
 
 export type BncrChannelConfigSection = {
@@ -22,12 +29,14 @@ export type BncrChannelConfigSection = {
   };
   accounts?: Record<string, BncrAccountConfig | undefined>;
   outboundRequireAck?: boolean;
+  mediaMaxMb?: number;
   [key: string]: unknown;
 };
 
 export type BncrAccountConfig = {
   enabled?: boolean;
   name?: string;
+  mediaMaxMb?: number;
   [key: string]: unknown;
 };
 

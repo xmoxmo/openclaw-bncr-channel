@@ -11,6 +11,7 @@ import {
 import { downloadInboundMediaUrl } from '../../src/messaging/inbound/media-url-download.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
 import { loadInboundRemoteMedia } from '../../src/messaging/inbound/remote-media.ts';
+import { fallbackBncrMediaMaxBytes } from '../../src/openclaw/media-limit-runtime.ts';
 import { createInboundApiStub } from '../helpers/inbound-runtime.mjs';
 
 test('estimateBase64DecodedBytes accounts for padding and whitespace before inbound media guard', () => {
@@ -26,7 +27,7 @@ test('estimateBase64DecodedBytes accounts for padding and whitespace before inbo
 });
 
 test('decodeInboundMediaBase64 rejects empty decoded media and decoded oversize payloads', () => {
-  assert.equal(decodeInboundMediaBase64(' T 2s= ').toString(), 'Ok');
+  assert.equal(decodeInboundMediaBase64(' T 2s= ', fallbackBncrMediaMaxBytes()).toString(), 'Ok');
   assert.throws(
     () => decodeInboundMediaBase64('', 10),
     /inbound media base64 decoded to empty buffer/,
@@ -187,13 +188,13 @@ test('dispatchBncrInbound prefers runtime remote media reader for http media pat
   });
 
   assert.deepEqual(remoteCalls, [
-    { url: 'https://example.test/photos/file_6.jpg', maxBytes: 200 * 1024 * 1024 },
+    { url: 'https://example.test/photos/file_6.jpg', maxBytes: fallbackBncrMediaMaxBytes() },
   ]);
   assert.equal(calls.savedMediaBuffers.length, 1);
   assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'runtime-jpg');
   assert.equal(calls.savedMediaBuffers[0].mimeType, 'image/jpeg');
   assert.equal(calls.savedMediaBuffers[0].direction, 'inbound');
-  assert.equal(calls.savedMediaBuffers[0].maxBytes, 200 * 1024 * 1024);
+  assert.equal(calls.savedMediaBuffers[0].maxBytes, fallbackBncrMediaMaxBytes());
   assert.equal(calls.builtContexts[0].MediaType, 'image/jpeg');
 });
 
@@ -282,7 +283,7 @@ test('dispatchBncrInbound downloads http media path before building inbound cont
     assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'jpgdata');
     assert.equal(calls.savedMediaBuffers[0].mimeType, 'image/jpeg');
     assert.equal(calls.savedMediaBuffers[0].direction, 'inbound');
-    assert.equal(calls.savedMediaBuffers[0].maxBytes, 200 * 1024 * 1024);
+    assert.equal(calls.savedMediaBuffers[0].maxBytes, fallbackBncrMediaMaxBytes());
     assert.equal(calls.savedMediaBuffers[0].fileName, '1781167496030');
     assert.equal(
       calls.builtContexts[0].MediaPath,

@@ -41,6 +41,7 @@ import type {
   PersistedState as BncrPersistedState,
   BncrSceneRecord,
 } from './channel-runtime-types.ts';
+import { resolveSceneRecord, setSceneRecord } from './scene-registry.ts';
 import type {
   BncrHistoryShardCreateInput,
   BncrHistoryShardCreateResult,
@@ -170,6 +171,13 @@ export function createBncrStateStore(runtime: {
   const conversationHistoryVersions =
     runtime.conversationHistoryVersions ?? new Map<string, number>();
   let sqliteState: BncrSqliteStateDatabase | undefined;
+  // Rows present when the last control state was loaded. Anything missing from
+  // the live registry at flush time was removed on purpose (for example a scene
+  // revoke) and must be deleted even when it belongs to another agent.
+  let loadedSceneIndex = new Map<
+    string,
+    { sceneKey: string; agentId?: string; lastSeenAt?: number }
+  >();
   let sqliteStatePromise:
     | {
         generation: number;
@@ -254,7 +262,7 @@ export function createBncrStateStore(runtime: {
 
   function resolvePersistedConversationHistoryLimit(key: string): number {
     const sceneKey = resolveBncrSceneKeyFromHistoryKey(key);
-    const scene = runtime.sceneRegistry.get(sceneKey);
+    const scene = resolveSceneRecord(runtime.sceneRegistry, sceneKey, runtime.canonicalAgentId());
     const sceneLimit = resolveBncrHistoryLimit(scene?.historyLimit);
     return Math.max(DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT, Math.ceil(sceneLimit * 1.2));
   }
@@ -287,7 +295,9 @@ export function createBncrStateStore(runtime: {
     const historyKey = resolveOutboundReplayBucketHistoryKey(bucketKey, entries);
     if (!historyKey) return DEFAULT_PERSISTED_CONVERSATION_HISTORY_LIMIT;
     const sceneKey = resolveBncrSceneKeyFromHistoryKey(historyKey);
-    return resolveBncrHistoryLimit(runtime.sceneRegistry.get(sceneKey)?.historyLimit);
+    return resolveBncrHistoryLimit(
+      resolveSceneRecord(runtime.sceneRegistry, sceneKey, runtime.canonicalAgentId())?.historyLimit,
+    );
   }
 
   function normalizeOutboundReplayBucket(
@@ -303,6 +313,10 @@ export function createBncrStateStore(runtime: {
   function loadPersistedSceneRegistry(persisted: unknown): void {
     runtime.sceneRegistry.clear();
     const items = Array.isArray(persisted) ? (persisted as PersistedSceneRecordInput[]) : [];
+    // One bridge can serve sessions that belong to several agents, and two agents
+    // may watch the same chat. Every row is kept under its own
+    // (agentId, sceneKey) entry so neither agent's admission state, reply mode
+    // nor history settings can displace the other's after a restart.
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       const sceneKey = runtime.asString(item.sceneKey || '').trim();
@@ -314,7 +328,7 @@ export function createBncrStateStore(runtime: {
       if (kind !== 'direct' && kind !== 'group') continue;
       if (status !== 'pending' && status !== 'allowed' && status !== 'denied') continue;
 
-      runtime.sceneRegistry.set(sceneKey, {
+      setSceneRecord(runtime.sceneRegistry, {
         sceneKey,
         kind,
         status,
@@ -354,6 +368,30 @@ export function createBncrStateStore(runtime: {
         lastSeenAt,
       });
     }
+    loadedSceneIndex = new Map(
+      Array.from(runtime.sceneRegistry.entries()).map(([key, record]) => [
+        key,
+        {
+          sceneKey: record.sceneKey,
+          ...(runtime.asString(record.agentId || '').trim()
+            ? { agentId: runtime.asString(record.agentId || '').trim() }
+            : {}),
+          lastSeenAt: record.lastSeenAt,
+        },
+      ]),
+    );
+  }
+
+  function collectRemovedSceneRecords(): Array<{
+    sceneKey: string;
+    agentId?: string;
+    lastSeenAt?: number;
+  }> {
+    const removed: Array<{ sceneKey: string; agentId?: string; lastSeenAt?: number }> = [];
+    for (const [key, entry] of loadedSceneIndex) {
+      if (!runtime.sceneRegistry.has(key)) removed.push(entry);
+    }
+    return removed;
   }
 
   function dumpPersistedSceneRegistry() {
@@ -877,9 +915,25 @@ export function createBncrStateStore(runtime: {
   function loadPersistedSessionRoutes(persisted: unknown): void {
     runtime.sessionRoutes.clear();
     runtime.routeAliases.clear();
-    const items = Array.isArray(persisted)
-      ? (persisted.slice(-runtime.maxSessionRouteEntries) as PersistedSessionRouteInput[])
-      : [];
+    // Agent-scoped load: only claim session routes this agent owns (own key
+    // space); foreign-agent and unattributable legacy rows stay in the shared
+    // table untouched.
+    const agentId = runtime.canonicalAgentId();
+    const prefix = agentId ? `agent:${agentId}:bncr:` : null;
+    const rawItems = Array.isArray(persisted) ? (persisted as PersistedSessionRouteInput[]) : [];
+    const items = prefix
+      ? rawItems
+          .filter(
+            (item) =>
+              !!item &&
+              typeof item === 'object' &&
+              runtime
+                .asString(item.sessionKey || '')
+                .trim()
+                .startsWith(prefix),
+          )
+          .slice(-runtime.maxSessionRouteEntries)
+      : rawItems.slice(-runtime.maxSessionRouteEntries);
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       const normalized = runtime.normalizeStoredSessionKey(
@@ -1110,10 +1164,15 @@ export function createBncrStateStore(runtime: {
           saveMergedSqliteHistoryState(activeSqliteState, skipHistoryKeys ?? []);
         }
         if (activeSqliteState.isOutboundImported()) {
-          applySqliteOutboundState(activeSqliteState.loadOutboundState());
+          applySqliteOutboundState(
+            activeSqliteState.loadOutboundState({
+              agentId: runtime.canonicalAgentId() || null,
+            }),
+          );
           activeSqliteState.saveOutboundState(
             Array.from(runtime.outbox.values()),
             runtime.getDeadLetter(),
+            { agentId: runtime.canonicalAgentId() || null },
           );
         } else {
           activeSqliteState.importOutboundState(
@@ -1135,11 +1194,19 @@ export function createBncrStateStore(runtime: {
     const data = buildPersistedStateSnapshot();
 
     if (sqliteState && (sqliteMode === 'dual' || sqliteMode === 'sqlite')) {
-      sqliteState.saveControlState(dumpSqliteControlState());
+      sqliteState.saveControlState(
+        dumpSqliteControlState(),
+        { agentId: runtime.canonicalAgentId() || null },
+        collectRemovedSceneRecords(),
+      );
       const skipHistoryKeys = readConversationHistorySerialHistoryKeys();
       saveMergedSqliteHistoryState(sqliteState, skipHistoryKeys);
       if (sqliteState.isOutboundImported()) {
-        sqliteState.saveOutboundState(Array.from(runtime.outbox.values()), runtime.getDeadLetter());
+        sqliteState.saveOutboundState(
+          Array.from(runtime.outbox.values()),
+          runtime.getDeadLetter(),
+          { agentId: runtime.canonicalAgentId() || null },
+        );
       } else {
         sqliteState.importOutboundState(
           Array.from(runtime.outbox.values()),
@@ -1278,6 +1345,7 @@ export function createBncrStateStore(runtime: {
     dumpPersistedSessionRoutes,
     loadPersistedSceneRegistry,
     dumpPersistedSceneRegistry,
+    collectRemovedSceneRecords,
     loadPersistedConversationHistories,
     dumpPersistedConversationHistories,
     loadPersistedOutboundReplayCache,

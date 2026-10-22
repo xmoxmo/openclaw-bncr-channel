@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { fallbackBncrMediaMaxBytes } from '../../src/openclaw/media-limit-runtime.ts';
 import { createBncrChannelPluginSurfaceGroup } from '../../src/plugin/channel-plugin-surface-group.ts';
 
 function createRuntime(overrides = {}) {
@@ -217,7 +218,7 @@ test('handleAction saves a preserved data-uri buffer and forwards its real path'
   assert.equal(saved[0].buffer.toString(), 'hello');
   assert.equal(saved[0].mimeType, 'text/plain');
   assert.equal(saved[0].direction, 'outbound');
-  assert.equal(saved[0].maxBytes, 50 * 1024 * 1024);
+  assert.equal(saved[0].maxBytes, fallbackBncrMediaMaxBytes());
   assert.equal(saved[0].fileName, 'hello.txt');
   assert.equal(calls[0].mediaUrl, '/state/media/outbound/hello.txt');
   assert.deepEqual(calls[0].mediaUrls, ['/state/media/outbound/hello.txt']);

@@ -22,15 +22,18 @@ export function countInvalidOutboxSessionKeys(args: {
   return count;
 }
 
+/**
+ * Legacy-account residue is counted on delivery/routing truth only (outbox, dead letter,
+ * session routes). The lastSession/lastActivity/lastInbound/lastOutbound diagnostic
+ * timestamp maps never drive delivery; legacy keys in them are not delivery risk, so
+ * they are excluded from residue (one-shot startup alias normalization keeps the stored
+ * truth tables canonical).
+ */
 export function countLegacyAccountResidue(args: {
   accountId: string;
   outboxEntries: Iterable<Pick<OutboxEntry, 'accountId'>>;
   deadLetterEntries: Iterable<Pick<OutboxEntry, 'accountId'>>;
   sessionRoutes: Iterable<AccountResidueSessionRoute>;
-  lastSessionAccountIds: Iterable<string>;
-  lastActivityAccountIds: Iterable<string>;
-  lastInboundAccountIds: Iterable<string>;
-  lastOutboundAccountIds: Iterable<string>;
 }): number {
   const accountId = normalizeAccountId(args.accountId);
   let count = 0;
@@ -43,18 +46,6 @@ export function countLegacyAccountResidue(args: {
   }
   for (const info of args.sessionRoutes) {
     if (hasMismatchedAccountId(info.accountId, accountId)) count += 1;
-  }
-  for (const key of args.lastSessionAccountIds) {
-    if (hasMismatchedAccountId(key, accountId)) count += 1;
-  }
-  for (const key of args.lastActivityAccountIds) {
-    if (hasMismatchedAccountId(key, accountId)) count += 1;
-  }
-  for (const key of args.lastInboundAccountIds) {
-    if (hasMismatchedAccountId(key, accountId)) count += 1;
-  }
-  for (const key of args.lastOutboundAccountIds) {
-    if (hasMismatchedAccountId(key, accountId)) count += 1;
   }
 
   return count;

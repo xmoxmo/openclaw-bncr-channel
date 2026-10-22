@@ -42,8 +42,7 @@ test('inbound surface handlers group exposes file and message inbound handler su
     setInboundActivity() {},
     scheduleSave() {},
     fileRecvTransfers: new Map(),
-    inboundFileTransferMaxBytes: 1024,
-    inboundFileTransferMaxChunks: 8,
+    resolveInboundFileTransferMaxBytes: () => 1024,
   });
 
   assert.equal(typeof group.fileInboundHandlers.handleFileInit, 'function');

@@ -43,11 +43,11 @@ export type BncrFileInboundRuntime = {
   ) => { sessionKey: string; route: BncrRoute } | null;
   buildCanonicalSessionKey: (route: BncrRoute, kind?: BncrSessionKind) => string;
   saveInboundMediaBuffer: (args: {
+    accountId: string;
     buffer: Buffer;
     mimeType: string;
     fileName: string;
   }) => Promise<{ path: string }>;
   fileRecvTransfers: Map<string, FileRecvTransferState>;
-  inboundFileTransferMaxBytes: number;
-  inboundFileTransferMaxChunks: number;
+  resolveInboundFileTransferMaxBytes: (accountId: string) => number;
 };

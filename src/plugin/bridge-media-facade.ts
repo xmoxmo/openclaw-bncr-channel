@@ -4,6 +4,7 @@ import type {
   OutboundReplyTargetPolicy,
   ReplyPayloadInput,
 } from '../messaging/outbound/reply-enqueue.ts';
+import { resolveBncrMediaMaxBytes } from '../openclaw/media-limit-runtime.ts';
 import type { OpenClawLoadedMedia } from '../openclaw/media-runtime.ts';
 import { loadOpenClawWebMedia } from '../openclaw/media-runtime.ts';
 
@@ -157,6 +158,7 @@ export function createBncrBridgeMediaFacade(runtime: {
   normalizeAccountId: (accountId: string) => string;
 }) {
   const loadOutboundTransferMedia = async (params: {
+    accountId: string;
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
   }): Promise<{
@@ -167,7 +169,7 @@ export function createBncrBridgeMediaFacade(runtime: {
   }> => {
     const loaded = await loadOpenClawWebMedia(runtime.getApi(), params.mediaUrl, {
       localRoots: params.mediaLocalRoots,
-      maxBytes: 50 * 1024 * 1024,
+      maxBytes: resolveBncrMediaMaxBytes(runtime.getApi(), params.accountId),
     });
     const size = loaded.buffer.byteLength;
     const mimeType = loaded.contentType;

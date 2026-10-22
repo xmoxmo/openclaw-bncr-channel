@@ -2,7 +2,7 @@ import { emitBncrLogLine } from '../../core/logging.ts';
 import { parseStrictBncrSessionKey } from '../../core/targets.ts';
 import type { OutboxEntry } from '../../core/types.ts';
 import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
-import { buildSceneKey } from '../../plugin/scene-registry.ts';
+import { buildSceneKey, resolveSceneRecord } from '../../plugin/scene-registry.ts';
 import type { BncrHistoryShardQueue } from '../../plugin/sqlite-state.ts';
 import { handleBncrNativeCommand } from './commands.ts';
 import type {
@@ -169,8 +169,9 @@ export async function dispatchBncrInbound(params: {
     );
   }
   const historyKey = buildBncrConversationHistoryKey(parsed);
+  const sceneAgentId = resolvedAgentId || canonicalAgentId;
   const resolvedHistoryLimit = resolveBncrHistoryLimit(
-    sceneRegistry.get(buildSceneKey(parsed))?.historyLimit,
+    resolveSceneRecord(sceneRegistry, buildSceneKey(parsed), sceneAgentId)?.historyLimit,
   );
   const isStopCommand = isBncrStopCommandText(rawBody);
   if (isStopCommand && shouldDispatch) {
@@ -281,7 +282,11 @@ export async function dispatchBncrInbound(params: {
       if (historyKey && !initialShouldDispatch && !forceSilentHistoryFlush) {
         const entries = conversationHistories.get(historyKey);
         if (entries && resolvedHistoryLimit > 0 && entries.length >= resolvedHistoryLimit) {
-          const sceneForHistory = sceneRegistry.get(buildSceneKey(parsed));
+          const sceneForHistory = resolveSceneRecord(
+            sceneRegistry,
+            buildSceneKey(parsed),
+            sceneAgentId,
+          );
           const historyForce = sceneForHistory?.historyForce !== false;
           if (historyForce) {
             silentHistoryFlush = true;
@@ -708,9 +713,13 @@ export async function dispatchBncrOutboundHistoryFlush(params: {
   if (!historyKey) return;
   const entries = params.conversationHistories.get(historyKey);
   if (!entries || entries.length === 0) return;
-  const sceneForHistory = params.sceneRegistry.get(buildSceneKey(parsed));
-  if (sceneForHistory?.historyForce === false) return;
   const sessionAgentId = parseStrictBncrSessionKey(entry.sessionKey)?.inputAgentId;
+  const sceneForHistory = resolveSceneRecord(
+    params.sceneRegistry,
+    buildSceneKey(parsed),
+    sessionAgentId || canonicalAgentId,
+  );
+  if (sceneForHistory?.historyForce === false) return;
 
   await dispatchBncrInbound({
     api,

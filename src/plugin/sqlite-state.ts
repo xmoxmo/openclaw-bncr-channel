@@ -1,7 +1,18 @@
-import { createHash } from 'node:crypto';
-import { chmodSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { normalizeAccountId } from '../core/accounts.ts';
+import { BNCR_DEFAULT_ACCOUNT_ID, normalizeAccountId } from '../core/accounts.ts';
+import { emitBncrLog } from '../core/logging.ts';
 import {
   dumpRegisterDriftSnapshot,
   normalizeRegisterDriftSnapshot,
@@ -97,6 +108,7 @@ export type BncrHistoryShardQueue = {
 export type BncrSqliteStateDatabase = {
   getPath: () => string;
   close: () => void;
+  rotateSnapshot: () => string | null;
   getStoreMode: () => BncrSqliteStoreMode | null;
   isControlStateImported: () => boolean;
   isHistoryImported: () => boolean;
@@ -113,7 +125,11 @@ export type BncrSqliteStateDatabase = {
     },
   ) => void;
   loadControlState: () => BncrSqliteControlState;
-  saveControlState: (state: BncrSqliteControlState) => void;
+  saveControlState: (
+    state: BncrSqliteControlState,
+    scope?: { agentId?: string | null },
+    removedScenes?: readonly BncrRemovedSceneRow[],
+  ) => void;
   importHistoryState: (
     historyBuckets: BncrPersistedConversationHistoryBucket[],
     replayBuckets: BncrPersistedOutboundReplayBucket[],
@@ -127,8 +143,12 @@ export type BncrSqliteStateDatabase = {
   ) => void;
   isOutboundImported: () => boolean;
   importOutboundState: (outbox: OutboxEntry[], deadLetter: OutboxEntry[]) => void;
-  loadOutboundState: () => BncrSqliteOutboundState;
-  saveOutboundState: (outbox: OutboxEntry[], deadLetter: OutboxEntry[]) => void;
+  loadOutboundState: (scope?: { agentId?: string | null }) => BncrSqliteOutboundState;
+  saveOutboundState: (
+    outbox: OutboxEntry[],
+    deadLetter: OutboxEntry[],
+    scope?: { agentId?: string | null },
+  ) => void;
   createHistoryShard: (input: BncrHistoryShardCreateInput) => BncrHistoryShardCreateResult;
   markHistoryShardProcessing: (shardId: number, owner?: string) => boolean;
   markHistoryShardFailed: (
@@ -430,6 +450,48 @@ CREATE TABLE history_message_consumed (
 CREATE INDEX idx_history_message_consumed_at ON history_message_consumed(consumed_at);
 `,
   },
+  {
+    version: 6,
+    name: 'bncr-scenes-agent-scoped-identity',
+    up: `
+CREATE TABLE scenes_scoped (
+  id INTEGER PRIMARY KEY,
+  scene_key TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('direct','group')),
+  status TEXT NOT NULL CHECK (status IN ('pending','allowed','denied')),
+  platform TEXT NOT NULL,
+  user_id TEXT,
+  user_name TEXT,
+  group_id TEXT,
+  group_name TEXT,
+  agent_id TEXT,
+  group_reply_mode TEXT CHECK (group_reply_mode IN ('admin','mention','hybrid','all')),
+  history_limit INTEGER CHECK (history_limit IS NULL OR history_limit >= 2),
+  history_force INTEGER CHECK (history_force IN (0,1)),
+  download_media INTEGER CHECK (download_media IN (0,1)),
+  last_seen_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+INSERT INTO scenes_scoped (
+  id, scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
+  agent_id, group_reply_mode, history_limit, history_force, download_media,
+  last_seen_at, created_at, updated_at
+)
+SELECT id, scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
+       agent_id, group_reply_mode, history_limit, history_force, download_media,
+       last_seen_at, created_at, updated_at
+FROM scenes;
+
+DROP TABLE scenes;
+ALTER TABLE scenes_scoped RENAME TO scenes;
+
+CREATE INDEX idx_scenes_status ON scenes(status, kind, platform);
+CREATE INDEX idx_scenes_last_seen ON scenes(last_seen_at);
+CREATE UNIQUE INDEX idx_scenes_agent_scene ON scenes(COALESCE(agent_id, ''), scene_key);
+`,
+  },
 ];
 
 const HISTORY_SHARD_LEASE_MS = 5 * 60 * 1000;
@@ -437,6 +499,38 @@ const HISTORY_SHARD_MAX_ATTEMPTS = 8;
 const HISTORY_SHARD_RETRY_BASE_MS = 5_000;
 const HISTORY_SHARD_RETRY_MAX_MS = 5 * 60 * 1000;
 const HISTORY_CONSUMED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Startup integrity-class failure: open failure, quick_check, foreign-key violations, or
+ * structural contract drift. Eligible for automatic recovery from a verified snapshot.
+ */
+export class BncrSqliteIntegrityFailure extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'BncrSqliteIntegrityFailure';
+  }
+}
+
+/**
+ * Migration lineage failure: the database carries migrations this plugin cannot map
+ * (future version or name drift). Must fail closed; never eligible for snapshot recovery.
+ */
+export class BncrSqliteMigrationLineageFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BncrSqliteMigrationLineageFailure';
+  }
+}
+
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// Early local 0.6.x databases were created before checksum enforcement. These exact values
+// identify known schema lineage and are normalized to the current checksum during startup.
+const LEGACY_MIGRATION_CHECKSUMS: Readonly<Record<number, readonly string[]>> = {
+  2: ['2f750f4526fa72b07676d8043a5829c6e392dcbb6a5ad9a0fa42171b82065ce8'],
+};
 
 function migrationChecksum(migration: Migration): string {
   return createHash('sha256')
@@ -455,16 +549,268 @@ function assertAppliedMigrations(rows: AppliedMigrationRow[]): void {
   for (const row of rows) {
     const expected = expectedByVersion.get(row.version);
     if (!expected) {
-      throw new Error(`bncr sqlite migration ${row.version} is newer than this plugin supports`);
+      throw new BncrSqliteMigrationLineageFailure(
+        `bncr sqlite migration ${row.version} is newer than this plugin supports`,
+      );
     }
-    if (row.checksum !== migrationChecksum(expected)) {
-      throw new Error(`bncr sqlite migration ${row.version} checksum mismatch`);
+    if (row.name !== expected.name) {
+      throw new BncrSqliteMigrationLineageFailure(
+        `bncr sqlite migration ${row.version} name mismatch`,
+      );
     }
   }
 }
 
-function applyMigrations(db: DatabaseSync, now: () => number): void {
-  db.exec(SCHEMA_MIGRATIONS);
+function normalizeAppliedMigrationChecksums(db: DatabaseSync, rows: AppliedMigrationRow[]): number {
+  const expectedByVersion = new Map(MIGRATIONS.map((migration) => [migration.version, migration]));
+  const update = db.prepare(
+    'UPDATE schema_migrations SET checksum = ? WHERE version = ? AND checksum = ?',
+  );
+  let normalized = 0;
+  for (const row of rows) {
+    const expected = expectedByVersion.get(row.version);
+    if (!expected) continue;
+    const expectedChecksum = migrationChecksum(expected);
+    if (row.checksum === expectedChecksum) continue;
+    const acceptedChecksums = LEGACY_MIGRATION_CHECKSUMS[row.version] ?? [];
+    if (!acceptedChecksums.includes(row.checksum)) continue;
+    normalized += Number(update.run(expectedChecksum, row.version, row.checksum).changes);
+  }
+  return normalized;
+}
+
+function normalizeSchemaSql(sql: string | null): string {
+  if (!sql) return '';
+  let normalized = '';
+  let pendingSpace = false;
+  let quote: "'" | '"' | '`' | ']' | null = null;
+  for (const character of sql.trim()) {
+    if (quote) {
+      normalized += character;
+      if (quote === ']' ? character === ']' : character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      if (pendingSpace && normalized && !normalized.endsWith('(')) normalized += ' ';
+      pendingSpace = false;
+      quote = character;
+      normalized += character;
+      continue;
+    }
+    if (character === '[') {
+      if (pendingSpace && normalized && !normalized.endsWith('(')) normalized += ' ';
+      pendingSpace = false;
+      quote = ']';
+      normalized += character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      pendingSpace = true;
+      continue;
+    }
+    if (character === '(' || character === ')' || character === ',') {
+      normalized = normalized.trimEnd() + character;
+      pendingSpace = false;
+      continue;
+    }
+    if (pendingSpace && normalized && !normalized.endsWith('(')) normalized += ' ';
+    pendingSpace = false;
+    normalized += character;
+  }
+  return normalized.trim();
+}
+
+function quoteSqliteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+type SchemaContractRow = {
+  type: string;
+  name: string;
+  tbl_name: string;
+  sql: string | null;
+};
+
+type TableInfoRow = {
+  cid: number;
+  name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
+  pk: number;
+  hidden: number;
+};
+
+type ForeignKeyRow = {
+  id: number;
+  seq: number;
+  table: string;
+  from: string;
+  to: string | null;
+  on_update: string;
+  on_delete: string;
+  match: string;
+};
+
+type IndexListRow = {
+  seq: number;
+  name: string;
+  unique: number;
+  origin: string;
+  partial: number;
+};
+
+type IndexInfoRow = {
+  seqno: number;
+  cid: number;
+  name: string | null;
+  desc: number;
+  coll: string | null;
+  key: number;
+};
+
+function inspectSqliteSchemaContract(db: DatabaseSync): string[] {
+  const objects = db
+    .prepare(
+      `SELECT type, name, tbl_name, sql
+       FROM sqlite_schema
+       WHERE name NOT LIKE 'sqlite_%'
+         AND type IN ('table', 'index', 'trigger', 'view')
+       ORDER BY type ASC, name ASC`,
+    )
+    .all() as SchemaContractRow[];
+  const contract: string[] = [];
+  for (const object of objects) {
+    contract.push(
+      `object|${object.type}|${object.name}|${object.tbl_name}|${normalizeSchemaSql(object.sql)}`,
+    );
+  }
+
+  for (const table of objects.filter((object) => object.type === 'table')) {
+    const identifier = quoteSqliteIdentifier(table.name);
+    const columns = db.prepare(`PRAGMA table_xinfo(${identifier})`).all() as TableInfoRow[];
+    for (const column of columns) {
+      contract.push(
+        `column|${table.name}|${column.cid}|${column.name}|${column.type}|${column.notnull}|${normalizeSchemaSql(column.dflt_value)}|${column.pk}|${column.hidden}`,
+      );
+    }
+
+    const foreignKeys = db
+      .prepare(`PRAGMA foreign_key_list(${identifier})`)
+      .all() as ForeignKeyRow[];
+    for (const foreignKey of foreignKeys) {
+      contract.push(
+        `foreign-key|${table.name}|${foreignKey.id}|${foreignKey.seq}|${foreignKey.table}|${foreignKey.from}|${foreignKey.to ?? ''}|${foreignKey.on_update}|${foreignKey.on_delete}|${foreignKey.match}`,
+      );
+    }
+
+    const indexes = (db.prepare(`PRAGMA index_list(${identifier})`).all() as IndexListRow[]).sort(
+      (left, right) => left.name.localeCompare(right.name),
+    );
+    for (const index of indexes) {
+      contract.push(
+        `index|${table.name}|${index.name}|${index.unique}|${index.origin}|${index.partial}`,
+      );
+      const indexInfo = db
+        .prepare(`PRAGMA index_xinfo(${quoteSqliteIdentifier(index.name)})`)
+        .all() as IndexInfoRow[];
+      for (const item of indexInfo) {
+        contract.push(
+          `index-column|${table.name}|${index.name}|${item.seqno}|${item.cid}|${item.name ?? ''}|${item.desc}|${item.coll ?? ''}|${item.key}`,
+        );
+      }
+    }
+  }
+  return contract.sort();
+}
+
+let expectedSchemaContract: readonly string[] | null = null;
+
+function getExpectedSchemaContract(): readonly string[] {
+  if (expectedSchemaContract) return expectedSchemaContract;
+  const reference = new DatabaseSync(':memory:');
+  try {
+    applyMigrations(reference, () => 0, false);
+    expectedSchemaContract = inspectSqliteSchemaContract(reference);
+    return expectedSchemaContract;
+  } finally {
+    reference.close();
+  }
+}
+
+function assertSqliteWriteContract(db: DatabaseSync): void {
+  const expected = getExpectedSchemaContract();
+  const actual = inspectSqliteSchemaContract(db);
+  const expectedTables = new Set(
+    expected
+      .filter((entry) => entry.startsWith('object|table|'))
+      .map((entry) => entry.split('|')[2]),
+  );
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  const missing = expected.filter((entry) => !actualSet.has(entry));
+  const unexpected = actual.filter((entry) => {
+    if (expectedSet.has(entry)) return false;
+    const [kind, owner, name, tableName] = entry.split('|');
+    if (kind === 'object' && (owner === 'trigger' || owner === 'view')) return false;
+    if (kind === 'object' && owner === 'table') return expectedTables.has(name);
+    if (kind === 'object' && owner === 'index') return expectedTables.has(tableName);
+    return expectedTables.has(owner);
+  });
+  if (missing.length === 0 && unexpected.length === 0) return;
+  const describe = (entries: readonly string[]) =>
+    entries.slice(0, 3).join(' | ') + (entries.length > 3 ? ` | +${entries.length - 3} more` : '');
+  const details = [
+    missing.length > 0 ? `missing ${describe(missing)}` : '',
+    unexpected.length > 0 ? `unexpected ${describe(unexpected)}` : '',
+  ]
+    .filter(Boolean)
+    .join('; ');
+  throw new Error(`bncr sqlite write contract mismatch: ${details}`);
+}
+
+function assertSqliteDatabaseHealth(db: DatabaseSync): void {
+  const quickCheck = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
+  const invalid = quickCheck.filter((row) => row.quick_check !== 'ok');
+  if (invalid.length > 0) {
+    throw new Error(
+      `bncr sqlite integrity check failed: ${invalid.map((row) => row.quick_check).join(' | ')}`,
+    );
+  }
+  const foreignKeyViolations = db.prepare('PRAGMA foreign_key_check').all();
+  if (foreignKeyViolations.length > 0) {
+    throw new Error(
+      `bncr sqlite foreign key check failed: ${foreignKeyViolations.length} violation(s)`,
+    );
+  }
+}
+
+function runWriteTransaction<T>(db: DatabaseSync, write: () => T): T {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    assertSqliteWriteContract(db);
+    const result = write();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Preserve the original write or contract failure.
+    }
+    throw error;
+  }
+}
+
+function applyMigrations(db: DatabaseSync, now: () => number, validateWriteContract = true): void {
+  try {
+    db.exec(SCHEMA_MIGRATIONS);
+  } catch (error) {
+    throw new BncrSqliteIntegrityFailure(
+      `bncr sqlite schema initialization failed: ${errorMessageOf(error)}`,
+      { cause: error },
+    );
+  }
 
   for (const migration of MIGRATIONS) {
     const checksum = migrationChecksum(migration);
@@ -474,6 +820,7 @@ function applyMigrations(db: DatabaseSync, now: () => number): void {
         .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC')
         .all() as AppliedMigrationRow[];
       assertAppliedMigrations(rows);
+      normalizeAppliedMigrationChecksums(db, rows);
       if (rows.some((row) => row.version === migration.version)) {
         db.exec('COMMIT');
         continue;
@@ -485,8 +832,34 @@ function applyMigrations(db: DatabaseSync, now: () => number): void {
       ).run(migration.version, migration.name, checksum, now());
       db.exec('COMMIT');
     } catch (error) {
-      db.exec('ROLLBACK');
-      throw error;
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original migration failure.
+      }
+      if (error instanceof BncrSqliteMigrationLineageFailure) throw error;
+      throw new BncrSqliteIntegrityFailure(
+        `bncr sqlite migration ${migration.version} failed: ${errorMessageOf(error)}`,
+        { cause: error },
+      );
+    }
+  }
+  try {
+    assertSqliteDatabaseHealth(db);
+  } catch (error) {
+    throw new BncrSqliteIntegrityFailure(
+      `bncr sqlite startup health check failed: ${errorMessageOf(error)}`,
+      { cause: error },
+    );
+  }
+  if (validateWriteContract) {
+    try {
+      assertSqliteWriteContract(db);
+    } catch (error) {
+      throw new BncrSqliteIntegrityFailure(
+        `bncr sqlite startup write contract check failed: ${errorMessageOf(error)}`,
+        { cause: error },
+      );
     }
   }
 }
@@ -498,18 +871,64 @@ function buildRouteKey(route: BncrRoute): string {
   return `${platform}:${groupId}:${userId}`;
 }
 
+function agentSessionKeyLike(agentId: string): string {
+  const escaped = agentId.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
+  return `agent:${escaped}:bncr:%`;
+}
+
+export type BncrRemovedSceneRow = {
+  sceneKey: string;
+  agentId?: string | null;
+  lastSeenAt?: number;
+};
+
 function replaceControlState(
   db: DatabaseSync,
   state: BncrSqliteControlState,
   now: () => number,
+  agentId?: string | null,
+  removedScenes?: readonly BncrRemovedSceneRow[],
 ): void {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.exec('DELETE FROM session_routes');
-    db.exec('DELETE FROM routes');
-    db.exec('DELETE FROM scenes');
-    db.exec('DELETE FROM account_activity');
-    db.exec('DELETE FROM register_drift');
+  const scope = String(agentId ?? '').trim();
+  runWriteTransaction(db, () => {
+    if (scope) {
+      // Agent-scoped persistence: only touch the rows this agent owns, so
+      // concurrent agent instances sharing one state DB never overwrite each
+      // other's session routes or scenes.
+      db.prepare(`DELETE FROM session_routes WHERE session_key LIKE ? ESCAPE '\\'`).run(
+        agentSessionKeyLike(scope),
+      );
+      db.prepare('DELETE FROM routes WHERE id NOT IN (SELECT route_id FROM session_routes)').run();
+      db.prepare('DELETE FROM scenes WHERE agent_id = ?').run(scope);
+    } else {
+      db.exec('DELETE FROM session_routes');
+      db.exec('DELETE FROM routes');
+      db.exec('DELETE FROM scenes');
+      db.exec('DELETE FROM account_activity');
+      db.exec('DELETE FROM register_drift');
+    }
+
+    // Scenes removed from the live registry were revoked on purpose. The scoped
+    // delete above only covers this agent's rows, so apply explicit removals for
+    // rows owned by another agent as well.
+    if (removedScenes?.length) {
+      const deleteSceneFresh = db.prepare(
+        "DELETE FROM scenes WHERE scene_key = ? AND COALESCE(agent_id, '') = ? AND last_seen_at <= ?",
+      );
+      const deleteSceneAny = db.prepare(
+        "DELETE FROM scenes WHERE scene_key = ? AND COALESCE(agent_id, '') = ?",
+      );
+      for (const removal of removedScenes) {
+        const sceneKey = String(removal?.sceneKey || '').trim();
+        if (!sceneKey) continue;
+        const sceneAgent = String(removal?.agentId ?? '').trim();
+        const seen = Number(removal?.lastSeenAt);
+        // A row another process re-created after this process loaded it is newer
+        // than the removal snapshot; deleting it would undo that process's write.
+        if (Number.isFinite(seen)) deleteSceneFresh.run(sceneKey, sceneAgent, seen);
+        else deleteSceneAny.run(sceneKey, sceneAgent);
+      }
+    }
 
     const insertRoute = db.prepare(
       `INSERT INTO routes (route_key, platform, group_id, user_id, created_at, updated_at)
@@ -517,10 +936,14 @@ function replaceControlState(
        ON CONFLICT(route_key) DO UPDATE SET updated_at = excluded.updated_at`,
     );
     const selectRoute = db.prepare('SELECT id FROM routes WHERE route_key = ?');
+    // Scoped saves only delete this agent's session rows; surviving rows
+    // (other agents, unattributed legacy) must never hard-block the flush,
+    // so inserts upsert instead of crashing on the session_key primary key.
     const insertSessionRoute = db.prepare(
       `INSERT INTO session_routes (
          session_key, account_id, route_id, platform, group_id, user_id, updated_at, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(session_key) DO UPDATE SET updated_at = excluded.updated_at`,
     );
 
     const timestamp = now();
@@ -551,14 +974,41 @@ function replaceControlState(
       );
     }
 
+    // Scenes are identified per agent: two agents may watch the same chat, so the
+    // row identity is (agent_id, scene_key). A conflicting row of the same agent is
+    // rewritten in place (self-healing); foreign rows cannot absorb this flush.
     const insertScene = db.prepare(
       `INSERT INTO scenes (
          scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
          agent_id, group_reply_mode, history_limit, history_force, download_media,
          last_seen_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(COALESCE(agent_id, ''), scene_key) DO UPDATE SET
+         kind = excluded.kind,
+         status = excluded.status,
+         platform = excluded.platform,
+         user_id = excluded.user_id,
+         user_name = excluded.user_name,
+         group_id = excluded.group_id,
+         group_name = excluded.group_name,
+         group_reply_mode = excluded.group_reply_mode,
+         history_limit = excluded.history_limit,
+         history_force = excluded.history_force,
+         download_media = excluded.download_media,
+         last_seen_at = excluded.last_seen_at,
+         updated_at = excluded.updated_at
+       WHERE excluded.last_seen_at >= scenes.last_seen_at`,
+    );
+    // A row that already exists without an owner stays unattributed: attributing
+    // it to this flush would leave the legacy row behind and duplicate the scene
+    // as a second, agent-owned row. Only locally created unowned scenes get the
+    // flushing agent as their owner.
+    const hasUnownedScene = db.prepare(
+      "SELECT 1 AS hit FROM scenes WHERE scene_key = ? AND COALESCE(agent_id, '') = '' LIMIT 1",
     );
     for (const scene of state.sceneRegistry) {
+      let sceneAgentId = scene.agentId ?? null;
+      if (!sceneAgentId && scope && !hasUnownedScene.get(scene.sceneKey)) sceneAgentId = scope;
       insertScene.run(
         scene.sceneKey,
         scene.kind,
@@ -568,7 +1018,7 @@ function replaceControlState(
         scene.userName ?? null,
         scene.groupId ?? null,
         scene.groupName ?? null,
-        scene.agentId ?? null,
+        sceneAgentId,
         scene.groupReplyMode ?? null,
         scene.historyLimit ?? null,
         scene.historyForce === undefined ? null : scene.historyForce ? 1 : 0,
@@ -579,11 +1029,26 @@ function replaceControlState(
       );
     }
 
-    const insertActivity = db.prepare(
-      `INSERT INTO account_activity (
-         account_id, activity_type, session_key, session_scope, event_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
-    );
+    // account_activity is account-level and shared across agents: a scoped flush
+    // merges instead of rewriting; only a newer-or-equal activity event wins
+    // (flush time alone must not let a stale entry clobber a fresher one).
+    const insertActivity = scope
+      ? db.prepare(
+          `INSERT INTO account_activity (
+             account_id, activity_type, session_key, session_scope, event_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(account_id, activity_type) DO UPDATE SET
+             session_key = excluded.session_key,
+             session_scope = excluded.session_scope,
+             event_at = excluded.event_at,
+             updated_at = excluded.updated_at
+           WHERE excluded.event_at >= account_activity.event_at`,
+        )
+      : db.prepare(
+          `INSERT INTO account_activity (
+             account_id, activity_type, session_key, session_scope, event_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        );
     const insertActivityAt = (accountId: string, activityType: string, value: number) => {
       insertActivity.run(
         accountId,
@@ -613,13 +1078,34 @@ function replaceControlState(
 
     const drift = dumpRegisterDriftSnapshot(state.lastDriftSnapshot);
     if (drift) {
-      db.prepare(
-        `INSERT INTO register_drift (
-           id, captured_at, register_count, api_generation, post_warmup_register_count,
-           api_instance_id, registry_fingerprint, dominant_bucket, source_buckets_json,
-           trace_window_size, trace_recent_json, updated_at
-         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
+      const insertDrift = scope
+        ? db.prepare(
+            `INSERT INTO register_drift (
+               id, captured_at, register_count, api_generation, post_warmup_register_count,
+               api_instance_id, registry_fingerprint, dominant_bucket, source_buckets_json,
+               trace_window_size, trace_recent_json, updated_at
+             ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               captured_at = excluded.captured_at,
+               register_count = excluded.register_count,
+               api_generation = excluded.api_generation,
+               post_warmup_register_count = excluded.post_warmup_register_count,
+               api_instance_id = excluded.api_instance_id,
+               registry_fingerprint = excluded.registry_fingerprint,
+               dominant_bucket = excluded.dominant_bucket,
+               source_buckets_json = excluded.source_buckets_json,
+               trace_window_size = excluded.trace_window_size,
+               trace_recent_json = excluded.trace_recent_json,
+               updated_at = excluded.updated_at`,
+          )
+        : db.prepare(
+            `INSERT INTO register_drift (
+               id, captured_at, register_count, api_generation, post_warmup_register_count,
+               api_instance_id, registry_fingerprint, dominant_bucket, source_buckets_json,
+               trace_window_size, trace_recent_json, updated_at
+             ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          );
+      insertDrift.run(
         drift.capturedAt,
         drift.registerCount,
         drift.apiGeneration,
@@ -633,12 +1119,7 @@ function replaceControlState(
         timestamp,
       );
     }
-
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 function loadControlState(db: DatabaseSync): BncrSqliteControlState {
@@ -830,8 +1311,7 @@ function replaceHistoryMessages(
   expectedRevision?: number,
 ): void {
   const timestamp = now();
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  runWriteTransaction(db, () => {
     const currentRevisionRow = db
       .prepare("SELECT meta_value FROM state_meta WHERE meta_key = 'history_revision'")
       .get() as { meta_value: string } | undefined;
@@ -1000,11 +1480,7 @@ function replaceHistoryMessages(
        VALUES ('history_revision', ?, ?)
        ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at = excluded.updated_at`,
     ).run(String(currentRevision + 1), timestamp);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 type BncrHistoryMessageRow = {
@@ -1091,8 +1567,7 @@ function restoreTerminalHistoryShardsToActive(
   db: DatabaseSync,
   timestamp: number = Date.now(),
 ): BncrSqliteHistoryState {
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  return runWriteTransaction(db, () => {
     const terminal = (
       db
         .prepare(
@@ -1105,7 +1580,6 @@ function restoreTerminalHistoryShardsToActive(
         .all(HISTORY_SHARD_MAX_ATTEMPTS) as Array<{ id: number }>
     ).map((row) => row.id);
     if (terminal.length === 0) {
-      db.exec('COMMIT');
       return { historyBuckets: [], replayBuckets: [] };
     }
     const placeholders = terminal.map(() => '?').join(', ');
@@ -1152,7 +1626,6 @@ function restoreTerminalHistoryShardsToActive(
        VALUES ('history_revision', ?, ?)
        ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at = excluded.updated_at`,
     ).run(String(nextRevision), timestamp);
-    db.exec('COMMIT');
     const isConsumed = db.prepare(
       `SELECT 1 FROM history_message_consumed
        WHERE storage_kind = ?
@@ -1166,10 +1639,7 @@ function restoreTerminalHistoryShardsToActive(
         (row) => !isConsumed.get(row.storage_kind, row.history_key, row.buffer_key, row.message_id),
       ),
     );
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
 function loadHistoryState(db: DatabaseSync, now: number = Date.now()): BncrSqliteHistoryState {
@@ -1196,23 +1666,22 @@ function cleanupExpiredHistoryMessageTombstones(
   now: number,
   retentionMs = HISTORY_CONSUMED_TOMBSTONE_RETENTION_MS,
 ): number {
-  const result = db
-    .prepare('DELETE FROM history_message_consumed WHERE consumed_at < ?')
-    .run(now - retentionMs);
-  return Number(result.changes);
+  return runWriteTransaction(db, () => {
+    const result = db
+      .prepare('DELETE FROM history_message_consumed WHERE consumed_at < ?')
+      .run(now - retentionMs);
+    return Number(result.changes);
+  });
 }
 
 function cleanupCompletedHistoryShards(db: DatabaseSync, timestamp: number = Date.now()): number {
-  let completedCount = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  return runWriteTransaction(db, () => {
     const completed = (
       db.prepare(`SELECT id FROM history_shards WHERE status = 'completed'`).all() as Array<{
         id: number;
       }>
     ).map((row) => row.id);
     if (completed.length === 0) {
-      db.exec('COMMIT');
       return 0;
     }
     const deleteMessages = db.prepare('DELETE FROM conversation_messages WHERE shard_id = ?');
@@ -1222,13 +1691,8 @@ function cleanupCompletedHistoryShards(db: DatabaseSync, timestamp: number = Dat
       deleteMessages.run(id);
       deleteShard.run(id);
     }
-    completedCount = completed.length;
-    db.exec('COMMIT');
-    return completedCount;
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+    return completed.length;
+  });
 }
 
 function recordConsumedHistoryShardMessages(
@@ -1337,11 +1801,21 @@ function replaceOutboundState(
   outbox: readonly OutboxEntry[],
   deadLetter: readonly OutboxEntry[],
   now: () => number,
+  agentId?: string | null,
 ): void {
+  const scope = String(agentId ?? '').trim();
+  const prefix = scope ? `agent:${scope}:bncr:` : null;
   const timestamp = now();
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.exec('DELETE FROM outbound_messages');
+  runWriteTransaction(db, () => {
+    if (scope) {
+      // Agent-scoped: rewrite only this agent's entries; rows of other agents and
+      // unattributable legacy entries stay untouched.
+      db.prepare(`DELETE FROM outbound_messages WHERE session_key LIKE ? ESCAPE '\\'`).run(
+        agentSessionKeyLike(scope),
+      );
+    } else {
+      db.exec('DELETE FROM outbound_messages');
+    }
     const insert = db.prepare(
       `INSERT INTO outbound_messages (
          message_id, account_id, session_key, route_platform, route_group_id,
@@ -1377,32 +1851,50 @@ function replaceOutboundState(
       );
     };
 
-    for (const entry of outbox) write(entry, 'queued');
-    for (const entry of deadLetter) write(entry, 'dead');
+    const scopedOutbox = prefix
+      ? (outbox as OutboxEntry[]).filter((entry) => entry.sessionKey.startsWith(prefix))
+      : (outbox as OutboxEntry[]);
+    const scopedDeadLetter = prefix
+      ? (deadLetter as OutboxEntry[]).filter((entry) => entry.sessionKey.startsWith(prefix))
+      : (deadLetter as OutboxEntry[]);
+    for (const entry of scopedOutbox) write(entry, 'queued');
+    for (const entry of scopedDeadLetter) write(entry, 'dead');
     db.prepare(
       `INSERT INTO state_meta (meta_key, meta_value, updated_at)
        VALUES ('outbound_imported_at', ?, ?)
        ON CONFLICT(meta_key) DO NOTHING`,
     ).run(String(timestamp), timestamp);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 }
 
-function loadOutboundState(db: DatabaseSync): BncrSqliteOutboundState {
-  const rows = db
-    .prepare(
-      `SELECT message_id, account_id, session_key, route_platform, route_group_id,
-              route_user_id, payload_json, queue_state, retry_count, next_attempt_at,
-              last_attempt_at, last_error, last_push_at, last_push_conn_id,
-              last_push_client_id, route_attempt_conn_ids_json, route_attempt_round,
-              fast_reroute_pending, awaiting_retry_push, created_at
-       FROM outbound_messages
-       ORDER BY id ASC`,
-    )
-    .all() as Array<{
+function loadOutboundState(db: DatabaseSync, agentId?: string | null): BncrSqliteOutboundState {
+  const scope = String(agentId ?? '').trim();
+  const rows = (
+    scope
+      ? db
+          .prepare(
+            `SELECT message_id, account_id, session_key, route_platform, route_group_id,
+                    route_user_id, payload_json, queue_state, retry_count, next_attempt_at,
+                    last_attempt_at, last_error, last_push_at, last_push_conn_id,
+                    last_push_client_id, route_attempt_conn_ids_json, route_attempt_round,
+                    fast_reroute_pending, awaiting_retry_push, created_at
+             FROM outbound_messages
+             WHERE session_key LIKE ? ESCAPE '\\'
+             ORDER BY id ASC`,
+          )
+          .all(agentSessionKeyLike(scope))
+      : db
+          .prepare(
+            `SELECT message_id, account_id, session_key, route_platform, route_group_id,
+                    route_user_id, payload_json, queue_state, retry_count, next_attempt_at,
+                    last_attempt_at, last_error, last_push_at, last_push_conn_id,
+                    last_push_client_id, route_attempt_conn_ids_json, route_attempt_round,
+                    fast_reroute_pending, awaiting_retry_push, created_at
+             FROM outbound_messages
+             ORDER BY id ASC`,
+          )
+          .all()
+  ) as Array<{
     message_id: string;
     account_id: string;
     session_key: string;
@@ -1458,16 +1950,316 @@ function loadOutboundState(db: DatabaseSync): BncrSqliteOutboundState {
   return { outbox, deadLetter };
 }
 
-export function createBncrSqliteStateDatabase(
-  dbPath: string,
-  options: {
-    now?: () => number;
-    storeMode?: BncrSqliteStoreMode;
-  } = {},
-): BncrSqliteStateDatabase {
-  const now = options.now ?? (() => Date.now());
-  const db = new DatabaseSync(dbPath);
+const LEGACY_ALIAS_ACCOUNT_TABLES = [
+  'outbound_messages',
+  'session_routes',
+  'account_activity',
+] as const;
+
+/**
+ * One-shot startup normalization for legacy alias account ids (empty string, 'default',
+ * 'primary'). Only values with a deterministic mapping are rewritten; unknown legacy ids
+ * have no trustworthy target and stay in place (they remain visible to the
+ * legacy-account-residue probe).
+ */
+export function normalizeLegacyAliasAccountIds(db: DatabaseSync): number {
+  let rewritten = 0;
+  for (const table of LEGACY_ALIAS_ACCOUNT_TABLES) {
+    const rows = db.prepare(`SELECT DISTINCT account_id FROM ${table}`).all() as Array<{
+      account_id: unknown;
+    }>;
+    for (const row of rows) {
+      const stored = String(row.account_id);
+      const raw = stored.trim();
+      if (!raw || raw === BNCR_DEFAULT_ACCOUNT_ID) continue;
+      const normalized = normalizeAccountId(raw);
+      if (normalized === raw) continue;
+      if (table === 'account_activity') {
+        rewritten += mergeAccountActivityAliases(db, stored, normalized);
+        continue;
+      }
+      const result = db
+        .prepare(`UPDATE ${table} SET account_id = ? WHERE account_id = ?`)
+        .run(normalized, stored);
+      rewritten += Number(result.changes);
+    }
+  }
+  if (rewritten > 0) {
+    emitBncrLog(
+      'info',
+      'sqlite',
+      `normalized ${rewritten} legacy alias account id row(s) at startup`,
+    );
+  }
+  return rewritten;
+}
+
+/**
+ * account_activity is UNIQUE(account_id, activity_type): renaming an alias row can
+ * collide with the canonical row of the same activity type. Colliding pairs merge
+ * (canonical row keeps the newest timestamps, alias row is removed); non-colliding
+ * rows are renamed in place.
+ */
+function mergeAccountActivityAliases(
+  db: DatabaseSync,
+  aliasValue: string,
+  normalizedValue: string,
+): number {
+  let merged = 0;
+  const aliasRows = db
+    .prepare(
+      'SELECT activity_type, event_at, updated_at FROM account_activity WHERE account_id = ?',
+    )
+    .all(aliasValue) as Array<{ activity_type: string; event_at: number; updated_at: number }>;
+  for (const aliasRow of aliasRows) {
+    const canonical = db
+      .prepare(
+        'SELECT event_at, updated_at FROM account_activity WHERE account_id = ? AND activity_type = ?',
+      )
+      .get(normalizedValue, aliasRow.activity_type) as
+      | { event_at: number; updated_at: number }
+      | undefined;
+    if (canonical) {
+      db.prepare(
+        'UPDATE account_activity SET event_at = MAX(event_at, ?), updated_at = MAX(updated_at, ?) WHERE account_id = ? AND activity_type = ?',
+      ).run(aliasRow.event_at, aliasRow.updated_at, normalizedValue, aliasRow.activity_type);
+      db.prepare('DELETE FROM account_activity WHERE account_id = ? AND activity_type = ?').run(
+        aliasValue,
+        aliasRow.activity_type,
+      );
+      merged += 1;
+      continue;
+    }
+    merged += Number(
+      db
+        .prepare(
+          'UPDATE account_activity SET account_id = ? WHERE account_id = ? AND activity_type = ?',
+        )
+        .run(normalizedValue, aliasValue, aliasRow.activity_type).changes,
+    );
+  }
+  return merged;
+}
+
+const SQLITE_SNAPSHOT_NAME_PREFIX = 'bncr.sqlite3.snap';
+const SQLITE_SNAPSHOT_RETENTION = 3;
+const SQLITE_CORRUPT_ARCHIVE_RETENTION = 3;
+const SQLITE_RECOVERY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const SQLITE_RECOVERY_CANDIDATE_LIMIT = 8;
+
+function sqliteSnapshotBackupDir(dbPath: string): string {
+  return path.join(path.dirname(dbPath), 'backups');
+}
+
+function sqliteSnapshotTimestamp(now: number): string {
+  const date = new Date(now);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return (
+    `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+    `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
+  );
+}
+
+function quoteSqliteLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function listSqliteSnapshots(
+  backupDir: string,
+): Array<{ filePath: string; name: string; mtimeMs: number }> {
+  if (!existsSync(backupDir)) return [];
+  return readdirSync(backupDir)
+    .filter((name) => name.startsWith(`${SQLITE_SNAPSHOT_NAME_PREFIX}-`))
+    .map((name) => {
+      const filePath = path.join(backupDir, name);
+      return { filePath, name, mtimeMs: statSync(filePath).mtimeMs };
+    });
+}
+
+function assertSqliteSnapshotHealth(db: DatabaseSync): void {
+  const quickCheck = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
+  const invalid = quickCheck.filter((row) => row.quick_check !== 'ok');
+  if (invalid.length > 0) {
+    throw new Error(
+      `bncr sqlite snapshot quick_check failed: ${invalid.map((row) => row.quick_check).join(' | ')}`,
+    );
+  }
+  const foreignKeyViolations = db.prepare('PRAGMA foreign_key_check').all();
+  if (foreignKeyViolations.length > 0) {
+    throw new Error(
+      `bncr sqlite snapshot has ${foreignKeyViolations.length} foreign key violation(s)`,
+    );
+  }
+}
+
+/**
+ * An eligible snapshot passes the same read-only gates as startup (quick_check, foreign
+ * keys, migration lineage, write contract). A snapshot that carries a future migration
+ * or name drift is rejected: promoting it would discard data the newer schema holds.
+ */
+function isSqliteSnapshotEligible(snapshotPath: string): boolean {
+  let db: DatabaseSync | undefined;
   try {
+    db = new DatabaseSync(snapshotPath, { readOnly: true });
+    assertSqliteSnapshotHealth(db);
+    const rows = db
+      .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC')
+      .all() as AppliedMigrationRow[];
+    assertAppliedMigrations(rows);
+    assertSqliteWriteContract(db);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // Preserve the original snapshot rejection.
+    }
+  }
+}
+
+function archiveCorruptSqliteFiles(dbPath: string, now: number): void {
+  const baseDir = path.dirname(dbPath);
+  const baseName = path.basename(dbPath);
+  const archiveBase = `${baseName}.corrupt-${sqliteSnapshotTimestamp(now)}`;
+  let suffixIndex = 0;
+  for (const suffix of ['', '-wal', '-shm']) {
+    const source = suffix === '' ? dbPath : `${dbPath}${suffix}`;
+    if (!existsSync(source)) continue;
+    let target =
+      suffix === ''
+        ? path.join(baseDir, archiveBase)
+        : path.join(baseDir, `${archiveBase}${suffix}`);
+    while (existsSync(target)) {
+      suffixIndex += 1;
+      target =
+        suffix === ''
+          ? path.join(baseDir, `${archiveBase}-${suffixIndex}`)
+          : path.join(baseDir, `${archiveBase}${suffix}-${suffixIndex}`);
+    }
+    renameSync(source, target);
+  }
+  // Keep only the newest corrupt archives; these are plugin forensic files, not user data.
+  const archives = readdirSync(baseDir)
+    .filter((name) => name.startsWith(`${baseName}.corrupt-`))
+    .map((name) => ({ name, mtimeMs: statSync(path.join(baseDir, name)).mtimeMs }))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+  for (const archive of archives.slice(SQLITE_CORRUPT_ARCHIVE_RETENTION)) {
+    rmSync(path.join(baseDir, archive.name), { force: true });
+  }
+}
+
+/**
+ * Promote a verified snapshot to the live path: VACUUM INTO produces a fresh standalone
+ * file, the corrupt live set is archived for rollback, and the promoted file is published
+ * exclusively (never overwrites an existing live file). Returns false when the live path
+ * reappeared concurrently (EEXIST) so the caller can retry a plain open.
+ */
+function promoteSqliteSnapshot(snapshotPath: string, dbPath: string): boolean {
+  const baseDir = path.dirname(dbPath);
+  const staging = path.join(baseDir, `.${path.basename(dbPath)}.promote.${randomUUID()}.tmp`);
+  const source = new DatabaseSync(snapshotPath, { readOnly: true });
+  try {
+    source.exec(`VACUUM INTO ${quoteSqliteLiteral(staging)}`);
+  } finally {
+    source.close();
+  }
+  let promoted = true;
+  try {
+    chmodSync(staging, 0o600);
+    linkSync(staging, dbPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      promoted = false;
+    } else {
+      throw error;
+    }
+  } finally {
+    rmSync(staging, { force: true });
+  }
+  return promoted;
+}
+
+/**
+ * Publish a verified snapshot of the live database into the state backups directory.
+ * Exclusive hardlink publish: existing files are never overwritten, same-second publishes
+ * get an incrementing suffix, and only the newest SQLITE_SNAPSHOT_RETENTION snapshots are
+ * kept. JSON cutover backups in the same directory are never touched.
+ */
+export function rotateSqliteSnapshot(options: {
+  db: DatabaseSync;
+  dbPath: string;
+  now?: () => number;
+}): string | null {
+  const now = options.now ?? (() => Date.now());
+  const backupDir = sqliteSnapshotBackupDir(options.dbPath);
+  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  chmodSync(backupDir, 0o700);
+  const temporary = path.join(backupDir, `.${path.basename(options.dbPath)}.${randomUUID()}.tmp`);
+  options.db.exec(`VACUUM INTO ${quoteSqliteLiteral(temporary)}`);
+  let destination: string | null = null;
+  try {
+    const probe = new DatabaseSync(temporary, { readOnly: true });
+    try {
+      const quickCheck = probe.prepare('PRAGMA quick_check').all() as Array<{
+        quick_check: string;
+      }>;
+      if (quickCheck.some((row) => row.quick_check !== 'ok')) return null;
+    } finally {
+      probe.close();
+    }
+    const timestamp = sqliteSnapshotTimestamp(now());
+    destination = path.join(backupDir, `${SQLITE_SNAPSHOT_NAME_PREFIX}-${timestamp}`);
+    for (let suffix = 1; existsSync(destination); suffix += 1) {
+      destination = path.join(backupDir, `${SQLITE_SNAPSHOT_NAME_PREFIX}-${timestamp}-${suffix}`);
+    }
+    linkSync(temporary, destination);
+    chmodSync(destination, 0o600);
+    const snapshots = listSqliteSnapshots(backupDir)
+      .filter((entry) => entry.filePath !== destination)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+    for (const stale of snapshots.slice(SQLITE_SNAPSHOT_RETENTION - 1)) {
+      rmSync(stale.filePath, { force: true });
+    }
+    return destination;
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+/**
+ * Startup self-recovery: when the live database fails an integrity-class gate, promote
+ * the newest eligible snapshot (verified read-only against the full startup gate set,
+ * bounded by age) so the plugin keeps running from a last-known-good state. The corrupt
+ * live files are archived for rollback. Returns the promoted snapshot name, or null when
+ * no eligible candidate exists (the original error must then propagate, fail closed).
+ */
+export function recoverSqliteFromSnapshot(options: {
+  dbPath: string;
+  now?: () => number;
+}): string | null {
+  const now = options.now ?? (() => Date.now());
+  const candidates = listSqliteSnapshots(sqliteSnapshotBackupDir(options.dbPath))
+    .filter((candidate) => {
+      const ageMs = now() - candidate.mtimeMs;
+      return ageMs >= 0 && ageMs <= SQLITE_RECOVERY_MAX_AGE_MS;
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name))
+    .slice(0, SQLITE_RECOVERY_CANDIDATE_LIMIT);
+  for (const candidate of candidates) {
+    if (!isSqliteSnapshotEligible(candidate.filePath)) continue;
+    archiveCorruptSqliteFiles(options.dbPath, now());
+    if (!promoteSqliteSnapshot(candidate.filePath, options.dbPath)) break;
+    return candidate.name;
+  }
+  return null;
+}
+
+function openLiveSqliteDatabase(dbPath: string): DatabaseSync {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(dbPath);
     db.exec('PRAGMA journal_mode=WAL');
     for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
       try {
@@ -1479,18 +2271,75 @@ export function createBncrSqliteStateDatabase(
     db.exec('PRAGMA synchronous=NORMAL');
     db.exec('PRAGMA foreign_keys=ON');
     db.exec('PRAGMA busy_timeout=5000');
-    applyMigrations(db, now);
+    return db;
   } catch (error) {
     try {
-      db.close();
+      db?.close();
     } catch {
-      // Preserve the startup failure that made the connection unusable.
+      // Preserve the original open failure.
     }
-    throw error;
+    throw new BncrSqliteIntegrityFailure(`bncr sqlite open failed: ${errorMessageOf(error)}`, {
+      cause: error,
+    });
   }
+}
 
-  if (options.storeMode) {
-    setMeta('store_mode', options.storeMode);
+export function createBncrSqliteStateDatabase(
+  dbPath: string,
+  options: {
+    now?: () => number;
+    storeMode?: BncrSqliteStoreMode;
+  } = {},
+): BncrSqliteStateDatabase {
+  const now = options.now ?? (() => Date.now());
+  let liveConnection: DatabaseSync | undefined;
+  let recoveryMeta: { from: string; at: number; reason: string } | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const connection = openLiveSqliteDatabase(dbPath);
+      liveConnection = connection;
+      applyMigrations(connection, now);
+      runWriteTransaction(connection, () => {
+        normalizeLegacyAliasAccountIds(connection);
+      });
+      if (options.storeMode) setMeta('store_mode', options.storeMode);
+      break;
+    } catch (error) {
+      if (liveConnection) {
+        try {
+          liveConnection.close();
+        } catch {
+          // Preserve the startup failure that made the connection unusable.
+        }
+      }
+      liveConnection = undefined;
+      if (attempt === 0 && error instanceof BncrSqliteIntegrityFailure) {
+        const recoveredFrom = recoverSqliteFromSnapshot({ dbPath, now });
+        if (recoveredFrom) {
+          recoveryMeta = {
+            from: recoveredFrom,
+            at: now(),
+            reason: errorMessageOf(error).slice(0, 200),
+          };
+          continue;
+        }
+      }
+      throw error;
+    }
+  }
+  if (liveConnection === undefined) {
+    throw new BncrSqliteIntegrityFailure('bncr sqlite startup exited without an open connection');
+  }
+  const db = liveConnection;
+  if (recoveryMeta) {
+    setMeta('sqlite_last_recovery_at', String(recoveryMeta.at));
+    setMeta('sqlite_last_recovery_from', recoveryMeta.from);
+    setMeta('sqlite_last_recovery_reason', recoveryMeta.reason);
+    emitBncrLog(
+      'warn',
+      'sqlite',
+      `startup recovered from snapshot ${recoveryMeta.from}: ${recoveryMeta.reason}`,
+    );
   }
 
   function getMeta(key: string): string | null {
@@ -1501,11 +2350,13 @@ export function createBncrSqliteStateDatabase(
   }
 
   function setMeta(key: string, value: string): void {
-    db.prepare(
-      `INSERT INTO state_meta (meta_key, meta_value, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at = excluded.updated_at`,
-    ).run(key, value, now());
+    runWriteTransaction(db, () => {
+      db.prepare(
+        `INSERT INTO state_meta (meta_key, meta_value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at = excluded.updated_at`,
+      ).run(key, value, now());
+    });
   }
 
   function getStoreMode(): BncrSqliteStoreMode | null {
@@ -1562,8 +2413,7 @@ export function createBncrSqliteStateDatabase(
         ? buildHistoryShardDedupeKey(historyKey, accountId, bufferKeys, messageIds)
         : `empty:${timestamp}:${Math.random().toString(36).slice(2)}`;
     const messagePlaceholders = messageIds.map(() => '?').join(', ') || 'NULL';
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    return runWriteTransaction(db, () => {
       const existing = db
         .prepare(
           `SELECT id FROM history_shards
@@ -1612,7 +2462,6 @@ export function createBncrSqliteStateDatabase(
                OR ${replayCondition}
              )`,
         ).run(shardId, ...historyParams, ...replayParams);
-        db.exec('COMMIT');
         return { shardId, created: false };
       }
 
@@ -1660,12 +2509,8 @@ export function createBncrSqliteStateDatabase(
              OR ${replayCondition}
            )`,
       ).run(shardId, ...historyParams, ...replayParams);
-      db.exec('COMMIT');
       return { shardId, created: true };
-    } catch (error) {
-      db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
 
   function markHistoryShardProcessing(shardId: number, owner = 'bncr-node'): boolean {
@@ -1674,9 +2519,10 @@ export function createBncrSqliteStateDatabase(
     const ownerCondition = owner
       ? ` AND (claim_owner IS NULL OR claim_owner = ? OR status IN ('queued','failed','abandoned'))`
       : '';
-    const result = db
-      .prepare(
-        `UPDATE history_shards
+    return runWriteTransaction(db, () => {
+      const result = db
+        .prepare(
+          `UPDATE history_shards
        SET status = 'processing',
            claim_token = ?,
            claim_owner = ?,
@@ -1685,18 +2531,19 @@ export function createBncrSqliteStateDatabase(
            upload_started_at = ?,
            updated_at = ?
        WHERE id = ? AND status IN ('queued', 'failed', 'abandoned', 'claimed')${ownerCondition}`,
-      )
-      .run(
-        claimToken,
-        owner,
-        timestamp,
-        timestamp + HISTORY_SHARD_LEASE_MS,
-        timestamp,
-        timestamp,
-        shardId,
-        ...(owner ? [owner] : []),
-      );
-    return Number(result.changes) > 0;
+        )
+        .run(
+          claimToken,
+          owner,
+          timestamp,
+          timestamp + HISTORY_SHARD_LEASE_MS,
+          timestamp,
+          timestamp,
+          shardId,
+          ...(owner ? [owner] : []),
+        );
+      return Number(result.changes) > 0;
+    });
   }
 
   function markHistoryShardFailed(
@@ -1707,24 +2554,25 @@ export function createBncrSqliteStateDatabase(
     const timestamp = now();
     const message =
       typeof error === 'string' ? error : error instanceof Error ? error.message : String(error);
-    const existing = db
-      .prepare('SELECT attempts, claim_owner FROM history_shards WHERE id = ?')
-      .get(shardId) as { attempts: number; claim_owner: string | null } | undefined;
-    if (owner && existing?.claim_owner && existing.claim_owner !== owner) {
-      return {
-        attempts: existing.attempts,
-        terminal: existing.attempts >= HISTORY_SHARD_MAX_ATTEMPTS,
-      };
-    }
-    const attempts = (existing?.attempts ?? 0) + 1;
-    const backoffMs = Math.min(
-      HISTORY_SHARD_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1),
-      HISTORY_SHARD_RETRY_MAX_MS,
-    );
-    const ownerCondition = owner ? ' AND (claim_owner IS NULL OR claim_owner = ?)' : '';
-    const updateResult = db
-      .prepare(
-        `UPDATE history_shards
+    return runWriteTransaction(db, () => {
+      const existing = db
+        .prepare('SELECT attempts, claim_owner FROM history_shards WHERE id = ?')
+        .get(shardId) as { attempts: number; claim_owner: string | null } | undefined;
+      if (owner && existing?.claim_owner && existing.claim_owner !== owner) {
+        return {
+          attempts: existing.attempts,
+          terminal: existing.attempts >= HISTORY_SHARD_MAX_ATTEMPTS,
+        };
+      }
+      const attempts = (existing?.attempts ?? 0) + 1;
+      const backoffMs = Math.min(
+        HISTORY_SHARD_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1),
+        HISTORY_SHARD_RETRY_MAX_MS,
+      );
+      const ownerCondition = owner ? ' AND (claim_owner IS NULL OR claim_owner = ?)' : '';
+      const updateResult = db
+        .prepare(
+          `UPDATE history_shards
          SET status = 'failed',
              attempts = ?,
              last_error = ?,
@@ -1735,37 +2583,39 @@ export function createBncrSqliteStateDatabase(
              next_attempt_at = ?,
              updated_at = ?
          WHERE id = ? AND status IN ('queued', 'claimed', 'processing')${ownerCondition}`,
-      )
-      .run(
-        attempts,
-        message,
-        attempts >= HISTORY_SHARD_MAX_ATTEMPTS ? null : timestamp + backoffMs,
-        timestamp,
-        shardId,
-        ...(owner ? [owner] : []),
-      );
-    if (owner && Number(updateResult.changes) === 0) {
-      const current = db.prepare('SELECT attempts FROM history_shards WHERE id = ?').get(shardId) as
-        | { attempts: number }
-        | undefined;
-      const currentAttempts = Number(current?.attempts ?? 0);
+        )
+        .run(
+          attempts,
+          message,
+          attempts >= HISTORY_SHARD_MAX_ATTEMPTS ? null : timestamp + backoffMs,
+          timestamp,
+          shardId,
+          ...(owner ? [owner] : []),
+        );
+      if (owner && Number(updateResult.changes) === 0) {
+        const current = db
+          .prepare('SELECT attempts FROM history_shards WHERE id = ?')
+          .get(shardId) as { attempts: number } | undefined;
+        const currentAttempts = Number(current?.attempts ?? 0);
+        return {
+          attempts: currentAttempts,
+          terminal: currentAttempts >= HISTORY_SHARD_MAX_ATTEMPTS,
+        };
+      }
       return {
-        attempts: currentAttempts,
-        terminal: currentAttempts >= HISTORY_SHARD_MAX_ATTEMPTS,
+        attempts,
+        terminal: attempts >= HISTORY_SHARD_MAX_ATTEMPTS,
       };
-    }
-    return {
-      attempts,
-      terminal: attempts >= HISTORY_SHARD_MAX_ATTEMPTS,
-    };
+    });
   }
 
   function markHistoryShardCompleted(shardId: number, owner?: string): boolean {
     const timestamp = now();
     const ownerCondition = owner ? ' AND (claim_owner IS NULL OR claim_owner = ?)' : '';
-    const result = db
-      .prepare(
-        `UPDATE history_shards
+    return runWriteTransaction(db, () => {
+      const result = db
+        .prepare(
+          `UPDATE history_shards
          SET status = 'completed',
              claim_token = NULL,
              claim_owner = NULL,
@@ -1775,24 +2625,27 @@ export function createBncrSqliteStateDatabase(
              completed_at = ?,
              updated_at = ?
          WHERE id = ? AND status = 'processing'${ownerCondition}`,
-      )
-      .run(timestamp, timestamp, timestamp, shardId, ...(owner ? [owner] : []));
-    return Number(result.changes) > 0;
+        )
+        .run(timestamp, timestamp, timestamp, shardId, ...(owner ? [owner] : []));
+      return Number(result.changes) > 0;
+    });
   }
 
   function renewHistoryShardLease(shardId: number, owner?: string): boolean {
     const timestamp = now();
     const ownerCondition = owner ? ' AND (claim_owner IS NULL OR claim_owner = ?)' : '';
-    const result = db
-      .prepare(
-        `UPDATE history_shards
+    return runWriteTransaction(db, () => {
+      const result = db
+        .prepare(
+          `UPDATE history_shards
          SET lease_expires_at = ?,
              updated_at = ?
          WHERE id = ?
            AND status IN ('claimed', 'processing')${ownerCondition}`,
-      )
-      .run(timestamp + HISTORY_SHARD_LEASE_MS, timestamp, shardId, ...(owner ? [owner] : []));
-    return Number(result.changes) > 0;
+        )
+        .run(timestamp + HISTORY_SHARD_LEASE_MS, timestamp, shardId, ...(owner ? [owner] : []));
+      return Number(result.changes) > 0;
+    });
   }
 
   function completeHistoryShard(shardId: number, owner?: string): void {
@@ -1816,28 +2669,26 @@ export function createBncrSqliteStateDatabase(
     }
     if (owner && !isOwnedByCurrentOwner()) return;
     try {
-      db.exec('BEGIN IMMEDIATE');
-      const currentShard = db
-        .prepare(
-          `SELECT status, claim_owner
-           FROM history_shards
-           WHERE id = ?`,
-        )
-        .get(shardId) as { status: string; claim_owner: string | null } | undefined;
-      if (
-        !currentShard ||
-        (owner && currentShard.claim_owner && currentShard.claim_owner !== owner) ||
-        (currentShard.status !== 'processing' && currentShard.status !== 'completed')
-      ) {
-        db.exec('COMMIT');
-        return;
-      }
-      recordConsumedHistoryShardMessages(db, shardId, now());
-      db.prepare('DELETE FROM conversation_messages WHERE shard_id = ?').run(shardId);
-      db.prepare('DELETE FROM history_shards WHERE id = ?').run(shardId);
-      db.exec('COMMIT');
+      runWriteTransaction(db, () => {
+        const currentShard = db
+          .prepare(
+            `SELECT status, claim_owner
+             FROM history_shards
+             WHERE id = ?`,
+          )
+          .get(shardId) as { status: string; claim_owner: string | null } | undefined;
+        if (
+          !currentShard ||
+          (owner && currentShard.claim_owner && currentShard.claim_owner !== owner) ||
+          (currentShard.status !== 'processing' && currentShard.status !== 'completed')
+        ) {
+          return;
+        }
+        recordConsumedHistoryShardMessages(db, shardId, now());
+        db.prepare('DELETE FROM conversation_messages WHERE shard_id = ?').run(shardId);
+        db.prepare('DELETE FROM history_shards WHERE id = ?').run(shardId);
+      });
     } catch (error) {
-      db.exec('ROLLBACK');
       if (!markedCompleted) {
         try {
           markHistoryShardCompleted(shardId, owner);
@@ -1887,9 +2738,10 @@ export function createBncrSqliteStateDatabase(
       ? ` AND (claim_owner IS NULL OR claim_owner = 'bncr-node' OR claim_owner = ? OR claim_owner LIKE ?)`
       : '';
     const ownerParams = owner ? [owner, `${String(owner).split(':')[0]}:%`] : [];
-    const result = db
-      .prepare(
-        `UPDATE history_shards
+    return runWriteTransaction(db, () => {
+      const result = db
+        .prepare(
+          `UPDATE history_shards
          SET status = 'queued',
              last_error = 'stale lease recovered',
              next_attempt_at = NULL,
@@ -1901,9 +2753,10 @@ export function createBncrSqliteStateDatabase(
          WHERE status IN ('claimed', 'processing')
            AND lease_expires_at IS NOT NULL
            AND lease_expires_at < ?${skipCondition}${ownerCondition}`,
-      )
-      .run(timestamp, timestamp, ...skipped, ...ownerParams);
-    return Number(result.changes);
+        )
+        .run(timestamp, timestamp, ...skipped, ...ownerParams);
+      return Number(result.changes);
+    });
   }
 
   function recoverInFlightHistoryShards(
@@ -1917,9 +2770,10 @@ export function createBncrSqliteStateDatabase(
       ? ` AND (claim_owner IS NULL OR claim_owner = 'bncr-node' OR claim_owner = ? OR claim_owner LIKE ?)`
       : '';
     const ownerParams = owner ? [owner, `${String(owner).split(':')[0]}:%`] : [];
-    const result = db
-      .prepare(
-        `UPDATE history_shards
+    return runWriteTransaction(db, () => {
+      const result = db
+        .prepare(
+          `UPDATE history_shards
          SET status = 'queued',
              last_error = 'startup in-flight recovered',
              next_attempt_at = NULL,
@@ -1929,9 +2783,10 @@ export function createBncrSqliteStateDatabase(
              lease_expires_at = NULL,
              updated_at = ?
          WHERE status IN ('claimed', 'processing', 'abandoned')${skipCondition}${ownerCondition}`,
-      )
-      .run(timestamp, ...skipped, ...ownerParams);
-    return Number(result.changes);
+        )
+        .run(timestamp, ...skipped, ...ownerParams);
+      return Number(result.changes);
+    });
   }
 
   function claimNextHistoryShard(
@@ -1945,8 +2800,7 @@ export function createBncrSqliteStateDatabase(
       ? ` AND (claim_owner IS NULL OR claim_owner = 'bncr-node' OR claim_owner = ? OR claim_owner LIKE ?)`
       : '';
     const ownerParams = owner ? [owner, `${String(owner).split(':')[0]}:%`] : [];
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    return runWriteTransaction(db, () => {
       db.prepare(
         `UPDATE history_shards
          SET status = 'queued',
@@ -1992,7 +2846,6 @@ export function createBncrSqliteStateDatabase(
           }
         | undefined;
       if (!row) {
-        db.exec('COMMIT');
         return null;
       }
       const claimToken = `bncr:${row.id}:${timestamp}:${Math.random().toString(36).slice(2)}`;
@@ -2006,7 +2859,6 @@ export function createBncrSqliteStateDatabase(
              updated_at = ?
          WHERE id = ? AND status IN ('queued', 'failed')`,
       ).run(claimToken, owner, timestamp, timestamp + HISTORY_SHARD_LEASE_MS, timestamp, row.id);
-      db.exec('COMMIT');
       return {
         id: row.id,
         historyKey: row.history_key,
@@ -2020,10 +2872,7 @@ export function createBncrSqliteStateDatabase(
         nextAttemptAt: row.next_attempt_at,
         ...(owner ? { owner } : {}),
       };
-    } catch (error) {
-      db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
 
   function listHistoryShards() {
@@ -2066,6 +2915,7 @@ export function createBncrSqliteStateDatabase(
   return {
     getPath: () => dbPath,
     close: () => db.close(),
+    rotateSnapshot: () => rotateSqliteSnapshot({ db, dbPath, now }),
     getStoreMode,
     isControlStateImported: () => getMeta('legacy_json_imported_at') !== null,
     isHistoryImported: () => getMeta('history_imported_at') !== null,
@@ -2082,10 +2932,10 @@ export function createBncrSqliteStateDatabase(
       setMeta('store_mode', importOptions.storeMode ?? 'dual');
     },
     loadControlState: () => loadControlState(db),
-    saveControlState: (state) => {
+    saveControlState: (state, scope, removedScenes) => {
       const mode = getStoreMode();
       assertWritable(mode);
-      replaceControlState(db, state, now);
+      replaceControlState(db, state, now, scope?.agentId ?? null, removedScenes);
     },
     importHistoryState: (historyBuckets, replayBuckets) => {
       const mode = getStoreMode();
@@ -2113,11 +2963,11 @@ export function createBncrSqliteStateDatabase(
       assertWritable(mode);
       replaceOutboundState(db, outbox, deadLetter, now);
     },
-    loadOutboundState: () => loadOutboundState(db),
-    saveOutboundState: (outbox, deadLetter) => {
+    loadOutboundState: (scope) => loadOutboundState(db, scope?.agentId ?? null),
+    saveOutboundState: (outbox, deadLetter, scope) => {
       const mode = getStoreMode();
       assertWritable(mode);
-      replaceOutboundState(db, outbox, deadLetter, now);
+      replaceOutboundState(db, outbox, deadLetter, now, scope?.agentId ?? null);
     },
     createHistoryShard,
     markHistoryShardProcessing,
@@ -2141,6 +2991,8 @@ export function validateSqliteMigrationChecksums(dbPath: string): string[] {
       .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC')
       .all() as AppliedMigrationRow[];
     assertAppliedMigrations(rows);
+    assertSqliteDatabaseHealth(db);
+    assertSqliteWriteContract(db);
     return rows.map((row) => `${row.version}:${row.checksum}`);
   } finally {
     db.close();

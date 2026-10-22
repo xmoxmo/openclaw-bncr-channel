@@ -9,6 +9,7 @@ import {
   readBncrSessionUpdatedAt,
   resolveBncrInboundSessionStorePath,
 } from '../../openclaw/inbound-session-runtime.ts';
+import { resolveBncrMediaMaxBytes } from '../../openclaw/media-limit-runtime.ts';
 import { saveOpenClawChannelMediaBuffer } from '../../openclaw/media-runtime.ts';
 import {
   formatOpenClawAgentEnvelope,
@@ -19,7 +20,7 @@ import {
   resolveOpenClawAgentRoute,
 } from '../../openclaw/routing-runtime.ts';
 import type { BncrInboundApi, BncrInboundConfig, BncrRememberSessionRoute } from './contracts.ts';
-import { INBOUND_MEDIA_URL_MAX_BYTES, isHttpMediaUrl } from './media-url-download.ts';
+import { isHttpMediaUrl } from './media-url-download.ts';
 import { parseBncrNativeCommand, resolveBncrNativeCommandParseOptions } from './native-command.ts';
 import { loadInboundRemoteMedia } from './remote-media.ts';
 
@@ -78,8 +79,6 @@ export type BncrInboundPreparation = {
   bridgeSenderId?: string;
   bridgeSenderName?: string;
 };
-
-const INBOUND_MEDIA_MAX_BYTES = 30 * 1024 * 1024;
 
 const BNCR_GENERIC_MEDIA_TEXTS = new Set([
   '收到媒体文件',
@@ -191,6 +190,7 @@ function resolveBncrInboundRawBody(args: {
 async function saveBncrInboundMediaItem(args: {
   api: BncrInboundApi;
   item: ParsedInbound['mediaItems'][number];
+  maxBytes: number;
 }) {
   const pathFromTransfer = String(args.item?.path || '').trim();
   const base64 = String(args.item?.base64 || '').trim();
@@ -200,29 +200,25 @@ async function saveBncrInboundMediaItem(args: {
   let mediaPath: string | undefined;
   let mediaContentType = mimeType;
   if (base64) {
-    const mediaBuf = decodeInboundMediaBase64(base64);
+    const mediaBuf = decodeInboundMediaBase64(base64, args.maxBytes);
     const saved = await saveOpenClawChannelMediaBuffer(
       args.api,
       mediaBuf,
       mimeType,
       'inbound',
-      30 * 1024 * 1024,
+      args.maxBytes,
       fileName,
     );
     mediaPath = saved.path;
   } else if (pathFromTransfer && isHttpMediaUrl(pathFromTransfer)) {
-    const downloaded = await loadInboundRemoteMedia(
-      args.api,
-      pathFromTransfer,
-      INBOUND_MEDIA_URL_MAX_BYTES,
-    );
+    const downloaded = await loadInboundRemoteMedia(args.api, pathFromTransfer, args.maxBytes);
     mediaContentType = downloaded.contentType || mimeType;
     const saved = await saveOpenClawChannelMediaBuffer(
       args.api,
       downloaded.buffer,
       mediaContentType,
       'inbound',
-      INBOUND_MEDIA_URL_MAX_BYTES,
+      args.maxBytes,
       fileName,
     );
     mediaPath = saved.path;
@@ -299,7 +295,7 @@ export function estimateBase64DecodedBytes(value: string): number {
   return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
 }
 
-export function assertInboundMediaBase64Size(value: string, maxBytes = INBOUND_MEDIA_MAX_BYTES) {
+export function assertInboundMediaBase64Size(value: string, maxBytes: number) {
   const estimatedBytes = estimateBase64DecodedBytes(value);
   if (estimatedBytes > maxBytes) {
     throw new Error(
@@ -308,10 +304,7 @@ export function assertInboundMediaBase64Size(value: string, maxBytes = INBOUND_M
   }
 }
 
-export function decodeInboundMediaBase64(
-  value: string,
-  maxBytes = INBOUND_MEDIA_MAX_BYTES,
-): Buffer {
+export function decodeInboundMediaBase64(value: string, maxBytes: number): Buffer {
   assertInboundMediaBase64Size(value, maxBytes);
   const normalized = String(value || '').replace(/\s+/g, '');
   const mediaBuf = Buffer.from(normalized, 'base64');
@@ -347,6 +340,7 @@ export async function prepareBncrInboundSessionContext(args: {
   } = parsed;
   const { accountId, route, resolvedRoute, baseSessionKey, taskSessionKey, dispatchSessionKey } =
     resolution;
+  const mediaMaxBytes = resolveBncrMediaMaxBytes(args.api, accountId);
 
   rememberSessionRoute(baseSessionKey, accountId, route);
   if (taskSessionKey && taskSessionKey !== baseSessionKey) {
@@ -377,6 +371,7 @@ export async function prepareBncrInboundSessionContext(args: {
         saveBncrInboundMediaItem({
           api,
           item,
+          maxBytes: mediaMaxBytes,
         }),
       ),
     )

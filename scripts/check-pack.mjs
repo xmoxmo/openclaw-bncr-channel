@@ -94,6 +94,7 @@ const requiredSourceFiles = [
   'src/messaging/outbound/target-resolver.ts',
   'src/openclaw/config-runtime.ts',
   'src/openclaw/inbound-session-runtime.ts',
+  'src/openclaw/media-limit-runtime.ts',
   'src/openclaw/session-reset-runtime.ts',
   'src/openclaw/media-runtime.ts',
   'src/openclaw/reply-runtime.ts',

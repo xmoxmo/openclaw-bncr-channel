@@ -17,6 +17,7 @@ import {
   HISTORY_HELP_TEXT,
   parseSceneAdminCommand,
 } from '../../src/messaging/inbound/scene-admin.ts';
+import { resolveSceneRecord, setSceneRecord } from '../../src/plugin/scene-registry.ts';
 
 test('parseBncrNativeCommand only recognizes bncr builtin /bncr subcommands, with help remapped only', () => {
   assert.deepEqual(parseBncrNativeCommand('/bncr'), {
@@ -534,20 +535,16 @@ test('parseSceneAdminCommand parses allow deny revoke bind mode and list command
 });
 
 test('executeSceneAdminCommand requires admin and mutates scene registry deterministically', () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 1,
+  });
   const parsed = {
     isAdmin: true,
     userId: '1',
@@ -576,7 +573,7 @@ test('executeSceneAdminCommand requires admin and mutates scene registry determi
     }),
     { ok: true, text: 'Allowed scene tgBot:10001.' },
   );
-  assert.deepEqual(sceneRegistry.get('tgBot:10001'), {
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
     status: 'allowed',
@@ -598,7 +595,7 @@ test('executeSceneAdminCommand requires admin and mutates scene registry determi
     }),
     { ok: true, text: 'Bound tgBot:10001 to agent public-x.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:10001')?.agentId, 'public-x');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.agentId, 'public-x');
 
   assert.deepEqual(
     executeSceneAdminCommand({
@@ -611,7 +608,7 @@ test('executeSceneAdminCommand requires admin and mutates scene registry determi
     }),
     { ok: true, text: 'Revoked scene tgBot:10001.' },
   );
-  assert.equal(sceneRegistry.has('tgBot:10001'), false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001') !== undefined, false);
 });
 
 test('parseSceneAdminCommand parses history-limit and history-force commands', () => {
@@ -698,23 +695,19 @@ test('parseSceneAdminCommand parses history-limit and history-force commands', (
 });
 
 test('executeSceneAdminCommand handles history commands', () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        agentId: 'public',
-        groupReplyMode: 'admin',
-        historyLimit: 50,
-        historyForce: true,
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'public',
+    groupReplyMode: 'admin',
+    historyLimit: 50,
+    historyForce: true,
+    lastSeenAt: 1,
+  });
   const parsed = { isAdmin: true, peer: { kind: 'group' }, platform: 'tgBot', groupId: '-1001' };
 
   // history-help returns help text
@@ -770,7 +763,7 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: true, text: 'Set tgBot:-1001 history limit to 100.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 100);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').historyLimit, 100);
 
   // history-limit-set with hidden negative value
   assert.deepEqual(
@@ -784,7 +777,7 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: true, text: 'Set tgBot:-1001 history limit to 10.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 10);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').historyLimit, 10);
 
   // history-limit-set with the minimum accepted value
   assert.deepEqual(
@@ -801,7 +794,7 @@ test('executeSceneAdminCommand handles history commands', () => {
       text: 'Set tgBot:-1001 history limit to 2.',
     },
   );
-  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 2);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').historyLimit, 2);
 
   // history-limit-set with negative too small (abs < 2) → error
   assert.deepEqual(
@@ -831,7 +824,7 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: true, text: 'Set tgBot:-1001 history limit to 2.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 2);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').historyLimit, 2);
 
   // history-limit-set with large positive value is capped
   assert.deepEqual(
@@ -845,7 +838,7 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: true, text: 'Set tgBot:-1001 history limit to 10000.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:-1001').historyLimit, 10000);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').historyLimit, 10000);
 
   // history-force-get returns current value
   assert.deepEqual(
@@ -872,7 +865,7 @@ test('executeSceneAdminCommand handles history commands', () => {
     }),
     { ok: true, text: 'Set tgBot:-1001 history auto flush to off.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:-1001').historyForce, false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').historyForce, false);
 
   // non-admin is rejected for history commands
   assert.deepEqual(
@@ -889,19 +882,15 @@ test('executeSceneAdminCommand handles history commands', () => {
 });
 
 test('executeSceneAdminCommand history shortcuts resolve the current private chat scene', () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    lastSeenAt: 1,
+  });
   const parsed = {
     isAdmin: true,
     peer: { kind: 'direct' },
@@ -933,7 +922,7 @@ test('executeSceneAdminCommand history shortcuts resolve the current private cha
     }),
     { ok: true, text: 'Set tgBot:10001 history limit to 100.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:10001')?.historyLimit, 100);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.historyLimit, 100);
 
   assert.deepEqual(
     executeSceneAdminCommand({
@@ -946,7 +935,7 @@ test('executeSceneAdminCommand history shortcuts resolve the current private cha
     }),
     { ok: true, text: 'Set tgBot:10001 history auto flush to off.' },
   );
-  assert.equal(sceneRegistry.get('tgBot:10001')?.historyForce, false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.historyForce, false);
 });
 
 test('parseSceneAdminCommand: mode clear', () => {
@@ -1029,20 +1018,16 @@ test('parseSceneAdminCommand: download-media on/off/clear/default', () => {
 });
 
 test('executeSceneAdminCommand: mode clear removes groupReplyMode', () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupReplyMode: 'all',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupReplyMode: 'all',
+    lastSeenAt: 1,
+  });
   const result = executeSceneAdminCommand({
     parsed: { isAdmin: true, userId: '1' },
     command: { kind: 'mode', sceneKey: 'tgBot:-1001', mode: 'clear' },
@@ -1053,25 +1038,21 @@ test('executeSceneAdminCommand: mode clear removes groupReplyMode', () => {
   });
   assert.equal(result.ok, true);
   assert.match(result.text, /Cleared/);
-  const scene = sceneRegistry.get('tgBot:-1001');
+  const scene = resolveSceneRecord(sceneRegistry, 'tgBot:-1001');
   assert.equal(scene.groupReplyMode, undefined);
 });
 
 test('executeSceneAdminCommand: history-limit clear removes historyLimit', () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        historyLimit: 100,
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    historyLimit: 100,
+    lastSeenAt: 1,
+  });
   const result = executeSceneAdminCommand({
     parsed: { isAdmin: true, userId: '1' },
     command: { kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 'clear' },
@@ -1082,25 +1063,21 @@ test('executeSceneAdminCommand: history-limit clear removes historyLimit', () =>
   });
   assert.equal(result.ok, true);
   assert.match(result.text, /Cleared/);
-  const scene = sceneRegistry.get('tgBot:-1001');
+  const scene = resolveSceneRecord(sceneRegistry, 'tgBot:-1001');
   assert.equal(scene.historyLimit, undefined);
 });
 
 test('executeSceneAdminCommand: history-force clear removes historyForce', () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        historyForce: false,
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    historyForce: false,
+    lastSeenAt: 1,
+  });
   const result = executeSceneAdminCommand({
     parsed: { isAdmin: true, userId: '1' },
     command: { kind: 'history-force-set', sceneKey: 'tgBot:-1001', enabled: 'clear' },
@@ -1111,24 +1088,20 @@ test('executeSceneAdminCommand: history-force clear removes historyForce', () =>
   });
   assert.equal(result.ok, true);
   assert.match(result.text, /Cleared/);
-  const scene = sceneRegistry.get('tgBot:-1001');
+  const scene = resolveSceneRecord(sceneRegistry, 'tgBot:-1001');
   assert.equal(scene.historyForce, undefined);
 });
 
 test('executeSceneAdminCommand: download-media set/clear', () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    lastSeenAt: 1,
+  });
   // Set on
   let result = executeSceneAdminCommand({
     parsed: { isAdmin: true, userId: '1' },
@@ -1139,7 +1112,7 @@ test('executeSceneAdminCommand: download-media set/clear', () => {
     now: () => 2,
   });
   assert.equal(result.ok, true);
-  assert.equal(sceneRegistry.get('tgBot:-1001').downloadMedia, true);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').downloadMedia, true);
 
   // Clear
   result = executeSceneAdminCommand({
@@ -1152,7 +1125,7 @@ test('executeSceneAdminCommand: download-media set/clear', () => {
   });
   assert.equal(result.ok, true);
   assert.match(result.text, /Cleared/);
-  assert.equal(sceneRegistry.get('tgBot:-1001').downloadMedia, undefined);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001').downloadMedia, undefined);
 });
 
 test('executeSceneAdminCommand: download-media global get/set', () => {
@@ -1167,7 +1140,7 @@ test('executeSceneAdminCommand: download-media global get/set', () => {
     now: () => 1,
   });
   assert.equal(result.ok, true);
-  const globalScene = sceneRegistry.get('__global__');
+  const globalScene = resolveSceneRecord(sceneRegistry, '__global__');
   assert.equal(globalScene?.downloadMedia, true);
 
   // Get global

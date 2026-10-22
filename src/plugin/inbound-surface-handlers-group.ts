@@ -117,8 +117,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
   fileRecvTransfers: Parameters<
     typeof createBncrFileInboundHandlersComponent
   >[0]['fileRecvTransfers'];
-  inboundFileTransferMaxBytes: number;
-  inboundFileTransferMaxChunks: number;
+  resolveInboundFileTransferMaxBytes: (accountId: string) => number;
 }) {
   const fileInboundHandlers = createBncrFileInboundHandlersComponent({
     getApi: runtime.getApi,
@@ -133,8 +132,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     logWarn: runtime.logWarn,
     buildCanonicalSessionKey: runtime.buildCanonicalSessionKey,
     fileRecvTransfers: runtime.fileRecvTransfers,
-    inboundFileTransferMaxBytes: runtime.inboundFileTransferMaxBytes,
-    inboundFileTransferMaxChunks: runtime.inboundFileTransferMaxChunks,
+    resolveInboundFileTransferMaxBytes: runtime.resolveInboundFileTransferMaxBytes,
   });
 
   const inboundHandlers = createBncrInboundHandlersComponent({

@@ -6,10 +6,10 @@ import { resolveBncrChannelPolicy } from '../core/policy.ts';
 import type { BncrRoute } from '../core/types.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
+import { resolveBncrMediaMaxBytes } from '../openclaw/media-limit-runtime.ts';
 import {
   decodeOpenClawSendBuffer,
   isOpenClawSendBufferMediaUrl,
-  OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES,
   saveOpenClawChannelMediaBuffer,
 } from '../openclaw/media-runtime.ts';
 import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sdk-helpers.ts';
@@ -181,6 +181,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
       const resolvedAccountId = normalizeAccountId(
         (readOpenClawStringParam(paramsObj, 'accountId') ?? accountId) || '',
       );
+      const mediaMaxBytes = resolveBncrMediaMaxBytes(runtime.getApi(), resolvedAccountId);
       if (action === 'delete' || action === 'unsend') {
         const to = readOpenClawStringParam(paramsObj, 'to', { required: true });
         const messageId =
@@ -252,14 +253,14 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
           mimeType: typeof paramsObj.mimeType === 'string' ? paramsObj.mimeType : undefined,
           filename: typeof paramsObj.filename === 'string' ? paramsObj.filename : undefined,
           fileName: typeof paramsObj.fileName === 'string' ? paramsObj.fileName : undefined,
-          maxBytes: OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES,
+          maxBytes: mediaMaxBytes,
         });
         const saved = await saveOpenClawChannelMediaBuffer(
           runtime.getApi(),
           decoded.buffer,
           decoded.mimeType,
           'outbound',
-          OPENCLAW_OUTBOUND_MEDIA_MAX_BYTES,
+          mediaMaxBytes,
           decoded.fileName,
         );
         toolMediaUrl = saved.path;

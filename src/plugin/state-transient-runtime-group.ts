@@ -106,7 +106,17 @@ export function createBncrStateTransientRuntimeGroup(runtime: {
     createSqliteState: async (statePath) => {
       if (!statePath || !shouldEnableBncrSqliteState(statePath)) return null;
       const { createBncrSqliteStateDatabase } = await import('./sqlite-state.ts');
-      return createBncrSqliteStateDatabase(path.join(path.dirname(statePath), 'bncr.sqlite3'));
+      const sqliteState = createBncrSqliteStateDatabase(
+        path.join(path.dirname(statePath), 'bncr.sqlite3'),
+      );
+      try {
+        // Best effort: keep a verified snapshot for startup self-recovery. A snapshot
+        // failure must not block startup; the next rotation gets another chance.
+        sqliteState.rotateSnapshot();
+      } catch {
+        runtime.logInfo('sqlite', 'startup snapshot rotation failed');
+      }
+      return sqliteState;
     },
   });
 

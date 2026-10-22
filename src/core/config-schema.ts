@@ -1,3 +1,5 @@
+export const DEFAULT_BNCR_MEDIA_MAX_MB = 2048;
+
 export const BncrConfigSchema = {
   schema: {
     type: 'object',
@@ -49,6 +51,13 @@ export const BncrConfigSchema = {
         description:
           'Whether outbound text waits for bncr.ack before leaving the retry queue. Default true to preserve current ack/dead-letter behavior.',
       },
+      mediaMaxMb: {
+        type: 'number',
+        exclusiveMinimum: 0,
+        default: DEFAULT_BNCR_MEDIA_MAX_MB,
+        description:
+          'Maximum Bncr media/file size in MiB. Default 2048 (2 GiB). This is the single Bncr size limit.',
+      },
       accounts: {
         type: 'object',
         additionalProperties: {
@@ -57,6 +66,12 @@ export const BncrConfigSchema = {
           properties: {
             enabled: { type: 'boolean' },
             name: { type: 'string' },
+            mediaMaxMb: {
+              type: 'number',
+              exclusiveMinimum: 0,
+              description:
+                'Optional per-account override for the Bncr media/file size limit in MiB.',
+            },
           },
         },
       },

@@ -11,6 +11,7 @@ import { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
 import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from '../messaging/outbound/reasons.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import { getOpenClawRuntimeConfig } from '../openclaw/config-runtime.ts';
+import { resolveBncrMediaMaxBytes } from '../openclaw/media-limit-runtime.ts';
 import { saveOpenClawChannelMediaBuffer } from '../openclaw/media-runtime.ts';
 import { createBncrConnectionHandlers } from './connection-handlers.ts';
 import { createBncrDiagnosticsHandlers } from './diagnostics-handlers.ts';
@@ -150,8 +151,7 @@ export function createBncrFileInboundHandlersComponent(runtime: {
     typeof createBncrFileInboundHandlers
   >[0]['buildCanonicalSessionKey'];
   fileRecvTransfers: Parameters<typeof createBncrFileInboundHandlers>[0]['fileRecvTransfers'];
-  inboundFileTransferMaxBytes: number;
-  inboundFileTransferMaxChunks: number;
+  resolveInboundFileTransferMaxBytes: (accountId: string) => number;
 }) {
   return createBncrFileInboundHandlers({
     asString: runtime.asString,
@@ -166,18 +166,17 @@ export function createBncrFileInboundHandlersComponent(runtime: {
     parseRouteLike,
     normalizeStoredSessionKey,
     buildCanonicalSessionKey: runtime.buildCanonicalSessionKey,
-    saveInboundMediaBuffer: async ({ buffer, mimeType, fileName }) =>
+    saveInboundMediaBuffer: async ({ accountId, buffer, mimeType, fileName }) =>
       await saveOpenClawChannelMediaBuffer(
         runtime.getApi(),
         buffer,
         mimeType,
         'inbound',
-        50 * 1024 * 1024,
+        resolveBncrMediaMaxBytes(runtime.getApi(), accountId),
         fileName,
       ),
     fileRecvTransfers: runtime.fileRecvTransfers,
-    inboundFileTransferMaxBytes: runtime.inboundFileTransferMaxBytes,
-    inboundFileTransferMaxChunks: runtime.inboundFileTransferMaxChunks,
+    resolveInboundFileTransferMaxBytes: runtime.resolveInboundFileTransferMaxBytes,
   });
 }
 

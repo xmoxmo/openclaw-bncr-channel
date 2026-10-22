@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import { dispatchBncrInbound } from '../../src/messaging/inbound/dispatch.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
+import { resolveSceneRecord, setSceneRecord } from '../../src/plugin/scene-registry.ts';
 import { withConsoleCapture } from '../helpers/console-capture.mjs';
 import { buildParsedInboundText, createInboundApiStub } from '../helpers/inbound-runtime.mjs';
 
@@ -851,20 +852,17 @@ test('bare whoami command falls through to OpenClaw native handling for admin ca
 
 test('scene admin allow command updates pending registry and replies natively', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -902,8 +900,8 @@ test('scene admin allow command updates pending registry and replies natively', 
   assert.equal(result.accountId, 'Primary');
   assert.equal(enqueueCalls.length, 1);
   assert.equal(enqueueCalls[0].payload.text, 'Allowed scene tgBot:10001.');
-  assert.equal(sceneRegistry.get('tgBot:10001')?.status, 'allowed');
-  assert.equal(sceneRegistry.get('tgBot:10001')?.agentId, 'main');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.status, 'allowed');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.agentId, 'main');
 });
 
 test('scene admin allow without current-group context rejects without falling through to agent', async () => {
@@ -950,20 +948,17 @@ test('scene admin allow without current-group context rejects without falling th
 
 test('scene admin deny command marks scene denied', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -997,26 +992,23 @@ test('scene admin deny command marks scene denied', async () => {
   });
 
   assert.equal(enqueueCalls[0].payload.text, 'Denied scene tgBot:10001.');
-  assert.equal(sceneRegistry.get('tgBot:10001')?.status, 'denied');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.status, 'denied');
 });
 
 test('scene admin bind command only updates agent binding', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1050,28 +1042,25 @@ test('scene admin bind command only updates agent binding', async () => {
   });
 
   assert.equal(enqueueCalls[0].payload.text, 'Bound tgBot:-1001 to agent custom-agent.');
-  assert.equal(sceneRegistry.get('tgBot:-1001')?.status, 'allowed');
-  assert.equal(sceneRegistry.get('tgBot:-1001')?.agentId, 'custom-agent');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001')?.status, 'allowed');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001')?.agentId, 'custom-agent');
 });
 
 test('scene admin bind command supports current group shorthand', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        groupReplyMode: 'admin',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    groupReplyMode: 'admin',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1107,27 +1096,24 @@ test('scene admin bind command supports current group shorthand', async () => {
   });
 
   assert.equal(enqueueCalls[0].payload.text, 'Bound tgBot:-1001 to agent custom-agent.');
-  assert.equal(sceneRegistry.get('tgBot:-1001')?.agentId, 'custom-agent');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001')?.agentId, 'custom-agent');
 });
 
 test('scene admin mode command updates group reply mode with explicit scene key', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        groupReplyMode: 'admin',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    groupReplyMode: 'admin',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1161,27 +1147,24 @@ test('scene admin mode command updates group reply mode with explicit scene key'
   });
 
   assert.equal(enqueueCalls[0].payload.text, 'Set tgBot:-1001 reply mode to hybrid.');
-  assert.equal(sceneRegistry.get('tgBot:-1001')?.groupReplyMode, 'hybrid');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001')?.groupReplyMode, 'hybrid');
 });
 
 test('scene admin mode command updates current group reply mode without explicit scene key', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        groupReplyMode: 'admin',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    groupReplyMode: 'admin',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1217,27 +1200,24 @@ test('scene admin mode command updates current group reply mode without explicit
   });
 
   assert.equal(enqueueCalls[0].payload.text, 'Set tgBot:-1001 reply mode to hybrid.');
-  assert.equal(sceneRegistry.get('tgBot:-1001')?.groupReplyMode, 'hybrid');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001')?.groupReplyMode, 'hybrid');
 });
 
 test('scene admin mode command queries current group reply mode in group chat', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        groupReplyMode: 'mention',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    groupReplyMode: 'mention',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1364,21 +1344,18 @@ test('scene admin mode help returns dedicated mode guidance', async () => {
 
 test('scene admin revoke command deletes record for later re-apply', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        agentId: 'main',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    agentId: 'main',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1412,27 +1389,23 @@ test('scene admin revoke command deletes record for later re-apply', async () =>
   });
 
   assert.equal(enqueueCalls[0].payload.text, 'Revoked scene tgBot:10001.');
-  assert.equal(sceneRegistry.has('tgBot:10001'), false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001') !== undefined, false);
 });
 
 test('scene admin allow/deny/revoke commands support current group shorthand', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'denied',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        groupReplyMode: 'admin',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'denied',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    groupReplyMode: 'admin',
+    lastSeenAt: 1,
+  });
 
   const enqueueCalls = [];
   const run = async (msg, msgId) =>
@@ -1469,46 +1442,40 @@ test('scene admin allow/deny/revoke commands support current group shorthand', a
 
   await run('/bncr allow', 'slash-allow-current-1');
   assert.equal(enqueueCalls.at(-1).payload.text, 'Allowed scene tgBot:-1001.');
-  assert.equal(sceneRegistry.get('tgBot:-1001')?.status, 'allowed');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001')?.status, 'allowed');
 
   await run('/bncr deny', 'slash-deny-current-1');
   assert.equal(enqueueCalls.at(-1).payload.text, 'Denied scene tgBot:-1001.');
-  assert.equal(sceneRegistry.get('tgBot:-1001')?.status, 'denied');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001')?.status, 'denied');
 
   await run('/bncr revoke', 'slash-revoke-current-1');
   assert.equal(enqueueCalls.at(-1).payload.text, 'Revoked scene tgBot:-1001.');
-  assert.equal(sceneRegistry.has('tgBot:-1001'), false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001') !== undefined, false);
 });
 
 test('scene admin list pending only includes pending records', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 2,
-      },
-    ],
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 2,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1549,47 +1516,38 @@ test('scene admin list pending only includes pending records', async () => {
 
 test('scene admin list pending filters pending scenes by search terms', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 2,
-      },
-    ],
-    [
-      'tgBot:-1002',
-      {
-        sceneKey: 'tgBot:-1002',
-        kind: 'group',
-        status: 'pending',
-        platform: 'tgBot',
-        groupId: '-1002',
-        groupName: 'beta_group',
-        agentId: 'zeta',
-        groupReplyMode: 'mention',
-        lastSeenAt: 3,
-      },
-    ],
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 2,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1002',
+    kind: 'group',
+    status: 'pending',
+    platform: 'tgBot',
+    groupId: '-1002',
+    groupName: 'beta_group',
+    agentId: 'zeta',
+    groupReplyMode: 'mention',
+    lastSeenAt: 3,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1630,20 +1588,17 @@ test('scene admin list pending filters pending scenes by search terms', async ()
 
 test('scene admin list pending reports when filters match no pending scenes', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1681,33 +1636,27 @@ test('scene admin list pending reports when filters match no pending scenes', as
 
 test('scene admin list scenes returns private groups first and group groups sorted by title', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 2,
-      },
-    ],
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        agentId: 'public',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 2,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    agentId: 'public',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1748,48 +1697,39 @@ test('scene admin list scenes returns private groups first and group groups sort
 
 test('scene admin list scenes sorts multiple group chat sections by title after private chat sections', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1002',
-      {
-        sceneKey: 'tgBot:-1002',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1002',
-        groupName: 'beta_group',
-        agentId: 'zeta',
-        groupReplyMode: 'mention',
-        lastSeenAt: 1,
-      },
-    ],
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 3,
-      },
-    ],
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'pending',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'alpha_group',
-        agentId: 'alpha',
-        groupReplyMode: 'admin',
-        lastSeenAt: 2,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1002',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1002',
+    groupName: 'beta_group',
+    agentId: 'zeta',
+    groupReplyMode: 'mention',
+    lastSeenAt: 1,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 3,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'pending',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'alpha_group',
+    agentId: 'alpha',
+    groupReplyMode: 'admin',
+    lastSeenAt: 2,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1830,48 +1770,39 @@ test('scene admin list scenes sorts multiple group chat sections by title after 
 
 test('scene admin list scenes filters by agent mode and platform terms', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1002',
-      {
-        sceneKey: 'tgBot:-1002',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1002',
-        groupName: 'beta_group',
-        agentId: 'zeta',
-        groupReplyMode: 'mention',
-        lastSeenAt: 1,
-      },
-    ],
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 3,
-      },
-    ],
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'pending',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'alpha_group',
-        agentId: 'alpha',
-        groupReplyMode: 'admin',
-        lastSeenAt: 2,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1002',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1002',
+    groupName: 'beta_group',
+    agentId: 'zeta',
+    groupReplyMode: 'mention',
+    lastSeenAt: 1,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 3,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'pending',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'alpha_group',
+    agentId: 'alpha',
+    groupReplyMode: 'admin',
+    lastSeenAt: 2,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1912,20 +1843,17 @@ test('scene admin list scenes filters by agent mode and platform terms', async (
 
 test('scene admin list scenes reports when filters match nothing', async () => {
   const { api } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'allowed',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -1963,20 +1891,17 @@ test('scene admin list scenes reports when filters match nothing', async () => {
 
 test('scene admin commands reject non-admin callers without falling through to agent', async () => {
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -2011,25 +1936,22 @@ test('scene admin commands reject non-admin callers without falling through to a
 
   assert.equal(calls.turnRuns.length, 0);
   assert.equal(enqueueCalls[0].payload.text, 'Admin permission required.');
-  assert.equal(sceneRegistry.get('tgBot:10001')?.status, 'pending');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.status, 'pending');
 });
 
 test('scene admin commands reject non-admin group callers with admin permission required without falling through to agent', async () => {
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:10001',
-      {
-        sceneKey: 'tgBot:10001',
-        kind: 'direct',
-        status: 'pending',
-        platform: 'tgBot',
-        userId: '10001',
-        userName: 'xmo',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -2072,21 +1994,18 @@ test('scene admin commands reject non-admin group callers with admin permission 
 
 test('scene admin commands reply with admin permission required for all-mode non-admin group callers', async () => {
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        groupReplyMode: 'all',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    groupReplyMode: 'all',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -2129,21 +2048,18 @@ test('scene admin commands reply with admin permission required for all-mode non
 
 test('scene admin commands reject non-admin group callers outside all mode with admin permission required', async () => {
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
-  const sceneRegistry = new Map([
-    [
-      'tgBot:-1001',
-      {
-        sceneKey: 'tgBot:-1001',
-        kind: 'group',
-        status: 'allowed',
-        platform: 'tgBot',
-        groupId: '-1001',
-        groupName: 'wind_system',
-        groupReplyMode: 'admin',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: 'wind_system',
+    groupReplyMode: 'admin',
+    lastSeenAt: 1,
+  });
+
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
     clientId: 'client-1',
@@ -2958,19 +2874,16 @@ test('non-admin bare /history-limit in direct chat falls through to agent', asyn
 });
 
 test('non-admin /bncr history-limit with own sceneId in direct chat is allowed', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:20002',
-      {
-        sceneKey: 'tgBot:20002',
-        kind: 'direct',
-        userId: '20002',
-        platform: 'tgBot',
-        status: 'active',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:20002',
+    kind: 'direct',
+    userId: '20002',
+    platform: 'tgBot',
+    status: 'active',
+    lastSeenAt: 1,
+  });
+
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',
@@ -3049,19 +2962,16 @@ test('non-admin /bncr history-limit with foreign sceneId in direct chat is rejec
 });
 
 test('non-admin /bncr history-limit without sceneId in direct chat defaults to current session', async () => {
-  const sceneRegistry = new Map([
-    [
-      'tgBot:20002',
-      {
-        sceneKey: 'tgBot:20002',
-        kind: 'direct',
-        userId: '20002',
-        platform: 'tgBot',
-        status: 'active',
-        lastSeenAt: 1,
-      },
-    ],
-  ]);
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:20002',
+    kind: 'direct',
+    userId: '20002',
+    platform: 'tgBot',
+    status: 'active',
+    lastSeenAt: 1,
+  });
+
   const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
   const parsed = parseBncrInboundParams({
     accountId: 'Primary',

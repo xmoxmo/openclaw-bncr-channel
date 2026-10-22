@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { fallbackBncrMediaMaxBytes } from '../../src/openclaw/media-limit-runtime.ts';
 import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
 
 test('handleFileInit rejects oversized and inconsistent transfer declarations without creating state', async () => {
@@ -10,11 +11,11 @@ test('handleFileInit rejects oversized and inconsistent transfer declarations wi
   try {
     const invalidCases = [
       {
-        name: 'oversized fileSize',
-        transferId: 'recv-init-oversized',
-        fileSize: 50 * 1024 * 1024 + 1,
+        name: 'above configured 2 GiB limit',
+        transferId: 'recv-init-above-config-limit',
+        fileSize: fallbackBncrMediaMaxBytes() + 1,
         chunkSize: 256 * 1024,
-        totalChunks: 201,
+        totalChunks: Math.ceil((fallbackBncrMediaMaxBytes() + 1) / (256 * 1024)),
         error: /fileSize too large/,
       },
       {
@@ -32,14 +33,6 @@ test('handleFileInit rejects oversized and inconsistent transfer declarations wi
         chunkSize: 2,
         totalChunks: 2,
         error: /totalChunks mismatch/,
-      },
-      {
-        name: 'excessive totalChunks',
-        transferId: 'recv-init-too-many-chunks',
-        fileSize: 4097,
-        chunkSize: 1,
-        totalChunks: 4097,
-        error: /totalChunks too large/,
       },
     ];
 
@@ -70,6 +63,56 @@ test('handleFileInit rejects oversized and inconsistent transfer declarations wi
       assert.equal(respondPayload.ok, false, item.name);
       assert.match(respondPayload.payload.error, item.error, item.name);
       assert.equal(bridge.fileRecvTransfers.has(item.transferId), false, item.name);
+    }
+  } finally {
+    cleanupBridge(bridge);
+  }
+});
+
+test('handleFileInit accepts declarations above the former 50 MiB and chunk caps', async () => {
+  const bridge = createBridge();
+  const validSessionKey = `agent:orion:bncr:direct:${Buffer.from('tgBot:0:10001').toString('hex')}`;
+
+  try {
+    const cases = [
+      {
+        transferId: 'recv-init-above-old-byte-cap',
+        fileSize: 50 * 1024 * 1024 + 1,
+        chunkSize: 256 * 1024,
+        totalChunks: 201,
+      },
+      {
+        transferId: 'recv-init-above-old-chunk-cap',
+        fileSize: 4097,
+        chunkSize: 1,
+        totalChunks: 4097,
+      },
+    ];
+
+    for (const item of cases) {
+      let respondPayload = null;
+      await bridge.handleFileInit({
+        params: {
+          accountId: 'Primary',
+          clientId: 'client-a',
+          sessionKey: validSessionKey,
+          platform: 'tgBot',
+          groupId: '0',
+          userId: '10001',
+          fileName: `${item.transferId}.bin`,
+          mimeType: 'application/octet-stream',
+          ...item,
+        },
+        respond(ok, payload) {
+          respondPayload = { ok, payload };
+        },
+        client: { connId: 'conn-1' },
+        context: null,
+      });
+
+      assert.equal(respondPayload.ok, true, item.transferId);
+      assert.equal(respondPayload.payload.ok, true, item.transferId);
+      assert.equal(bridge.fileRecvTransfers.has(item.transferId), true, item.transferId);
     }
   } finally {
     cleanupBridge(bridge);

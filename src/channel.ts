@@ -73,6 +73,7 @@ import type {
 } from './messaging/outbound/reply-enqueue.ts';
 import type { OpenClawChannelRuntimeApiHolder } from './openclaw/channel-runtime-contracts.ts';
 import { getOpenClawRuntimeConfig } from './openclaw/config-runtime.ts';
+import { resolveBncrMediaMaxBytes } from './openclaw/media-limit-runtime.ts';
 import type { OpenClawLoadedMedia } from './openclaw/media-runtime.ts';
 import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
 import { extractOpenClawToolSend, openClawJsonResult } from './openclaw/sdk-helpers.ts';
@@ -141,8 +142,6 @@ import {
   FILE_TRANSFER_TERMINAL_KEEP_MS,
   HISTORY_SHARD_WORKER_BATCH_LIMIT,
   HISTORY_SHARD_WORKER_INTERVAL_MS,
-  INBOUND_FILE_TRANSFER_MAX_BYTES,
-  INBOUND_FILE_TRANSFER_MAX_CHUNKS,
   MAX_ACCOUNT_ACTIVITY_ENTRIES,
   MAX_DEAD_LETTER_ENTRIES,
   MAX_EARLY_FILE_ACKS,
@@ -200,7 +199,7 @@ import {
   createBncrOutboxDiagnosticsHelpers,
   createBncrRuntimeAckObservabilityBuilder,
 } from './plugin/runtime-diagnostics-snapshot.ts';
-import { buildRouteSceneKey } from './plugin/scene-registry.ts';
+import { buildRouteSceneKey, resolveSceneRecord } from './plugin/scene-registry.ts';
 import { BNCR_SETUP_SURFACE } from './plugin/setup.ts';
 import type { BncrHistoryShardRow } from './plugin/sqlite-state.ts';
 import { prepareBncrStateDirectory } from './plugin/state-path-migration.ts';
@@ -316,8 +315,10 @@ class BncrBridgeRuntime {
   }
   resolveOutboundAgentId(route: BncrRoute): string {
     return (
-      asString(this.sceneRegistry.get(buildRouteSceneKey(route))?.agentId).trim() ||
-      this.defaultPublicAgentId()
+      asString(
+        resolveSceneRecord(this.sceneRegistry, buildRouteSceneKey(route), this.canonicalAgentId)
+          ?.agentId,
+      ).trim() || this.defaultPublicAgentId()
     );
   }
   private conversationHistories: BncrConversationHistoryMap = new Map();
@@ -1104,10 +1105,6 @@ class BncrBridgeRuntime {
       outboxEntries: this.outbox.values(),
       deadLetterEntries: this.deadLetter,
       sessionRoutes: this.sessionRoutes.values(),
-      lastSessionAccountIds: this.lastSessionByAccount.keys(),
-      lastActivityAccountIds: this.lastActivityByAccount.keys(),
-      lastInboundAccountIds: this.lastInboundByAccount.keys(),
-      lastOutboundAccountIds: this.lastOutboundByAccount.keys(),
     });
   }
 
@@ -2331,14 +2328,19 @@ class BncrBridgeRuntime {
       const groupId = entry.route?.groupId || '0';
       const userId = entry.route?.userId || '0';
       const sceneKey = groupId !== '0' ? `${platform}:${groupId}` : `${platform}:${userId}`;
-      return resolveBncrHistoryLimit(this.sceneRegistry.get(sceneKey)?.historyLimit);
+      return resolveBncrHistoryLimit(
+        resolveSceneRecord(this.sceneRegistry, sceneKey, this.canonicalAgentId)?.historyLimit,
+      );
     },
     resolveOutboundHistoryForce: (entry) => {
       const platform = entry.route?.platform || '';
       const groupId = entry.route?.groupId || '0';
       const userId = entry.route?.userId || '0';
       const sceneKey = groupId !== '0' ? `${platform}:${groupId}` : `${platform}:${userId}`;
-      return this.sceneRegistry.get(sceneKey)?.historyForce !== false;
+      return (
+        resolveSceneRecord(this.sceneRegistry, sceneKey, this.canonicalAgentId)?.historyForce !==
+        false
+      );
     },
     resolveOutboundSender: (entry) => {
       try {
@@ -2716,6 +2718,7 @@ class BncrBridgeRuntime {
   // transfer logs, and orchestrator/runtime facades in one scan path.
 
   private async loadOutboundTransferMedia(params: {
+    accountId: string;
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
   }): Promise<{
@@ -3113,8 +3116,8 @@ class BncrBridgeRuntime {
       buildCanonicalSessionKey: (route: BncrRoute) =>
         buildCanonicalBncrSessionKey(route, this.canonicalAgentId || 'main'),
       fileRecvTransfers: this.fileRecvTransfers,
-      inboundFileTransferMaxBytes: INBOUND_FILE_TRANSFER_MAX_BYTES,
-      inboundFileTransferMaxChunks: INBOUND_FILE_TRANSFER_MAX_CHUNKS,
+      resolveInboundFileTransferMaxBytes: (accountId: string) =>
+        resolveBncrMediaMaxBytes(this.api, accountId),
     });
   }
 
@@ -3131,10 +3134,10 @@ class BncrBridgeRuntime {
         const parts = to.split(':');
         if (parts.length >= 3) {
           const key = `${parts[1]}:${parts[2]}`;
-          const sc = this.sceneRegistry.get(key);
+          const sc = resolveSceneRecord(this.sceneRegistry, key, this.canonicalAgentId);
           // Scene boolean wins (including explicit false); else fall to global.
           if (typeof sc?.downloadMedia === 'boolean') return sc.downloadMedia;
-          const g = this.sceneRegistry.get('__global__');
+          const g = resolveSceneRecord(this.sceneRegistry, '__global__');
           if (typeof g?.downloadMedia === 'boolean') return g.downloadMedia;
         }
         return undefined;

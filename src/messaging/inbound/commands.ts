@@ -701,6 +701,7 @@ export async function handleBncrNativeCommand(params: {
         defaultPublicAgentId,
         now,
         allowNonAdminSelfAdmin: !!directSelfAdminCommand,
+        agentId: resolvedAgentId || canonicalAgentId,
       });
       logBncrNativeCommandSummary(
         buildBncrNativeCommandSummary({

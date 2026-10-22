@@ -24,6 +24,7 @@ export function createBncrFileTransferRuntimeGroup(runtime: {
   fileInlineThreshold: number;
   normalizeAccountId: (accountId: string) => string;
   loadOutboundTransferMedia: (args: {
+    accountId: string;
     mediaUrl: string;
     mediaLocalRoots?: readonly string[];
   }) => Promise<{ loaded: { buffer: Buffer }; size: number; mimeType?: string; fileName: string }>;

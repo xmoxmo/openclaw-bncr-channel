@@ -28,6 +28,65 @@ function asSceneKind(parsed: ParsedInbound): BncrSceneKind {
   return parsed.peer.kind === 'group' ? 'group' : 'direct';
 }
 
+// Scene rows are owned per agent: two agents may watch the same chat, and each
+// keeps its own admission state, reply mode and history settings. The runtime
+// registry therefore stores one entry per (agentId, sceneKey); rows without an
+// owner keep the bare scene key so legacy rows still resolve.
+const AGENT_SCENE_KEY_SEPARATOR = '\u0000';
+
+export function buildAgentSceneRegistryKey(sceneKey: string, agentId?: string | null): string {
+  const key = asString(sceneKey).trim();
+  const agent = asString(agentId ?? '').trim();
+  return agent ? `${agent}${AGENT_SCENE_KEY_SEPARATOR}${key}` : key;
+}
+
+export function resolveSceneRecord(
+  registry: ReadonlyMap<string, BncrSceneRecord>,
+  sceneKey: string,
+  agentId?: string | null,
+): BncrSceneRecord | undefined {
+  const key = asString(sceneKey).trim();
+  if (!key) return undefined;
+  const agent = asString(agentId ?? '').trim();
+  if (agent) {
+    const exact = registry.get(buildAgentSceneRegistryKey(key, agent));
+    if (exact) return exact;
+  }
+  const unowned = registry.get(buildAgentSceneRegistryKey(key));
+  if (unowned) return unowned;
+  let newest: BncrSceneRecord | undefined;
+  for (const record of registry.values()) {
+    if (asString(record.sceneKey).trim() !== key) continue;
+    if (!newest || (record.lastSeenAt ?? 0) >= (newest.lastSeenAt ?? 0)) newest = record;
+  }
+  return newest;
+}
+
+export function setSceneRecord(
+  registry: Map<string, BncrSceneRecord>,
+  record: BncrSceneRecord,
+  options?: { previousAgentId?: string | null },
+): void {
+  const sceneKey = asString(record.sceneKey).trim();
+  if (!sceneKey) return;
+  const nextKey = buildAgentSceneRegistryKey(sceneKey, record.agentId);
+  if (options) {
+    const previousKey = buildAgentSceneRegistryKey(sceneKey, options.previousAgentId);
+    if (previousKey !== nextKey) registry.delete(previousKey);
+  }
+  registry.set(nextKey, record);
+}
+
+export function deleteSceneRecord(
+  registry: Map<string, BncrSceneRecord>,
+  sceneKey: string,
+  agentId?: string | null,
+): boolean {
+  const record = resolveSceneRecord(registry, sceneKey, agentId);
+  if (!record) return false;
+  return registry.delete(buildAgentSceneRegistryKey(record.sceneKey, record.agentId));
+}
+
 function defaultGroupReplyMode(kind: BncrSceneKind): BncrGroupReplyMode | undefined {
   return kind === 'group' ? 'admin' : undefined;
 }
@@ -79,11 +138,14 @@ export function decideSceneAdmission(args: {
   sceneRegistry: Map<string, BncrSceneRecord>;
   defaultAdminAgentId: string;
   defaultPublicAgentId: string;
+  /** Agent the host routes this peer to; selects that agent's scene row. */
+  sceneAgentId?: string;
 }): BncrSceneRegistryDecision {
-  const { parsed, now, sceneRegistry, defaultAdminAgentId, defaultPublicAgentId } = args;
+  const { parsed, now, sceneRegistry, defaultAdminAgentId, defaultPublicAgentId, sceneAgentId } =
+    args;
   const sceneKey = buildSceneKey(parsed);
   const kind = asSceneKind(parsed);
-  const existing = sceneRegistry.get(sceneKey);
+  const existing = resolveSceneRecord(sceneRegistry, sceneKey, sceneAgentId);
   const shouldForceDirectNonAdminPublic = (agentId?: string) =>
     kind === 'direct' && parsed.isAdmin !== true && (!agentId || agentId === defaultAdminAgentId);
 
@@ -111,7 +173,7 @@ export function decideSceneAdmission(args: {
         ...nextScene,
         status: 'allowed',
       } satisfies BncrSceneRecord;
-      sceneRegistry.set(sceneKey, allowedScene);
+      setSceneRecord(sceneRegistry, allowedScene, { previousAgentId: existing.agentId });
       return {
         allowed: true,
         scene: allowedScene,
@@ -119,7 +181,7 @@ export function decideSceneAdmission(args: {
       };
     }
 
-    sceneRegistry.set(sceneKey, nextScene);
+    setSceneRecord(sceneRegistry, nextScene, { previousAgentId: existing.agentId });
 
     if (nextScene.status === 'allowed') {
       const fallbackAgentId =
@@ -154,7 +216,7 @@ export function decideSceneAdmission(args: {
       agentId,
       lastSeenAt: now,
     });
-    sceneRegistry.set(sceneKey, scene);
+    setSceneRecord(sceneRegistry, scene);
     return { allowed: true, scene, agentId };
   }
 
@@ -167,7 +229,7 @@ export function decideSceneAdmission(args: {
     agentId: directNonAdminAllowed ? defaultPublicAgentId : undefined,
     lastSeenAt: now,
   });
-  sceneRegistry.set(sceneKey, scene);
+  setSceneRecord(sceneRegistry, scene);
 
   if (directNonAdminAllowed) {
     return {

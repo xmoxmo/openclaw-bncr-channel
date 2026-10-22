@@ -158,8 +158,7 @@ export function buildBncrInboundSurfaceRuntime(deps: {
   scheduleSave: () => void;
   buildCanonicalSessionKey: (route: BncrRoute) => string;
   fileRecvTransfers: Parameters<typeof createBncrFileInboundHandlers>[0]['fileRecvTransfers'];
-  inboundFileTransferMaxBytes: number;
-  inboundFileTransferMaxChunks: number;
+  resolveInboundFileTransferMaxBytes: (accountId: string) => number;
 }) {
   return { ...deps };
 }
