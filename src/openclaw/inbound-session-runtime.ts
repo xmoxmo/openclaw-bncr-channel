@@ -1,12 +1,12 @@
 import { recordInboundSession as sdkRecordInboundSession } from 'openclaw/plugin-sdk/conversation-runtime';
 import { resolvePinnedMainDmOwnerFromAllowlist as sdkResolvePinnedMainDmOwnerFromAllowlist } from 'openclaw/plugin-sdk/security-runtime';
 import {
-  getSessionEntry as sdkGetSessionEntry,
+  getSessionEntryAsync as sdkGetSessionEntryAsync,
+  patchSessionEntry as sdkPatchSessionEntry,
+  readSessionUpdatedAtAsync as sdkReadSessionUpdatedAtAsync,
   recordSessionMetaFromInbound as sdkRecordSessionMetaFromInbound,
   resolveStorePath as sdkResolveStorePath,
-  updateSessionStoreEntry as sdkUpdateSessionStoreEntry,
 } from 'openclaw/plugin-sdk/session-store-runtime';
-import type { OpenClawChannelRuntimeApiHolder } from './channel-runtime-contracts.ts';
 
 type ResolveStorePathFn = (
   storeConfig?: string,
@@ -14,18 +14,18 @@ type ResolveStorePathFn = (
 ) => string;
 type RecordInboundSessionFn = typeof sdkRecordInboundSession;
 type RecordSessionMetaFromInboundFn = typeof sdkRecordSessionMetaFromInbound;
-type UpdateSessionStoreEntryFn = typeof sdkUpdateSessionStoreEntry;
-type GetSessionEntryFn = typeof sdkGetSessionEntry;
-type ReadSessionUpdatedAtFn = (params: { storePath: string; sessionKey: string }) => unknown;
+type PatchSessionEntryFn = typeof sdkPatchSessionEntry;
+type GetSessionEntryAsyncFn = typeof sdkGetSessionEntryAsync;
+type ReadSessionUpdatedAtAsyncFn = typeof sdkReadSessionUpdatedAtAsync;
 type ResolvePinnedMainDmOwnerFromAllowlistFn = typeof sdkResolvePinnedMainDmOwnerFromAllowlist;
 
 type BncrInboundSessionRuntime = {
   resolveStorePath: ResolveStorePathFn;
   recordInboundSession: RecordInboundSessionFn;
   recordSessionMetaFromInbound: RecordSessionMetaFromInboundFn;
-  updateSessionStoreEntry: UpdateSessionStoreEntryFn;
-  getSessionEntry: GetSessionEntryFn;
-  readSessionUpdatedAt?: ReadSessionUpdatedAtFn;
+  patchSessionEntry: PatchSessionEntryFn;
+  getSessionEntryAsync: GetSessionEntryAsyncFn;
+  readSessionUpdatedAtAsync: ReadSessionUpdatedAtAsyncFn;
   resolvePinnedMainDmOwnerFromAllowlist: ResolvePinnedMainDmOwnerFromAllowlistFn;
 };
 
@@ -37,10 +37,10 @@ function resolveRuntime(): BncrInboundSessionRuntime {
     recordInboundSession: testRuntimeOverride?.recordInboundSession ?? sdkRecordInboundSession,
     recordSessionMetaFromInbound:
       testRuntimeOverride?.recordSessionMetaFromInbound ?? sdkRecordSessionMetaFromInbound,
-    updateSessionStoreEntry:
-      testRuntimeOverride?.updateSessionStoreEntry ?? sdkUpdateSessionStoreEntry,
-    getSessionEntry: testRuntimeOverride?.getSessionEntry ?? sdkGetSessionEntry,
-    readSessionUpdatedAt: testRuntimeOverride?.readSessionUpdatedAt,
+    patchSessionEntry: testRuntimeOverride?.patchSessionEntry ?? sdkPatchSessionEntry,
+    getSessionEntryAsync: testRuntimeOverride?.getSessionEntryAsync ?? sdkGetSessionEntryAsync,
+    readSessionUpdatedAtAsync:
+      testRuntimeOverride?.readSessionUpdatedAtAsync ?? sdkReadSessionUpdatedAtAsync,
     resolvePinnedMainDmOwnerFromAllowlist:
       testRuntimeOverride?.resolvePinnedMainDmOwnerFromAllowlist ??
       sdkResolvePinnedMainDmOwnerFromAllowlist,
@@ -67,22 +67,16 @@ export function recordBncrSessionMetaFromInbound(
 }
 
 export function updateBncrSessionStoreEntry(
-  params: Parameters<UpdateSessionStoreEntryFn>[0],
-): ReturnType<UpdateSessionStoreEntryFn> {
-  return resolveRuntime().updateSessionStoreEntry(params);
+  params: Parameters<PatchSessionEntryFn>[0],
+): ReturnType<PatchSessionEntryFn> {
+  return resolveRuntime().patchSessionEntry(params);
 }
 
-export function readBncrSessionUpdatedAt(
-  api: OpenClawChannelRuntimeApiHolder,
-  params: { storePath: string; sessionKey: string },
-): unknown {
-  const runtime = resolveRuntime();
-  if (runtime.readSessionUpdatedAt) return runtime.readSessionUpdatedAt(params);
-  const readSessionUpdatedAt = api?.runtime?.channel?.session?.readSessionUpdatedAt;
-  if (typeof readSessionUpdatedAt !== 'function') {
-    throw new Error('OpenClaw channel session readSessionUpdatedAt API is unavailable');
-  }
-  return readSessionUpdatedAt(params);
+export function readBncrSessionUpdatedAt(params: {
+  storePath: string;
+  sessionKey: string;
+}): ReturnType<ReadSessionUpdatedAtAsyncFn> {
+  return resolveRuntime().readSessionUpdatedAtAsync(params);
 }
 
 export async function readBncrSessionEntry(params: {
@@ -91,7 +85,7 @@ export async function readBncrSessionEntry(params: {
 }): Promise<Record<string, unknown> | undefined> {
   const runtime = resolveRuntime();
   try {
-    const entry = await runtime.getSessionEntry(params);
+    const entry = await runtime.getSessionEntryAsync(params);
     return entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : undefined;
   } catch {
     return undefined;

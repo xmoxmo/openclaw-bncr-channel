@@ -129,7 +129,7 @@ test('prepareBncrInboundSessionContext resolves storePath from resolved agentId'
     resolveStorePath(storeConfig, options) {
       return `/tmp/${String(storeConfig || 'store')}-${options?.agentId || 'unknown'}.json`;
     },
-    readSessionUpdatedAt() {
+    async readSessionUpdatedAtAsync() {
       return 42;
     },
   });
@@ -172,7 +172,7 @@ test('prepareBncrInboundSessionContext saves multiple inbound media items and bu
     resolveStorePath(storeConfig, options) {
       return `/tmp/${String(storeConfig || 'store')}-${options?.agentId || 'unknown'}.json`;
     },
-    readSessionUpdatedAt() {
+    async readSessionUpdatedAtAsync() {
       return 42;
     },
   });

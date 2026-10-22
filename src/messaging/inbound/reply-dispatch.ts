@@ -56,7 +56,7 @@ async function waitForBncrReplySessionQuiescence(args: {
 
   const readUpdatedAt = async () => {
     try {
-      const updatedAt = await readBncrSessionUpdatedAt(args.api, {
+      const updatedAt = await readBncrSessionUpdatedAt({
         storePath: args.storePath,
         sessionKey: args.sessionKey,
       });

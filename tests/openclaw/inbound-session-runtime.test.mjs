@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  readBncrSessionEntry,
   readBncrSessionUpdatedAt,
   recordBncrInboundSession,
   recordBncrSessionMetaFromInbound,
@@ -26,12 +27,16 @@ test('inbound session runtime forwards calls to injected runtime override', asyn
       calls.push(['recordSessionMetaFromInbound', params]);
       return 'meta-recorded';
     },
-    async updateSessionStoreEntry(params) {
-      calls.push(['updateSessionStoreEntry', params]);
+    async patchSessionEntry(params) {
+      calls.push(['patchSessionEntry', params]);
       return 'updated';
     },
-    readSessionUpdatedAt(params) {
-      calls.push(['readSessionUpdatedAt', params]);
+    async getSessionEntryAsync(params) {
+      calls.push(['getSessionEntryAsync', params]);
+      return { sessionKey: params.sessionKey, verboseLevel: 'on' };
+    },
+    async readSessionUpdatedAtAsync(params) {
+      calls.push(['readSessionUpdatedAtAsync', params]);
       return 1234;
     },
     resolvePinnedMainDmOwnerFromAllowlist(params) {
@@ -72,8 +77,12 @@ test('inbound session runtime forwards calls to injected runtime override', asyn
       }),
       'updated',
     );
+    assert.deepEqual(
+      await readBncrSessionEntry({ storePath: '/tmp/store', sessionKey: 'agent:demo' }),
+      { sessionKey: 'agent:demo', verboseLevel: 'on' },
+    );
     assert.equal(
-      readBncrSessionUpdatedAt({}, { storePath: '/tmp/store', sessionKey: 'agent:demo' }),
+      await readBncrSessionUpdatedAt({ storePath: '/tmp/store', sessionKey: 'agent:demo' }),
       1234,
     );
     assert.equal(
@@ -85,60 +94,42 @@ test('inbound session runtime forwards calls to injected runtime override', asyn
       'owner:demo',
     );
 
-    assert.equal(calls.length, 6);
+    assert.equal(calls.length, 7);
     assert.deepEqual(calls[0], ['resolveStorePath', 'sessions.json', { agentId: 'orion' }]);
   } finally {
     restore();
   }
 });
 
-test('readBncrSessionUpdatedAt falls back to host runtime when override does not provide reader', () => {
+test('readBncrSessionEntry returns undefined when the async reader throws', async () => {
   const restore = setBncrInboundSessionRuntimeForTest({
-    resolveStorePath() {
-      return '/tmp/store';
+    async getSessionEntryAsync() {
+      throw new Error('store unavailable');
     },
   });
 
   try {
-    const api = {
-      runtime: {
-        channel: {
-          session: {
-            readSessionUpdatedAt(params) {
-              return `${params.storePath}:${params.sessionKey}`;
-            },
-          },
-        },
-      },
-    };
-
     assert.equal(
-      readBncrSessionUpdatedAt(api, {
-        storePath: '/tmp/store',
-        sessionKey: 'agent:demo',
-      }),
-      '/tmp/store:agent:demo',
+      await readBncrSessionEntry({ storePath: '/tmp/store', sessionKey: 'agent:demo' }),
+      undefined,
     );
   } finally {
     restore();
   }
 });
 
-test('readBncrSessionUpdatedAt throws when neither override nor host runtime provides reader', () => {
+test('readBncrSessionUpdatedAt propagates the async reader result', async () => {
   const restore = setBncrInboundSessionRuntimeForTest({
-    resolveStorePath() {
-      return '/tmp/store';
+    async readSessionUpdatedAtAsync(params) {
+      assert.deepEqual(params, { storePath: '/tmp/store', sessionKey: 'agent:demo' });
+      return undefined;
     },
   });
 
   try {
-    assert.throws(
-      () =>
-        readBncrSessionUpdatedAt(
-          { runtime: { channel: { session: {} } } },
-          { storePath: '/tmp/store', sessionKey: 'agent:demo' },
-        ),
-      /readSessionUpdatedAt API is unavailable/,
+    assert.equal(
+      await readBncrSessionUpdatedAt({ storePath: '/tmp/store', sessionKey: 'agent:demo' }),
+      undefined,
     );
   } finally {
     restore();

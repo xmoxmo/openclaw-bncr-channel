@@ -32,7 +32,7 @@ export function createInboundApiStub(options = {}) {
     async recordInboundSession(args) {
       calls.recorded.push(args);
     },
-    readSessionUpdatedAt() {
+    async readSessionUpdatedAtAsync() {
       return 0;
     },
     async recordSessionMetaFromInbound(args) {
@@ -47,7 +47,7 @@ export function createInboundApiStub(options = {}) {
       };
       fs.writeFileSync(args.storePath, JSON.stringify(existing, null, 2));
     },
-    async updateSessionStoreEntry(args) {
+    async patchSessionEntry(args) {
       calls.sessionPatches.push(args);
       const existing = fs.existsSync(args.storePath)
         ? JSON.parse(fs.readFileSync(args.storePath, 'utf8'))

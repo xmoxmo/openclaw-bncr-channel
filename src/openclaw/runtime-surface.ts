@@ -84,13 +84,6 @@ export const OPENCLAW_RUNTIME_SURFACE_CONTRACTS = [
     path: ['runtime', 'channel', 'routing', 'resolveAgentRoute'],
     parent: ['runtime', 'channel', 'routing'],
   },
-  { key: 'runtime.channel.session', kind: 'object', path: ['runtime', 'channel', 'session'] },
-  {
-    key: 'runtime.channel.session.readSessionUpdatedAt',
-    kind: 'function',
-    path: ['runtime', 'channel', 'session', 'readSessionUpdatedAt'],
-    parent: ['runtime', 'channel', 'session'],
-  },
 ] as const satisfies readonly RuntimeSurfaceContract[];
 
 export type OpenClawChannelRuntimeSurfaceDiagnostics = {
@@ -103,7 +96,6 @@ export type OpenClawChannelRuntimeSurfaceDiagnostics = {
     media: boolean;
     reply: boolean;
     routing: boolean;
-    session: boolean;
   };
   channelMedia: {
     readRemoteMediaBuffer: boolean;
@@ -161,7 +153,6 @@ export function buildOpenClawChannelRuntimeSurfaceDiagnostics(
       media: contract['runtime.channel.media'],
       reply: contract['runtime.channel.reply'],
       routing: contract['runtime.channel.routing'],
-      session: contract['runtime.channel.session'],
     },
     channelMedia: {
       readRemoteMediaBuffer: contract['runtime.channel.media.readRemoteMediaBuffer'],

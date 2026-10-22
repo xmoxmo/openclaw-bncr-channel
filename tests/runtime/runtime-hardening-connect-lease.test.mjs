@@ -50,7 +50,6 @@ test('bncr.connect exposes lease/epoch and diagnostics include hardening fields'
     media: true,
     reply: true,
     routing: true,
-    session: true,
   });
   assert.deepEqual(payload.diagnostics.runtimeSurface.channelMedia, {
     readRemoteMediaBuffer: true,
@@ -104,7 +103,6 @@ test('bncr diagnostics register info updates after api rebind', async () => {
     media: true,
     reply: true,
     routing: true,
-    session: true,
   });
   assert.deepEqual(payload.diagnostics.runtimeSurface.channelMedia, {
     readRemoteMediaBuffer: true,

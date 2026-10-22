@@ -393,7 +393,7 @@ export async function prepareBncrInboundSessionContext(args: {
         : parsed.userName || `${platform}:${groupId}:${userId}`) +
       (parsed.msgId ? ` #${parsed.msgId}` : ''),
     timestamp: Date.now(),
-    previousTimestamp: readBncrSessionUpdatedAt(api, {
+    previousTimestamp: await readBncrSessionUpdatedAt({
       storePath,
       sessionKey: dispatchSessionKey,
     }),

@@ -124,7 +124,7 @@ function applyBncrLegacyCommandFields(args: {
   return ctx;
 }
 
-export function buildBncrInboundTurnContext(args: {
+export async function buildBncrInboundTurnContext(args: {
   api: BncrInboundApi;
   cfg: BncrInboundConfig;
   channelId: string;
@@ -143,7 +143,7 @@ export function buildBncrInboundTurnContext(args: {
   historyLimit?: number;
   silentHistoryFlush?: boolean;
   pendingHistoryEntries?: readonly BncrHistoryEntry[];
-}): BncrInboundContextPayload | Promise<BncrInboundContextPayload> {
+}): Promise<BncrInboundContextPayload> {
   const {
     api,
     cfg,
@@ -178,7 +178,7 @@ export function buildBncrInboundTurnContext(args: {
         channel: 'Bncr',
         from: resolution.canonicalTo,
         timestamp: Date.now(),
-        previousTimestamp: readBncrSessionUpdatedAt(api, {
+        previousTimestamp: await readBncrSessionUpdatedAt({
           storePath: prepared.storePath,
           sessionKey: resolution.dispatchSessionKey,
         }),

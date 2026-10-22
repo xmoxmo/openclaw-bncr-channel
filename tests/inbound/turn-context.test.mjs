@@ -366,11 +366,11 @@ test('buildBncrInboundTurnContext passes canonical route fields and visible untr
   assert.equal(result.CommandTurn?.kind, 'text-slash');
 });
 
-test('buildBncrInboundTurnContext treats platform shouldRespond as effective mention for groups', () => {
+test('buildBncrInboundTurnContext treats platform shouldRespond as effective mention for groups', async () => {
   const calls = [];
   const api = createTurnContextApiStub(calls);
 
-  buildBncrInboundTurnContext({
+  await buildBncrInboundTurnContext({
     api,
     cfg: {},
     channelId: 'bncr',

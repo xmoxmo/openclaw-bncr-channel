@@ -17,7 +17,7 @@ openclaw plugins update bncr
 openclaw gateway restart
 ```
 
-当前兼容 `OpenClaw >= 2026.8.1`。
+当前兼容 `OpenClaw >= 2026.10.5`。会话存储通过 `getSessionEntryAsync`、`patchSessionEntry`、`readSessionUpdatedAtAsync` 访问，不使用已弃用的同步接口。
 
 ## 状态目录
 

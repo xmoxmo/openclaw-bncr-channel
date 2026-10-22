@@ -3972,7 +3972,7 @@ test('prepareBncrInboundSessionContext converts generic platform media text into
     resolveStorePath() {
       return '/tmp/bncr-inbound-telegram-style.json';
     },
-    readSessionUpdatedAt() {
+    async readSessionUpdatedAtAsync() {
       return 42;
     },
   });

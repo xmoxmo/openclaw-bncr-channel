@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const REQUIRED_OPENCLAW_RANGE = '>=2026.8.1';
+const REQUIRED_OPENCLAW_RANGE = '>=2026.10.5';
 const CHANNEL_SDK_HELPER_IMPORTS = [
   'openclaw/plugin-sdk/json-store',
   'openclaw/plugin-sdk/param-readers',
@@ -10,13 +10,13 @@ const CHANNEL_SDK_HELPER_IMPORTS = [
   'openclaw/plugin-sdk/tool-send',
 ];
 
-test('bncr package and README require the OpenClaw 2026.8.1 runtime baseline', () => {
+test('bncr package and README require the OpenClaw 2026.10.5 runtime baseline', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
   const readme = fs.readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
 
   assert.equal(pkg.peerDependencies?.openclaw, REQUIRED_OPENCLAW_RANGE);
   assert.equal(pkg.devDependencies?.openclaw, REQUIRED_OPENCLAW_RANGE);
-  assert.match(readme, /当前兼容 `OpenClaw >= 2026\.8\.1`/);
+  assert.match(readme, /当前兼容 `OpenClaw >= 2026\.10\.5`/);
   assert.equal(readme.includes('openclaw >= 2026.5.3-1'), false);
 });
 

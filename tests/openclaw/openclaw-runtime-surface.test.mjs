@@ -33,9 +33,6 @@ function createCompleteRuntimeApi() {
         routing: {
           resolveAgentRoute() {},
         },
-        session: {
-          readSessionUpdatedAt() {},
-        },
       },
     },
   };
@@ -47,7 +44,7 @@ test('OpenClaw runtime surface contract list has stable unique keys', () => {
   assert.ok(keys.includes('runtime.config.current|get'));
   assert.ok(keys.includes('runtime.channel.media.readRemoteMediaBuffer'));
   assert.ok(keys.includes('runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher'));
-  assert.ok(keys.includes('runtime.channel.session.readSessionUpdatedAt'));
+  assert.ok(!keys.some((key) => key.startsWith('runtime.channel.session')));
 });
 
 test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contract', () => {
@@ -62,7 +59,6 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contra
     media: true,
     reply: true,
     routing: true,
-    session: true,
   });
   assert.deepEqual(diagnostics.channelMedia, {
     readRemoteMediaBuffer: true,
@@ -76,7 +72,6 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contra
     diagnostics.contract['runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher'],
     true,
   );
-  assert.equal(diagnostics.contract['runtime.channel.session.readSessionUpdatedAt'], true);
   assert.deepEqual(diagnostics.missing, []);
 });
 
@@ -84,13 +79,11 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports method-level host dr
   const api = createCompleteRuntimeApi();
   delete api.runtime.channel.media.readRemoteMediaBuffer;
   delete api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher;
-  delete api.runtime.channel.session.readSessionUpdatedAt;
 
   const diagnostics = buildOpenClawChannelRuntimeSurfaceDiagnostics(api);
 
   assert.equal(diagnostics.channel.media, true);
   assert.equal(diagnostics.channel.reply, true);
-  assert.equal(diagnostics.channel.session, true);
   assert.deepEqual(diagnostics.channelMedia, {
     readRemoteMediaBuffer: false,
     saveMediaBuffer: true,
@@ -98,7 +91,6 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports method-level host dr
   assert.deepEqual(diagnostics.missing, [
     'runtime.channel.media.readRemoteMediaBuffer',
     'runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher',
-    'runtime.channel.session.readSessionUpdatedAt',
   ]);
 });
 
@@ -139,7 +131,6 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics tolerates missing runtime ob
     media: false,
     reply: false,
     routing: false,
-    session: false,
   });
   assert.deepEqual(diagnostics.channelMedia, {
     readRemoteMediaBuffer: false,
