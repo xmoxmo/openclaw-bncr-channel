@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseCheckRegisterDriftOptions } from '../../scripts/check-register-drift.mjs';
+import { parseCheckRegisterDriftOptions } from '../../tools/check-register-drift.mjs';
 
 test('parseCheckRegisterDriftOptions trims text options and keeps fallbacks for blanks', () => {
   const options = parseCheckRegisterDriftOptions([

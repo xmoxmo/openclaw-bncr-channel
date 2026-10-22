@@ -369,7 +369,7 @@ test('prepareBncrInboundAcceptance reads the scene row of the agent the host rou
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'public')?.status, 'denied');
 });
 
-test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public agent', async () => {
+test('prepareBncrInboundAcceptance keeps unknown non-admin direct scenes pending and silent', async () => {
   const sceneRegistry = new Map();
   const result = await prepareBncrInboundAcceptance(
     buildArgs({
@@ -384,23 +384,21 @@ test('prepareBncrInboundAcceptance defaults non-admin direct scenes to public ag
   );
 
   assert.deepEqual(result, {
-    ok: true,
-    accountId: 'Primary',
-    sessionKey: 'agent:public:bncr:direct:7467426f743a3130303031',
-    inboundText: 'hello',
-    hasMedia: false,
-    resolvedAgentId: 'public',
-    shouldDispatch: true,
-    shouldAccumulate: true,
-    dispatchBy: 'direct',
+    ok: false,
+    status: false,
+    payload: {
+      kind: 'gate-denied',
+      accountId: 'Primary',
+      msgId: 'msg-1',
+      reason: 'scene pending approval',
+    },
   });
   assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
-    status: 'allowed',
+    status: 'pending',
     platform: 'tgBot',
     userId: '10001',
-    agentId: 'public',
     historyLimit: 50,
     historyForce: true,
     lastSeenAt: 123,
@@ -501,7 +499,7 @@ test('prepareBncrInboundAcceptance promotes denied group scenes to public when a
   });
 });
 
-test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes back to public', async () => {
+test('prepareBncrInboundAcceptance sends legacy unapproved direct scenes back to pending', async () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {
     sceneKey: 'tgBot:10001',
@@ -527,13 +525,20 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
     }),
   );
 
-  assert.equal(result.ok, true);
-  assert.equal(result.resolvedAgentId, 'public');
-  assert.equal(result.sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
+  assert.deepEqual(result, {
+    ok: false,
+    status: false,
+    payload: {
+      kind: 'gate-denied',
+      accountId: 'Primary',
+      msgId: 'msg-1',
+      reason: 'scene pending approval',
+    },
+  });
   assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
-    status: 'allowed',
+    status: 'pending',
     platform: 'tgBot',
     userId: '10001',
     userName: 'xmo',
@@ -544,7 +549,7 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
   });
 });
 
-test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes with empty agent to public', async () => {
+test('prepareBncrInboundAcceptance sends legacy unapproved direct scenes with empty agent back to pending', async () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {
     sceneKey: 'tgBot:10001',
@@ -570,13 +575,20 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
     }),
   );
 
-  assert.equal(result.ok, true);
-  assert.equal(result.resolvedAgentId, 'public');
-  assert.equal(result.sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
+  assert.deepEqual(result, {
+    ok: false,
+    status: false,
+    payload: {
+      kind: 'gate-denied',
+      accountId: 'Primary',
+      msgId: 'msg-1',
+      reason: 'scene pending approval',
+    },
+  });
   assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
-    status: 'allowed',
+    status: 'pending',
     platform: 'tgBot',
     userId: '10001',
     userName: 'xmo',
@@ -587,7 +599,7 @@ test('prepareBncrInboundAcceptance force-corrects legacy non-admin direct scenes
   });
 });
 
-test('prepareBncrInboundAcceptance preserves explicit custom agent on legacy non-admin direct scenes', async () => {
+test('prepareBncrInboundAcceptance keeps custom agent but pends legacy unapproved direct scenes', async () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {
     sceneKey: 'tgBot:10001',
@@ -617,9 +629,60 @@ test('prepareBncrInboundAcceptance preserves explicit custom agent on legacy non
     }),
   );
 
+  assert.deepEqual(result, {
+    ok: false,
+    status: false,
+    payload: {
+      kind: 'gate-denied',
+      accountId: 'Primary',
+      msgId: 'msg-1',
+      reason: 'scene pending approval',
+    },
+  });
+  assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'xmo',
+    agentId: 'custom-agent',
+    historyLimit: 50,
+    historyForce: true,
+    lastSeenAt: 123,
+  });
+});
+
+test('prepareBncrInboundAcceptance admits explicitly approved direct scenes', async () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'approved-user',
+    agentId: 'public',
+    approvedAt: 90,
+    lastSeenAt: 100,
+  });
+
+  const result = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: buildParsed({
+        groupId: '0',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        peer: { kind: 'direct', id: '10001' },
+        isAdmin: false,
+        userName: 'xmo',
+      }),
+      sceneRegistry,
+    }),
+  );
+
   assert.equal(result.ok, true);
-  assert.equal(result.resolvedAgentId, 'custom-agent');
-  assert.equal(result.sessionKey, 'agent:custom-agent:bncr:direct:7467426f743a3130303031');
+  assert.equal(result.resolvedAgentId, 'public');
+  assert.equal(result.sessionKey, 'agent:public:bncr:direct:7467426f743a3130303031');
   assert.deepEqual(resolveSceneRecord(sceneRegistry, 'tgBot:10001'), {
     sceneKey: 'tgBot:10001',
     kind: 'direct',
@@ -627,7 +690,8 @@ test('prepareBncrInboundAcceptance preserves explicit custom agent on legacy non
     platform: 'tgBot',
     userId: '10001',
     userName: 'xmo',
-    agentId: 'custom-agent',
+    agentId: 'public',
+    approvedAt: 90,
     historyLimit: 50,
     historyForce: true,
     lastSeenAt: 123,

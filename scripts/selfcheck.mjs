@@ -73,6 +73,7 @@ const requiredSourceFiles = [
   'src/messaging/inbound/history-shard-worker.ts',
   'src/messaging/inbound/last-route.ts',
   'src/messaging/inbound/media-url-download.ts',
+  'src/messaging/inbound/media-url-policy.ts',
   'src/messaging/inbound/native-command-runtime.ts',
   'src/messaging/inbound/native-command.ts',
   'src/messaging/inbound/native-reply-delivery.ts',

@@ -9,6 +9,7 @@ import {
   estimateBase64DecodedBytes,
 } from '../../src/messaging/inbound/dispatch.ts';
 import { downloadInboundMediaUrl } from '../../src/messaging/inbound/media-url-download.ts';
+import { assertPublicInboundMediaUrl } from '../../src/messaging/inbound/media-url-policy.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
 import { loadInboundRemoteMedia } from '../../src/messaging/inbound/remote-media.ts';
 import { fallbackBncrMediaMaxBytes } from '../../src/openclaw/media-limit-runtime.ts';
@@ -226,10 +227,96 @@ test('loadInboundRemoteMedia falls back to internal downloader when runtime read
       },
       mediaUrl,
       1024,
+      { urlGuard: async () => {} },
     );
 
     assert.equal(loaded.buffer.toString(), 'fallback');
     assert.equal(loaded.contentType, 'image/jpeg');
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+});
+
+test('loadInboundRemoteMedia refuses to retry a host-rejected private URL through raw fetch', async () => {
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests += 1;
+    res.writeHead(200, { 'content-type': 'image/jpeg' });
+    res.end('should-not-be-read');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  try {
+    const address = server.address();
+    const mediaUrl = `http://127.0.0.1:${address.port}/private.jpg`;
+    await assert.rejects(
+      () =>
+        loadInboundRemoteMedia(
+          {
+            runtime: {
+              channel: {
+                media: {
+                  async readRemoteMediaBuffer() {
+                    throw new Error('host rejected non-public destination');
+                  },
+                },
+              },
+            },
+          },
+          mediaUrl,
+          1024,
+        ),
+      /address is not public/,
+    );
+    assert.equal(requests, 0, 'the fallback must not reach the rejected destination');
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+});
+
+test('assertPublicInboundMediaUrl blocks non-public destinations and allows public literals', async () => {
+  for (const url of [
+    'http://127.0.0.1/x',
+    'http://10.1.2.3/x',
+    'http://169.254.169.254/latest/meta-data',
+    'http://192.168.1.1/x',
+    'http://[::1]/x',
+    'http://localhost/x',
+    'http://media.internal/x',
+    'file:///etc/passwd',
+    'http://user:pass@93.184.216.34/x',
+  ]) {
+    await assert.rejects(() => assertPublicInboundMediaUrl(url), /inbound media url/, url);
+  }
+  await assertPublicInboundMediaUrl('https://93.184.216.34/photo.jpg');
+});
+
+test('downloadInboundMediaUrl validates every redirect hop', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/start') {
+      res.writeHead(302, { location: '/private' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('private');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  try {
+    const address = server.address();
+    const mediaUrl = `http://127.0.0.1:${address.port}/start`;
+    await assert.rejects(
+      () =>
+        downloadInboundMediaUrl(mediaUrl, 1024, 1_000, async (url) => {
+          if (url.endsWith('/private')) throw new Error('redirect destination blocked');
+        }),
+      /redirect destination blocked/,
+    );
   } finally {
     await new Promise((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -249,7 +336,15 @@ test('dispatchBncrInbound downloads http media path before building inbound cont
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
   try {
-    const { api, calls } = createInboundApiStub();
+    const { api, calls } = createInboundApiStub({
+      async readRemoteMediaBuffer({ url }) {
+        const response = await fetch(url);
+        return {
+          buffer: Buffer.from(await response.arrayBuffer()),
+          contentType: response.headers.get('content-type') || undefined,
+        };
+      },
+    });
     const address = server.address();
     const mediaUrl = `http://127.0.0.1:${address.port}/photos/file_6.jpg`;
     const parsed = parseBncrInboundParams({

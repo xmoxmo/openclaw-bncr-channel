@@ -1,4 +1,7 @@
 const INBOUND_MEDIA_URL_TIMEOUT_MS = 30_000;
+const MAX_INBOUND_MEDIA_REDIRECTS = 5;
+
+export type InboundMediaUrlGuard = (url: string) => Promise<void>;
 
 export function isHttpMediaUrl(value: string): boolean {
   try {
@@ -19,6 +22,10 @@ function normalizeInboundMediaUrlTimeoutMs(timeoutMs: number): number {
   return Number.isFinite(timeoutMs) && timeoutMs > 0
     ? Math.floor(timeoutMs)
     : INBOUND_MEDIA_URL_TIMEOUT_MS;
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
 async function readInboundMediaResponseBody(args: {
@@ -65,6 +72,7 @@ export async function downloadInboundMediaUrl(
   url: string,
   maxBytes: number,
   timeoutMs = INBOUND_MEDIA_URL_TIMEOUT_MS,
+  guard?: InboundMediaUrlGuard,
 ): Promise<{ buffer: Buffer; contentType?: string }> {
   if (typeof fetch !== 'function') {
     throw new Error('inbound media url download unavailable: fetch is not available');
@@ -78,27 +86,49 @@ export async function downloadInboundMediaUrl(
   }, normalizeInboundMediaUrlTimeoutMs(timeoutMs));
 
   try {
-    const response = await fetch(url, { signal: abortController.signal });
-    if (!response.ok) {
-      throw new Error(`inbound media url download failed: HTTP ${response.status}`);
+    let currentUrl = url;
+    for (let redirects = 0; ; redirects += 1) {
+      if (guard) await guard(currentUrl);
+      const response = await fetch(currentUrl, {
+        signal: abortController.signal,
+        ...(guard ? { redirect: 'manual' as const } : {}),
+      });
+      if (guard && isRedirectStatus(response.status)) {
+        if (redirects >= MAX_INBOUND_MEDIA_REDIRECTS) {
+          throw new Error('inbound media url redirect limit exceeded');
+        }
+        const location = readResponseHeader(response.headers, 'location');
+        if (!location) {
+          throw new Error(`inbound media url redirect missing location: HTTP ${response.status}`);
+        }
+        try {
+          currentUrl = new URL(location, currentUrl).toString();
+        } catch {
+          throw new Error('inbound media url redirect target is invalid');
+        }
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`inbound media url download failed: HTTP ${response.status}`);
+      }
+
+      const contentLength = Number(readResponseHeader(response.headers, 'content-length') || 0);
+      if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+        abortController.abort();
+        throw new Error(
+          `inbound media url too large: content-length ${contentLength} bytes exceeds ${maxBytes} bytes`,
+        );
+      }
+
+      const buffer = await readInboundMediaResponseBody({
+        response,
+        maxBytes,
+        abort: () => abortController.abort(),
+      });
+      if (!buffer.length) throw new Error('inbound media url downloaded empty buffer');
+
+      return { buffer, contentType: readResponseHeader(response.headers, 'content-type') };
     }
-
-    const contentLength = Number(readResponseHeader(response.headers, 'content-length') || 0);
-    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-      abortController.abort();
-      throw new Error(
-        `inbound media url too large: content-length ${contentLength} bytes exceeds ${maxBytes} bytes`,
-      );
-    }
-
-    const buffer = await readInboundMediaResponseBody({
-      response,
-      maxBytes,
-      abort: () => abortController.abort(),
-    });
-    if (!buffer.length) throw new Error('inbound media url downloaded empty buffer');
-
-    return { buffer, contentType: readResponseHeader(response.headers, 'content-type') };
   } catch (err) {
     if (timedOut) throw new Error(`inbound media url download timed out after ${timeoutMs}ms`);
     throw err;

@@ -1,6 +1,5 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import { runDetachedWebhookWork } from 'openclaw/plugin-sdk/webhook-request-guards';
-import { buildCanonicalBncrSessionKey } from '../core/targets.ts';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
 import type { BncrConversationHistoryMap } from '../messaging/inbound/conversation-history.ts';
 import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
@@ -55,26 +54,6 @@ type InboundAcceptanceResult =
       status: boolean;
       payload: Record<string, unknown>;
     };
-
-function buildBncrPendingDirectApprovalNotice(args: {
-  parsed: ParsedInboundParams;
-  reason: string;
-}): string | null {
-  if (args.parsed.peer.kind !== 'direct') return null;
-  if (args.reason !== 'scene pending approval') return null;
-  return `This private chat is pending approval. Ask the administrator to allow your SceneId: ${args.parsed.platform}:${args.parsed.userId}`;
-}
-
-function buildBncrPendingDirectApprovalPayload(args: {
-  msgId?: string;
-  text: string;
-}): ReplyPayloadInput {
-  return {
-    text: args.text,
-    kind: 'final',
-    ...(args.msgId ? { replyToId: args.msgId } : {}),
-  };
-}
 
 export type BncrInboundHandlersRuntime = {
   channelId: string;
@@ -267,19 +246,6 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           'inbound',
           `accept reject|accountId=${accountId}|msgId=${msgId ?? '-'}|scope=${runtime.formatDisplayScope(route)}|chatType=${peer.kind}|msgType=${msgType}|status=${acceptance.status}|reason=${reason || '-'}|isAdmin=${parsed.isAdmin === true}|platformShouldRespond=${parsed.shouldRespond === true}`,
         );
-        const pendingNotice = buildBncrPendingDirectApprovalNotice({ parsed, reason });
-        if (pendingNotice) {
-          const sessionKey = buildCanonicalBncrSessionKey(route, canonicalAgentId);
-          await runtime.enqueueFromReply({
-            accountId,
-            sessionKey,
-            route,
-            payload: buildBncrPendingDirectApprovalPayload({
-              msgId: msgId ?? undefined,
-              text: pendingNotice,
-            }),
-          });
-        }
         respond(acceptance.status, acceptance.payload);
         return;
       }

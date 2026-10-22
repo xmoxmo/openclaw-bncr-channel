@@ -11,7 +11,6 @@ const requiredRootFiles = ['index.ts', 'openclaw.plugin.json'];
 
 const requiredScriptFiles = [
   'scripts/check-pack.mjs',
-  'scripts/check-register-drift.mjs',
   'scripts/selfcheck.mjs',
   'scripts/version-policy.mjs',
 ];
@@ -69,6 +68,7 @@ const requiredSourceFiles = [
   'src/messaging/inbound/gate.ts',
   'src/messaging/inbound/last-route.ts',
   'src/messaging/inbound/media-url-download.ts',
+  'src/messaging/inbound/media-url-policy.ts',
   'src/messaging/inbound/native-command.ts',
   'src/messaging/inbound/native-reply-delivery.ts',
   'src/messaging/inbound/outbound-replay-cache.ts',

@@ -783,7 +783,6 @@ import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/bootstrap/runtime-discovery.ts
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 var pluginPackageName = "@xmoxmo/bncr";
@@ -806,15 +805,36 @@ function resolveBncrPluginRoot(filePath) {
     current = parent;
   }
 }
-function tryExec(command, args) {
-  try {
-    return execFileSync(command, args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
-  } catch {
-    return "";
+function findExecutableOnPath(command) {
+  const extensions = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean) : [""];
+  for (const entry of (process.env.PATH || "").split(path.delimiter)) {
+    const dir = entry.trim();
+    if (!dir) continue;
+    for (const extension of extensions) {
+      const candidate = path.join(dir, `${command}${extension.toLowerCase()}`);
+      try {
+        if (fs.existsSync(candidate)) return candidate;
+      } catch {
+      }
+    }
   }
+  return "";
+}
+function resolveGlobalNodeModulesRoots() {
+  let execPath = process.execPath;
+  try {
+    execPath = fs.realpathSync(execPath);
+  } catch {
+  }
+  const execDir = path.dirname(execPath);
+  const roots = [
+    path.join(execDir, "..", "lib", "node_modules"),
+    path.join(execDir, "node_modules")
+  ];
+  if (process.env.APPDATA) {
+    roots.push(path.join(process.env.APPDATA, "npm", "node_modules"));
+  }
+  return roots;
 }
 function readOpenClawPackageName(pkgPath) {
   try {
@@ -864,13 +884,14 @@ function collectOpenClawCandidates(pluginDir2) {
     path.join("/opt/homebrew/lib/node_modules", "openclaw"),
     path.join(process.env.HOME || "", ".npm-global/lib/node_modules", "openclaw")
   ];
-  const npmRoot = tryExec("npm", ["root", "-g"]);
-  if (npmRoot) directCandidates.push(path.join(npmRoot, "openclaw"));
+  for (const root of resolveGlobalNodeModulesRoots()) {
+    directCandidates.push(path.join(root, "openclaw"));
+  }
   const nodePathEntries = (process.env.NODE_PATH || "").split(path.delimiter).map((entry) => entry.trim()).filter(Boolean);
   for (const entry of nodePathEntries) {
     directCandidates.push(path.join(entry, "openclaw"));
   }
-  const openclawBin = tryExec("which", ["openclaw"]);
+  const openclawBin = findExecutableOnPath("openclaw");
   if (openclawBin) {
     directCandidates.push(openclawBin);
     directCandidates.push(path.dirname(openclawBin));
@@ -1772,21 +1793,14 @@ var BncrConfigSchema = {
     additionalProperties: true,
     properties: {
       enabled: { type: "boolean" },
-      dmPolicy: {
-        type: "string",
-        enum: ["open", "allowlist", "disabled"]
-      },
-      groupPolicy: {
-        type: "string",
-        enum: ["open", "allowlist", "disabled"]
-      },
       allowFrom: {
         type: "array",
-        items: { type: "string" }
+        items: { type: "string" },
+        description: "Owner/pairing list used by the host surface. It does not admit inbound messages; private-chat admission is controlled by scene status."
       },
-      groupAllowFrom: {
-        type: "array",
-        items: { type: "string" }
+      allowBridgeCall: {
+        type: "boolean",
+        description: "Allow the message tool to forward bridgeMethod calls verbatim to the connected Bncr client. Defaults to on; set false to disable the raw passthrough."
       },
       debug: {
         type: "object",

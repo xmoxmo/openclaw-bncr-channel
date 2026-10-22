@@ -180,13 +180,14 @@ test('createBncrSqliteStateDatabase creates schema and reports json store mode',
     assert.equal((await stat(dbPath)).mode & 0o777, 0o600);
     assert.equal(db.getStoreMode(), null);
     const checksumRows = validateSqliteMigrationChecksums(db.getPath());
-    assert.equal(checksumRows.length, 6);
+    assert.equal(checksumRows.length, 7);
     assert.match(checksumRows[0], /^1:[0-9a-f]{64}$/);
     assert.match(checksumRows[1], /^2:[0-9a-f]{64}$/);
     assert.match(checksumRows[2], /^3:[0-9a-f]{64}$/);
     assert.match(checksumRows[3], /^4:[0-9a-f]{64}$/);
     assert.match(checksumRows[4], /^5:[0-9a-f]{64}$/);
     assert.match(checksumRows[5], /^6:[0-9a-f]{64}$/);
+    assert.match(checksumRows[6], /^7:[0-9a-f]{64}$/);
     db.close();
 
     const reopened = createBncrSqliteStateDatabase(dbPath);
@@ -2824,6 +2825,27 @@ function sharedSceneState(agent, status, historyLimit, lastSeenAt) {
   return state;
 }
 
+test('scene approval marks survive a sqlite round trip', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-scene-approval-'));
+  const dbPath = join(dir, 'bncr.sqlite3');
+  const db = createBncrSqliteStateDatabase(dbPath);
+  try {
+    db.setStoreMode('sqlite');
+    const state = scopedControlState('public', 100);
+    const scene = state.sceneRegistry[0];
+    scene.sceneKey = 'tgBot:10001';
+    scene.approvedAt = 99;
+    db.saveControlState(state, { agentId: 'public' });
+
+    const loaded = db.loadControlState();
+    assert.equal(loaded.sceneRegistry.length, 1);
+    assert.equal(loaded.sceneRegistry[0].approvedAt, 99);
+  } finally {
+    db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('scoped scene saves keep one row per agent for a shared scene key', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-scoped-scene-'));
   const dbPath = join(dir, 'bncr.sqlite3');
@@ -2972,7 +2994,7 @@ test('migration 6 rebuilds scenes with per agent identity and preserves rows', a
     raw.exec('ALTER TABLE scenes_legacy RENAME TO scenes');
     raw.exec('CREATE INDEX idx_scenes_status ON scenes(status, kind, platform)');
     raw.exec('CREATE INDEX idx_scenes_last_seen ON scenes(last_seen_at)');
-    raw.prepare('DELETE FROM schema_migrations WHERE version = 6').run();
+    raw.prepare('DELETE FROM schema_migrations WHERE version IN (6, 7)').run();
     raw.close();
 
     const reopened = createBncrSqliteStateDatabase(dbPath);

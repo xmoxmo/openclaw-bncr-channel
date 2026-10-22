@@ -8,6 +8,7 @@ function createRuntime(overrides = {}) {
   return {
     channelId: 'bncr',
     getApi: () => ({}),
+    getConfig: () => ({}),
     getMessageSendBridge: () => ({
       channelMessageSendText() {},
       channelMessageSendMedia() {},
@@ -359,6 +360,62 @@ test('handleAction bridgeMethod calls the bridge with extra args without sending
     result: { accountId: 'Primary' },
   });
   assert.deepEqual(calls, [['bridge', 'bncr.status.account', { accountId: 'Primary' }]]);
+});
+
+test('handleAction bridgeMethod is refused when allowBridgeCall is off', async () => {
+  const calls = [];
+  const { messageActions } = createBncrChannelPluginSurfaceGroup(
+    createRuntime({
+      getConfig: () => ({ channels: { bncr: { allowBridgeCall: false } } }),
+      getBridgeCallBridge: () => ({
+        async call(method, args) {
+          calls.push([method, args]);
+          return { ok: true };
+        },
+      }),
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      messageActions.handleAction({
+        action: 'send',
+        params: { bridgeMethod: 'bncr.status.account' },
+      }),
+    /allowBridgeCall=false/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test('handleAction bridgeMethod cannot redirect calls to another account', async () => {
+  const calls = [];
+  const { messageActions } = createBncrChannelPluginSurfaceGroup(
+    createRuntime({
+      getBridgeCallBridge: () => ({
+        async call(method, args, accountId) {
+          calls.push([method, args, accountId]);
+          return { ok: true };
+        },
+      }),
+    }),
+  );
+
+  await messageActions.handleAction({
+    action: 'send',
+    params: {
+      accountId: 'Primary',
+      bridgeMethod: 'bncr.client.adapters.call',
+      extra: { accountId: 'Secondary', method: 'delMsg', messageId: 'm1' },
+    },
+  });
+
+  assert.deepEqual(calls, [
+    [
+      'bncr.client.adapters.call',
+      { accountId: 'Primary', method: 'delMsg', messageId: 'm1' },
+      'Primary',
+    ],
+  ]);
 });
 
 test('handleAction bridgeMethod forwards generic adapter calls without per-method registration', async () => {

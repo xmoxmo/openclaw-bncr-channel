@@ -733,13 +733,18 @@ export function executeSceneAdminCommand(args: {
         ? defaultAdminAgentId
         : defaultPublicAgentId;
   const next = applySceneStatus(existing, command.kind === 'allow' ? 'allowed' : 'denied');
+  if (command.kind === 'allow') {
+    next.agentId = existing.agentId || fallbackAgentId;
+    next.approvedAt = now();
+  } else {
+    delete next.approvedAt;
+  }
   // Claiming an unowned scene moves it into the owning agent's slot; the legacy
   // unowned entry must not linger and shadow the new row.
   setSceneRecord(
     sceneRegistry,
     {
       ...next,
-      ...(command.kind === 'allow' ? { agentId: existing.agentId || fallbackAgentId } : {}),
       lastSeenAt: now(),
     },
     { previousAgentId: existing.agentId },

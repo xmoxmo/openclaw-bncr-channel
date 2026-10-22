@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -28,15 +27,42 @@ export function resolveBncrPluginRoot(filePath: string) {
   }
 }
 
-function tryExec(command: string, args: string[]) {
-  try {
-    return execFileSync(command, args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch {
-    return '';
+function findExecutableOnPath(command: string): string {
+  const extensions =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+      : [''];
+  for (const entry of (process.env.PATH || '').split(path.delimiter)) {
+    const dir = entry.trim();
+    if (!dir) continue;
+    for (const extension of extensions) {
+      const candidate = path.join(dir, `${command}${extension.toLowerCase()}`);
+      try {
+        if (fs.existsSync(candidate)) return candidate;
+      } catch {
+        // keep scanning the remaining PATH entries
+      }
+    }
   }
+  return '';
+}
+
+function resolveGlobalNodeModulesRoots(): string[] {
+  let execPath = process.execPath;
+  try {
+    execPath = fs.realpathSync(execPath);
+  } catch {
+    // keep the original exec path when realpath fails
+  }
+  const execDir = path.dirname(execPath);
+  const roots = [
+    path.join(execDir, '..', 'lib', 'node_modules'),
+    path.join(execDir, 'node_modules'),
+  ];
+  if (process.env.APPDATA) {
+    roots.push(path.join(process.env.APPDATA, 'npm', 'node_modules'));
+  }
+  return roots;
 }
 
 function readOpenClawPackageName(pkgPath: string) {
@@ -93,8 +119,9 @@ function collectOpenClawCandidates(pluginDir: string) {
     path.join(process.env.HOME || '', '.npm-global/lib/node_modules', 'openclaw'),
   ];
 
-  const npmRoot = tryExec('npm', ['root', '-g']);
-  if (npmRoot) directCandidates.push(path.join(npmRoot, 'openclaw'));
+  for (const root of resolveGlobalNodeModulesRoots()) {
+    directCandidates.push(path.join(root, 'openclaw'));
+  }
 
   const nodePathEntries = (process.env.NODE_PATH || '')
     .split(path.delimiter)
@@ -104,7 +131,7 @@ function collectOpenClawCandidates(pluginDir: string) {
     directCandidates.push(path.join(entry, 'openclaw'));
   }
 
-  const openclawBin = tryExec('which', ['openclaw']);
+  const openclawBin = findExecutableOnPath('openclaw');
   if (openclawBin) {
     directCandidates.push(openclawBin);
     directCandidates.push(path.dirname(openclawBin));

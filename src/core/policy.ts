@@ -2,55 +2,23 @@ import { asBoolean, asString } from './value-sanitize.ts';
 
 export type BncrChannelPolicyConfig = {
   enabled?: boolean;
-  dmPolicy?: unknown;
-  groupPolicy?: unknown;
   allowFrom?: unknown;
-  groupAllowFrom?: unknown;
+  allowBridgeCall?: unknown;
   requireMention?: unknown;
 };
-
-export type BncrDmPolicy = 'open' | 'allowlist' | 'disabled' | 'pairing';
-export type BncrGroupPolicy = 'open' | 'allowlist' | 'disabled';
 
 function asList(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.map((x) => asString(x).trim()).filter(Boolean);
 }
 
-function normalizeDmPolicy(value: unknown): BncrDmPolicy {
-  const normalized = asString(value || 'open')
-    .trim()
-    .toLowerCase();
-  switch (normalized) {
-    case 'allowlist':
-    case 'disabled':
-    case 'pairing':
-      return normalized;
-    default:
-      return 'open';
-  }
-}
-
-function normalizeGroupPolicy(value: unknown): BncrGroupPolicy {
-  const normalized = asString(value || 'open')
-    .trim()
-    .toLowerCase();
-  switch (normalized) {
-    case 'allowlist':
-    case 'disabled':
-      return normalized;
-    default:
-      return 'open';
-  }
-}
-
 export function resolveBncrChannelPolicy(channelCfg: BncrChannelPolicyConfig | null | undefined) {
   return {
     enabled: channelCfg?.enabled !== false,
-    dmPolicy: normalizeDmPolicy(channelCfg?.dmPolicy),
-    groupPolicy: normalizeGroupPolicy(channelCfg?.groupPolicy),
+    // Owner/pairing list consumed by the host surface. It is not an inbound
+    // admission list; private-chat admission is owned by the scene registry.
     allowFrom: asList(channelCfg?.allowFrom),
-    groupAllowFrom: asList(channelCfg?.groupAllowFrom),
+    allowBridgeCall: asBoolean(channelCfg?.allowBridgeCall, true),
     requireMention: asBoolean(channelCfg?.requireMention, false),
   };
 }
@@ -62,6 +30,15 @@ export function resolveBncrConfigWarnings(
   const warnings: string[] = [];
   if (policy.requireMention) {
     warnings.push('requireMention configured but not enforced yet');
+  }
+  const raw = (channelCfg || {}) as Record<string, unknown>;
+  const legacy = ['dmPolicy', 'groupPolicy', 'groupAllowFrom'].filter(
+    (key) => raw[key] !== undefined,
+  );
+  if (legacy.length > 0) {
+    warnings.push(
+      `ignored legacy policy field(s): ${legacy.join(', ')}; Bncr admission uses scene status`,
+    );
   }
   return warnings;
 }

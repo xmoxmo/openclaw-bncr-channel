@@ -6,21 +6,16 @@ export const BncrConfigSchema = {
     additionalProperties: true,
     properties: {
       enabled: { type: 'boolean' },
-      dmPolicy: {
-        type: 'string',
-        enum: ['open', 'allowlist', 'disabled'],
-      },
-      groupPolicy: {
-        type: 'string',
-        enum: ['open', 'allowlist', 'disabled'],
-      },
       allowFrom: {
         type: 'array',
         items: { type: 'string' },
+        description:
+          'Owner/pairing list used by the host surface. It does not admit inbound messages; private-chat admission is controlled by scene status.',
       },
-      groupAllowFrom: {
-        type: 'array',
-        items: { type: 'string' },
+      allowBridgeCall: {
+        type: 'boolean',
+        description:
+          'Allow the message tool to forward bridgeMethod calls verbatim to the connected Bncr client. Defaults to on; set false to disable the raw passthrough.',
       },
       debug: {
         type: 'object',

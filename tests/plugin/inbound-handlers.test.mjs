@@ -177,12 +177,12 @@ test('inbound handlers short-circuit stale events before acceptance', async () =
   assert.equal(calls.dispatched.length, 0);
 });
 
-test('inbound handlers emit a visible pending notice for non-admin direct approval gating', async () => {
+test('inbound handlers stay silent for non-admin direct scenes pending approval', async () => {
   const { runtime, calls } = createRuntime({
     async prepareInboundAcceptance() {
       return {
         ok: false,
-        status: true,
+        status: false,
         payload: {
           accepted: false,
           accountId: 'Primary',
@@ -205,7 +205,7 @@ test('inbound handlers emit a visible pending notice for non-admin direct approv
   });
 
   assert.deepEqual(responses[0], [
-    true,
+    false,
     {
       accepted: false,
       accountId: 'Primary',
@@ -213,21 +213,7 @@ test('inbound handlers emit a visible pending notice for non-admin direct approv
       reason: 'scene pending approval',
     },
   ]);
-  assert.equal(calls.enqueuedReplies.length, 1);
-  assert.equal(
-    calls.enqueuedReplies[0].payload.text,
-    'This private chat is pending approval. Ask the administrator to allow your SceneId: tgBot:10001',
-  );
-  assert.equal(calls.enqueuedReplies[0].payload.replyToId, 'msg-1');
-  assert.equal(
-    calls.enqueuedReplies[0].sessionKey,
-    'agent:orion:bncr:direct:7467426f743a3130303031',
-  );
-  assert.deepEqual(calls.enqueuedReplies[0].route, {
-    platform: 'tgBot',
-    groupId: '0',
-    userId: '10001',
-  });
+  assert.equal(calls.enqueuedReplies.length, 0);
   assert.equal(calls.dispatched.length, 0);
 });
 

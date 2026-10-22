@@ -16,6 +16,7 @@ import type { OpenClawChannelToolSend, openClawJsonResult } from '../openclaw/sd
 import { readOpenClawStringParam } from '../openclaw/sdk-helpers.ts';
 import type { BncrBridgeCallBridge } from './bridge-call.ts';
 import type {
+  BncrChannelConfigRoot,
   BncrChannelSendContext,
   BncrMessageToolSchemaContribution,
   BncrSceneRecord,
@@ -75,6 +76,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
   channelId: string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   getApi: () => Parameters<typeof saveOpenClawChannelMediaBuffer>[0];
+  getConfig?: () => BncrChannelConfigRoot;
   getMessageSendBridge: () => {
     channelMessageSendText: (
       ctx: Record<string, unknown>,
@@ -217,15 +219,25 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
       const bridgeMethod =
         typeof paramsObj.bridgeMethod === 'string' ? paramsObj.bridgeMethod.trim() : '';
       if (bridgeMethod) {
+        const policy = resolveBncrChannelPolicy(
+          runtime.getConfig?.()?.channels?.[runtime.channelId],
+        );
+        if (!policy.allowBridgeCall) {
+          throw new Error(
+            'bridgeMethod passthrough is disabled by channels.bncr.allowBridgeCall=false',
+          );
+        }
         const rawExtra = paramsObj.extra;
         const bridgeArgs =
           rawExtra && typeof rawExtra === 'object' && !Array.isArray(rawExtra)
             ? { ...(rawExtra as Record<string, unknown>) }
             : {};
-        if (!('accountId' in bridgeArgs)) {
-          bridgeArgs.accountId = resolvedAccountId || undefined;
-        }
-        const bridgeResult = await runtime.getBridgeCallBridge().call(bridgeMethod, bridgeArgs);
+        // The raw call stays scoped to the account this tool invocation resolved
+        // to; a caller-supplied extra.accountId cannot redirect it elsewhere.
+        bridgeArgs.accountId = resolvedAccountId || undefined;
+        const bridgeResult = await runtime
+          .getBridgeCallBridge()
+          .call(bridgeMethod, bridgeArgs, resolvedAccountId);
         return runtime.openClawJsonResult(bridgeResult);
       }
 

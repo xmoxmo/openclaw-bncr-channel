@@ -79,6 +79,8 @@ export type BncrSceneRecord = {
   historyLimit?: number;
   historyForce?: boolean;
   downloadMedia?: boolean;
+  /** Set only when an administrator explicitly allowed this scene. */
+  approvedAt?: number;
   lastSeenAt: number;
 };
 

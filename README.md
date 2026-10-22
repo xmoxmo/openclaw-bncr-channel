@@ -110,10 +110,8 @@ openclaw devices approve --latest
 | 配置 | 说明 |
 | --- | --- |
 | `enabled` | 是否启用 Bncr 频道 |
-| `dmPolicy` | 私聊策略：`open`、`allowlist`、`disabled` |
-| `groupPolicy` | 群聊策略：`open`、`allowlist`、`disabled` |
-| `allowFrom` | 私聊允许的用户列表 |
-| `groupAllowFrom` | 群聊允许的用户列表 |
+| `allowFrom` | 供宿主识别的 owner/pairing 名单，不参与 Bncr 入站准入 |
+| `allowBridgeCall` | 是否允许 `message` 工具把 `bridgeMethod` 原样透传给客户端，默认开启 |
 | `allowTool` | 是否转发工具消息，默认关闭 |
 | `outboundRequireAck` | 出站文本是否等待客户端 ACK，默认开启 |
 | `accounts` | 多账号配置 |
@@ -217,11 +215,16 @@ openclaw config get channels.bncr.mediaMaxMb
 
 非管理员的权限按会话类型区分：
 
-- 私聊允许正常对话；`/whoami`、`/status`、`/new`、`/reset`、`/stop`、`/model`、`/verbose` 等受控命令按对应规则执行，不会以提升后的身份转交 Agent。
+- 私聊先过准入：未批准的私聊场景保持 `pending` 且完全静默，需要管理员执行 `/bncr allow <SceneId>` 放行。历史场景没有管理员显式批准标记时同样回落 `pending`。
+- 已放行的私聊允许正常对话；`/whoami`、`/status`、`/new`、`/reset`、`/stop`、`/model`、`/verbose` 等受控命令按对应规则执行，不会以提升后的身份转交 Agent。
 - 群聊受当前场景模式控制。未授权场景不会进入正常处理流程。
 - `/bncr` 命令始终由 Bncr 识别；未知或不可用的 Bncr 命令会直接提示，不会转交 Agent。
 - `/bncr help` 会根据当前会话类型和权限，仅展示当前可用的命令。
 - 私聊非管理员使用 `history-*` 或 `download-media` 时，只能操作当前私聊会话，不能通过参数修改其他会话。
+
+### 客户端桥接直通
+
+`message` 工具的 `bridgeMethod` 是有意保留的原始透传面：方法名和参数不做白名单校验，直接转发给已连接的 Bncr 客户端，客户端返回的错误原样回给 Agent。调用始终落在本次工具调用解析出的 `accountId` 上，`extra.accountId` 不能改写到其他账号。该能力默认开启，可在 `channels.bncr.allowBridgeCall=false` 关闭。
 
 ## 群聊模式
 

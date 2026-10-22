@@ -72,7 +72,10 @@ import type {
   ReplyPayloadInput,
 } from './messaging/outbound/reply-enqueue.ts';
 import type { OpenClawChannelRuntimeApiHolder } from './openclaw/channel-runtime-contracts.ts';
-import { getOpenClawRuntimeConfig } from './openclaw/config-runtime.ts';
+import {
+  getOpenClawRuntimeConfig,
+  getOpenClawRuntimeConfigOrDefault,
+} from './openclaw/config-runtime.ts';
 import { resolveBncrMediaMaxBytes } from './openclaw/media-limit-runtime.ts';
 import type { OpenClawLoadedMedia } from './openclaw/media-runtime.ts';
 import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
@@ -3277,6 +3280,8 @@ export function createBncrChannelPlugin(getBridge: () => BncrBridgeRuntime) {
     channelId: CHANNEL_ID,
     sceneRegistry: getBridge().getSceneRegistry(),
     getApi: () => getBridge().getApi(),
+    // A missing config read API keeps the passthrough at its default (on).
+    getConfig: () => getOpenClawRuntimeConfigOrDefault(getBridge().getApi(), {}),
     getMessageSendBridge: bridgeGroup.getMessageSendBridge,
     getOutboundBridge: bridgeGroup.getOutboundBridge,
     getMessagingBridge: bridgeGroup.getMessagingBridge,

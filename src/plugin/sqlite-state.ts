@@ -492,6 +492,13 @@ CREATE INDEX idx_scenes_last_seen ON scenes(last_seen_at);
 CREATE UNIQUE INDEX idx_scenes_agent_scene ON scenes(COALESCE(agent_id, ''), scene_key);
 `,
   },
+  {
+    version: 7,
+    name: 'bncr-scenes-explicit-approval',
+    up: `
+ALTER TABLE scenes ADD COLUMN approved_at INTEGER;
+`,
+  },
 ];
 
 const HISTORY_SHARD_LEASE_MS = 5 * 60 * 1000;
@@ -981,8 +988,8 @@ function replaceControlState(
       `INSERT INTO scenes (
          scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
          agent_id, group_reply_mode, history_limit, history_force, download_media,
-         last_seen_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         approved_at, last_seen_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(COALESCE(agent_id, ''), scene_key) DO UPDATE SET
          kind = excluded.kind,
          status = excluded.status,
@@ -995,6 +1002,7 @@ function replaceControlState(
          history_limit = excluded.history_limit,
          history_force = excluded.history_force,
          download_media = excluded.download_media,
+         approved_at = excluded.approved_at,
          last_seen_at = excluded.last_seen_at,
          updated_at = excluded.updated_at
        WHERE excluded.last_seen_at >= scenes.last_seen_at`,
@@ -1023,6 +1031,7 @@ function replaceControlState(
         scene.historyLimit ?? null,
         scene.historyForce === undefined ? null : scene.historyForce ? 1 : 0,
         scene.downloadMedia === undefined ? null : scene.downloadMedia ? 1 : 0,
+        typeof scene.approvedAt === 'number' && scene.approvedAt > 0 ? scene.approvedAt : null,
         Number(scene.lastSeenAt) || timestamp,
         timestamp,
         timestamp,
@@ -1153,7 +1162,8 @@ function loadControlState(db: DatabaseSync): BncrSqliteControlState {
     db
       .prepare(
         `SELECT scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
-            agent_id, group_reply_mode, history_limit, history_force, download_media, last_seen_at
+            agent_id, group_reply_mode, history_limit, history_force, download_media,
+            approved_at, last_seen_at
      FROM scenes
      ORDER BY last_seen_at ASC, scene_key ASC`,
       )
@@ -1171,6 +1181,7 @@ function loadControlState(db: DatabaseSync): BncrSqliteControlState {
       history_limit: number | null;
       history_force: number | null;
       download_media: number | null;
+      approved_at: number | null;
       last_seen_at: number;
     }>
   ).map((row) => {
@@ -1190,6 +1201,7 @@ function loadControlState(db: DatabaseSync): BncrSqliteControlState {
     if (row.history_limit !== null) scene.historyLimit = row.history_limit;
     if (row.history_force !== null) scene.historyForce = row.history_force === 1;
     if (row.download_media !== null) scene.downloadMedia = row.download_media === 1;
+    if (row.approved_at !== null) scene.approvedAt = row.approved_at;
     return scene;
   });
 

@@ -365,6 +365,9 @@ export function createBncrStateStore(runtime: {
           : {}),
         ...(typeof item.historyForce === 'boolean' ? { historyForce: item.historyForce } : {}),
         ...(typeof item.downloadMedia === 'boolean' ? { downloadMedia: item.downloadMedia } : {}),
+        ...(typeof item.approvedAt === 'number' && item.approvedAt > 0
+          ? { approvedAt: item.approvedAt }
+          : {}),
         lastSeenAt,
       });
     }

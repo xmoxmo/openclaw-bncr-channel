@@ -39,7 +39,7 @@ export function parseCheckRegisterDriftOptions(args, defaults = DEFAULT_OPTIONS)
 
 const printHelp = () => {
   console.log(
-    'Usage: node ./scripts/check-register-drift.mjs [--duration-sec 300] [--interval-sec 15] [--account-id Primary] [--gateway-bin openclaw] [--gateway-timeout-ms 30000]\n\nSamples bncr.diagnostics over time and reports whether register counters drift after warmup.',
+    'Usage: node ./tools/check-register-drift.mjs [--duration-sec 300] [--interval-sec 15] [--account-id Primary] [--gateway-bin openclaw] [--gateway-timeout-ms 30000]\n\nSamples bncr.diagnostics over time and reports whether register counters drift after warmup.',
   );
 };
 

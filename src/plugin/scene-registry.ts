@@ -91,6 +91,10 @@ function defaultGroupReplyMode(kind: BncrSceneKind): BncrGroupReplyMode | undefi
   return kind === 'group' ? 'admin' : undefined;
 }
 
+function isSceneApproved(scene: BncrSceneRecord): boolean {
+  return typeof scene.approvedAt === 'number' && scene.approvedAt > 0;
+}
+
 export function buildRouteSceneKey(route: BncrRoute): string {
   const platform = asString(route.platform).trim();
   const groupId = asString(route.groupId).trim() || '0';
@@ -181,6 +185,18 @@ export function decideSceneAdmission(args: {
       };
     }
 
+    // Direct-chat admission requires an explicit administrator approval. Rows
+    // allowed by the old auto-admission logic carry no approval mark, so they
+    // return to pending instead of continuing to pass the gate.
+    if (
+      kind === 'direct' &&
+      parsed.isAdmin !== true &&
+      nextScene.status === 'allowed' &&
+      !isSceneApproved(nextScene)
+    ) {
+      nextScene.status = 'pending';
+    }
+
     setSceneRecord(sceneRegistry, nextScene, { previousAgentId: existing.agentId });
 
     if (nextScene.status === 'allowed') {
@@ -201,8 +217,8 @@ export function decideSceneAdmission(args: {
       allowed: false,
       scene: nextScene,
       reason: nextScene.status === 'pending' ? 'scene pending approval' : 'scene denied',
-      replyPolicy:
-        kind === 'group' ? 'silent' : nextScene.status === 'pending' ? 'pending' : 'silent',
+      // Denied and pending scenes never produce a user-visible reply.
+      replyPolicy: 'silent',
     };
   }
 
@@ -220,25 +236,34 @@ export function decideSceneAdmission(args: {
     return { allowed: true, scene, agentId };
   }
 
-  const directNonAdminAllowed = kind === 'direct';
+  if (kind === 'direct') {
+    // Admission comes first: an unknown private chat stays pending and
+    // completely silent until an administrator allows its SceneId. The
+    // non-admin DM policy elevation only applies after this gate passes.
+    const scene = buildSceneRecord({
+      parsed,
+      sceneKey,
+      kind,
+      status: 'pending',
+      lastSeenAt: now,
+    });
+    setSceneRecord(sceneRegistry, scene);
+    return {
+      allowed: false,
+      scene,
+      reason: 'scene pending approval',
+      replyPolicy: 'silent',
+    };
+  }
+
   const scene = buildSceneRecord({
     parsed,
     sceneKey,
     kind,
-    status: directNonAdminAllowed ? 'allowed' : 'denied',
-    agentId: directNonAdminAllowed ? defaultPublicAgentId : undefined,
+    status: 'denied',
     lastSeenAt: now,
   });
   setSceneRecord(sceneRegistry, scene);
-
-  if (directNonAdminAllowed) {
-    return {
-      allowed: true,
-      scene,
-      agentId: scene.agentId || defaultPublicAgentId,
-    };
-  }
-
   return {
     allowed: false,
     scene,

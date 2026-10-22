@@ -581,6 +581,7 @@ test('executeSceneAdminCommand requires admin and mutates scene registry determi
     userId: '10001',
     userName: 'xmo',
     agentId: 'main',
+    approvedAt: 2,
     lastSeenAt: 2,
   });
 

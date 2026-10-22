@@ -1,5 +1,6 @@
 import type { OpenClawLoadedMedia } from '../../openclaw/media-runtime.ts';
-import { downloadInboundMediaUrl } from './media-url-download.ts';
+import { downloadInboundMediaUrl, type InboundMediaUrlGuard } from './media-url-download.ts';
+import { assertPublicInboundMediaUrl } from './media-url-policy.ts';
 
 type RuntimeChannelMediaReader = {
   runtime?: {
@@ -40,10 +41,18 @@ export async function loadInboundRemoteMedia(
   api: RuntimeChannelMediaReader,
   url: string,
   maxBytes: number,
+  options?: { urlGuard?: InboundMediaUrlGuard },
 ): Promise<OpenClawLoadedMedia> {
   try {
     return await readRemoteMediaBufferFromRuntime(api, url, maxBytes);
   } catch {
-    return assertLoadedInboundRemoteMedia(await downloadInboundMediaUrl(url, maxBytes), 'fallback');
+    // The host reader applies its own destination policy. The internal fallback
+    // must enforce the same boundary itself instead of retrying the rejected URL
+    // through a raw fetch.
+    const urlGuard = options?.urlGuard ?? assertPublicInboundMediaUrl;
+    return assertLoadedInboundRemoteMedia(
+      await downloadInboundMediaUrl(url, maxBytes, undefined, urlGuard),
+      'fallback',
+    );
   }
 }
