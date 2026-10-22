@@ -1,7 +1,92 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-
+import { setSceneRecord } from '../../src/plugin/scene-registry.ts';
 import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
+
+test('MIME sniffing never fetches a non-public URL', async () => {
+  const bridge = createBridge();
+  const originalFetch = globalThis.fetch;
+  const originalLoad = bridge.loadOutboundTransferMedia;
+  let fetchCalls = 0;
+  let loadCalls = 0;
+
+  try {
+    globalThis.fetch = async () => {
+      fetchCalls += 1;
+      throw new Error('non-public media URL must not be fetched');
+    };
+    bridge.loadOutboundTransferMedia = async () => {
+      loadCalls += 1;
+      throw new Error('URL passthrough must not download media');
+    };
+
+    const result = await bridge.transferMediaToBncrClient({
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      mediaUrl: 'http://127.0.0.1:9/secret.jpg',
+    });
+
+    assert.equal(fetchCalls, 0, 'MIME sniffing must not request a loopback URL');
+    assert.equal(loadCalls, 0);
+    assert.equal(result.mode, 'base64');
+    assert.equal(result.base64, undefined);
+    assert.equal(result.mimeType, 'image/jpeg');
+  } finally {
+    globalThis.fetch = originalFetch;
+    bridge.loadOutboundTransferMedia = originalLoad;
+    cleanupBridge(bridge);
+  }
+});
+
+test('scene downloadMedia off is a default and a per-message true still downloads', async () => {
+  const bridge = createBridge();
+  const originalLoad = bridge.loadOutboundTransferMedia;
+  let loadCalls = 0;
+
+  try {
+    bridge.canonicalAgentId = 'orion';
+    setSceneRecord(bridge.sceneRegistry, {
+      sceneKey: 'tgBot:-1001',
+      kind: 'group',
+      status: 'allowed',
+      platform: 'tgBot',
+      groupId: '-1001',
+      agentId: 'orion',
+      downloadMedia: false,
+      lastSeenAt: 1,
+    });
+    bridge.loadOutboundTransferMedia = async () => {
+      loadCalls += 1;
+      return {
+        loaded: {
+          buffer: Buffer.from([1, 2, 3]),
+          contentType: 'image/jpeg',
+          fileName: 'chosen.jpg',
+        },
+        size: 3,
+        mimeType: 'image/jpeg',
+        fileName: 'chosen.jpg',
+      };
+    };
+
+    await assert.rejects(
+      bridge.transferMediaToBncrClient({
+        accountId: 'Primary',
+        sessionKey: 'agent:orion:bncr:direct:demo',
+        route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+        mediaUrl: 'http://127.0.0.1:9/secret.jpg',
+        downloadMedia: true,
+      }),
+      /gateway context unavailable/,
+    );
+
+    assert.equal(loadCalls, 1, 'the per-message choice decides whether to download');
+  } finally {
+    bridge.loadOutboundTransferMedia = originalLoad;
+    cleanupBridge(bridge);
+  }
+});
 
 test('transferMediaToBncrClient chunk mode records init transferring and completed states', async () => {
   const bridge = createBridge();

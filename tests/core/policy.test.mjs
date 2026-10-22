@@ -3,21 +3,16 @@ import test from 'node:test';
 
 import { resolveBncrChannelPolicy, resolveBncrConfigWarnings } from '../../src/core/policy.ts';
 
-test('resolveBncrChannelPolicy parses requireMention from string booleans', () => {
-  const enabled = resolveBncrChannelPolicy({ requireMention: 'true' });
-  const disabled = resolveBncrChannelPolicy({ requireMention: 'false' });
-
-  assert.equal(enabled.requireMention, true);
-  assert.equal(disabled.requireMention, false);
+test('resolveBncrChannelPolicy applies channel defaults', () => {
+  const policy = resolveBncrChannelPolicy({});
+  assert.equal(policy.enabled, true);
+  assert.equal(policy.allowBridgeCall, true);
+  assert.deepEqual(policy.allowFrom, []);
 });
 
-test('resolveBncrConfigWarnings reports requireMention as reserved no-op', () => {
-  assert.deepEqual(resolveBncrConfigWarnings({ requireMention: false }), []);
-  assert.deepEqual(resolveBncrConfigWarnings({ requireMention: 'false' }), []);
-  assert.deepEqual(resolveBncrConfigWarnings({ requireMention: true }), [
-    'requireMention configured but not enforced yet',
-  ]);
-  assert.deepEqual(resolveBncrConfigWarnings({ requireMention: 'true' }), [
-    'requireMention configured but not enforced yet',
+test('resolveBncrConfigWarnings reports removed legacy policy fields', () => {
+  assert.deepEqual(resolveBncrConfigWarnings({}), []);
+  assert.deepEqual(resolveBncrConfigWarnings({ dmPolicy: 'allowlist', groupPolicy: 'open' }), [
+    'ignored legacy policy field(s): dmPolicy, groupPolicy; Bncr admission uses scene status',
   ]);
 });

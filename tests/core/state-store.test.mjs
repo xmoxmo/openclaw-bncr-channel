@@ -1368,6 +1368,57 @@ test('createBncrStateStore imports controls into sqlite and prefers sqlite over 
   await rm(dir, { recursive: true, force: true });
 });
 
+test('dual-mode json mirror keeps another agent scene rows written by a newer flush', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-dual-merge-'));
+  const statePath = join(dir, 'state.json');
+  const sqlite = createBncrSqliteStateDatabase(join(dir, 'state.sqlite3'));
+  sqlite.setStoreMode('dual');
+
+  try {
+    const first = createStore();
+    first.runtime.getStatePath = () => statePath;
+    first.runtime.sqliteState = sqlite;
+    first.runtime.sceneRegistry.set('orion\u0000tgBot:-1001', {
+      sceneKey: 'tgBot:-1001',
+      kind: 'group',
+      status: 'allowed',
+      platform: 'tgBot',
+      groupId: '-1001',
+      agentId: 'orion',
+      downloadMedia: false,
+      lastSeenAt: 100,
+    });
+    await first.store.flushState();
+
+    const second = createStore();
+    second.runtime.getStatePath = () => statePath;
+    second.runtime.sqliteState = sqlite;
+    second.runtime.canonicalAgentId = () => 'public';
+    second.runtime.sceneRegistry.set('public\u0000tgBot:-2002', {
+      sceneKey: 'tgBot:-2002',
+      kind: 'group',
+      status: 'allowed',
+      platform: 'tgBot',
+      groupId: '-2002',
+      agentId: 'public',
+      lastSeenAt: 200,
+    });
+    await second.store.flushState();
+
+    const written = JSON.parse(await readFile(statePath, 'utf8'));
+    const rows = written.sceneRegistry
+      .map((scene) => [scene.agentId, scene.sceneKey])
+      .sort((a, b) => `${a[0]}:${a[1]}`.localeCompare(`${b[0]}:${b[1]}`));
+    assert.deepEqual(rows, [
+      ['orion', 'tgBot:-1001'],
+      ['public', 'tgBot:-2002'],
+    ]);
+  } finally {
+    sqlite.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('createBncrStateStore stale memory flush cannot reactivate consumed history messages', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-state-sqlite-stale-memory-'));
   const dbPath = join(dir, 'state.sqlite3');

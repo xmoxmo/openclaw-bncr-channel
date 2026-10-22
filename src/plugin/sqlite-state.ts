@@ -908,11 +908,11 @@ function replaceControlState(
       db.prepare('DELETE FROM routes WHERE id NOT IN (SELECT route_id FROM session_routes)').run();
       db.prepare('DELETE FROM scenes WHERE agent_id = ?').run(scope);
     } else {
-      db.exec('DELETE FROM session_routes');
-      db.exec('DELETE FROM routes');
-      db.exec('DELETE FROM scenes');
-      db.exec('DELETE FROM account_activity');
-      db.exec('DELETE FROM register_drift');
+      // An unscoped flush has no owner to prove ownership of agent-scoped
+      // rows. Never blanket-clear shared tables here: another agent's access
+      // settings may have been written after this process loaded its snapshot.
+      // Only unowned legacy scenes are rewritten; owned rows are merged below.
+      db.exec("DELETE FROM scenes WHERE COALESCE(agent_id, '') = ''");
     }
 
     // Scenes removed from the live registry were revoked on purpose. The scoped
@@ -1041,23 +1041,17 @@ function replaceControlState(
     // account_activity is account-level and shared across agents: a scoped flush
     // merges instead of rewriting; only a newer-or-equal activity event wins
     // (flush time alone must not let a stale entry clobber a fresher one).
-    const insertActivity = scope
-      ? db.prepare(
-          `INSERT INTO account_activity (
-             account_id, activity_type, session_key, session_scope, event_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(account_id, activity_type) DO UPDATE SET
-             session_key = excluded.session_key,
-             session_scope = excluded.session_scope,
-             event_at = excluded.event_at,
-             updated_at = excluded.updated_at
-           WHERE excluded.event_at >= account_activity.event_at`,
-        )
-      : db.prepare(
-          `INSERT INTO account_activity (
-             account_id, activity_type, session_key, session_scope, event_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
-        );
+    const insertActivity = db.prepare(
+      `INSERT INTO account_activity (
+         account_id, activity_type, session_key, session_scope, event_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(account_id, activity_type) DO UPDATE SET
+         session_key = excluded.session_key,
+         session_scope = excluded.session_scope,
+         event_at = excluded.event_at,
+         updated_at = excluded.updated_at
+       WHERE excluded.event_at >= account_activity.event_at`,
+    );
     const insertActivityAt = (accountId: string, activityType: string, value: number) => {
       insertActivity.run(
         accountId,
@@ -1087,33 +1081,25 @@ function replaceControlState(
 
     const drift = dumpRegisterDriftSnapshot(state.lastDriftSnapshot);
     if (drift) {
-      const insertDrift = scope
-        ? db.prepare(
-            `INSERT INTO register_drift (
-               id, captured_at, register_count, api_generation, post_warmup_register_count,
-               api_instance_id, registry_fingerprint, dominant_bucket, source_buckets_json,
-               trace_window_size, trace_recent_json, updated_at
-             ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-               captured_at = excluded.captured_at,
-               register_count = excluded.register_count,
-               api_generation = excluded.api_generation,
-               post_warmup_register_count = excluded.post_warmup_register_count,
-               api_instance_id = excluded.api_instance_id,
-               registry_fingerprint = excluded.registry_fingerprint,
-               dominant_bucket = excluded.dominant_bucket,
-               source_buckets_json = excluded.source_buckets_json,
-               trace_window_size = excluded.trace_window_size,
-               trace_recent_json = excluded.trace_recent_json,
-               updated_at = excluded.updated_at`,
-          )
-        : db.prepare(
-            `INSERT INTO register_drift (
-               id, captured_at, register_count, api_generation, post_warmup_register_count,
-               api_instance_id, registry_fingerprint, dominant_bucket, source_buckets_json,
-               trace_window_size, trace_recent_json, updated_at
-             ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          );
+      const insertDrift = db.prepare(
+        `INSERT INTO register_drift (
+           id, captured_at, register_count, api_generation, post_warmup_register_count,
+           api_instance_id, registry_fingerprint, dominant_bucket, source_buckets_json,
+           trace_window_size, trace_recent_json, updated_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           captured_at = excluded.captured_at,
+           register_count = excluded.register_count,
+           api_generation = excluded.api_generation,
+           post_warmup_register_count = excluded.post_warmup_register_count,
+           api_instance_id = excluded.api_instance_id,
+           registry_fingerprint = excluded.registry_fingerprint,
+           dominant_bucket = excluded.dominant_bucket,
+           source_buckets_json = excluded.source_buckets_json,
+           trace_window_size = excluded.trace_window_size,
+           trace_recent_json = excluded.trace_recent_json,
+           updated_at = excluded.updated_at`,
+      );
       insertDrift.run(
         drift.capturedAt,
         drift.registerCount,

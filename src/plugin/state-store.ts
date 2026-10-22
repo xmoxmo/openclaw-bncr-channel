@@ -1218,6 +1218,24 @@ export function createBncrStateStore(runtime: {
       }
     }
     if (statePath && sqliteMode !== 'sqlite') {
+      if (
+        sqliteState &&
+        sqliteMode === 'dual' &&
+        typeof sqliteState.loadControlState === 'function'
+      ) {
+        // The JSON file is shared by every agent in this state directory. Use
+        // the merged SQLite control state instead of this instance's snapshot
+        // so a stale agent process cannot rewrite another agent's access rows
+        // in the mirror.
+        const control = sqliteState.loadControlState();
+        data.sceneRegistry = control.sceneRegistry;
+        data.sessionRoutes = control.sessionRoutes;
+        data.lastSessionByAccount = control.lastSessionByAccount;
+        data.lastActivityByAccount = control.lastActivityByAccount;
+        data.lastInboundByAccount = control.lastInboundByAccount;
+        data.lastOutboundByAccount = control.lastOutboundByAccount;
+        data.lastDriftSnapshot = control.lastDriftSnapshot;
+      }
       await writeOpenClawJsonFileAtomically(statePath, data);
     }
   }

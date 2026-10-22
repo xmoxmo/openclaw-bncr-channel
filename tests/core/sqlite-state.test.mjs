@@ -387,7 +387,15 @@ test('a schema contract failure rolls back a compound write before the next retr
     repaired.close();
 
     db.saveControlState(replacement);
-    assert.deepEqual(db.loadControlState(), replacement);
+    const loaded = db.loadControlState();
+    assert.ok(
+      loaded.sessionRoutes.some((route) => route.sessionKey === 'agent:public:bncr:direct:retry'),
+    );
+    assert.ok(
+      loaded.sceneRegistry.some(
+        (scene) => scene.agentId === 'public' && scene.sceneKey === 'tgBot:10001',
+      ),
+    );
     db.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -486,7 +494,7 @@ test('sqlite control state round trips all imported fields', async () => {
   }
 });
 
-test('sqlite control state save replaces previous rows without duplicating routes or scenes', async () => {
+test('unscoped control state save merges rows owned by other agents', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-'));
   try {
     const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
@@ -497,9 +505,21 @@ test('sqlite control state save replaces previous rows without duplicating route
     next.sceneRegistry[0].agentId = 'public';
     db.saveControlState(next);
 
-    assert.deepEqual(db.loadControlState(), next);
-    assert.equal(db.loadControlState().sessionRoutes.length, 1);
-    assert.equal(db.loadControlState().sceneRegistry.length, 2);
+    const loaded = db.loadControlState();
+    assert.equal(loaded.sessionRoutes.length, 2);
+    assert.deepEqual(loaded.sessionRoutes.map((route) => route.sessionKey).sort(), [
+      'agent:orion:bncr:direct:demo',
+      'agent:orion:bncr:direct:next',
+    ]);
+    assert.equal(loaded.sceneRegistry.length, 3);
+    assert.deepEqual(
+      loaded.sceneRegistry.map((scene) => [scene.agentId || null, scene.sceneKey]).sort(),
+      [
+        [null, 'tgBot:-1001'],
+        ['orion', 'tgBot:10001'],
+        ['public', 'tgBot:10001'],
+      ].sort(),
+    );
     db.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -2951,6 +2971,39 @@ test('scoped scene save stamps an unowned scene with the flushing agent', async 
   } finally {
     db.close();
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('unscoped control save keeps other agents scene rows', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-unscoped-control-'));
+  const db = createBncrSqliteStateDatabase(join(dir, 'state.sqlite3'));
+  try {
+    db.setStoreMode('sqlite');
+    db.saveControlState(sharedSceneState('orion', 'allowed', 20, 100), { agentId: 'orion' });
+    db.saveControlState(sharedSceneState('public', 'denied', 60, 200), { agentId: 'public' });
+
+    const unscoped = createEmptyBncrSqliteControlState();
+    unscoped.sceneRegistry.push({
+      sceneKey: 'tgBot:-880009',
+      kind: 'group',
+      status: 'pending',
+      platform: 'tgBot',
+      groupId: '-880009',
+      lastSeenAt: 300,
+    });
+    db.saveControlState(unscoped, { agentId: null });
+
+    const rows = new DatabaseSync(join(dir, 'state.sqlite3'))
+      .prepare("SELECT agent_id, scene_key FROM scenes ORDER BY COALESCE(agent_id, ''), scene_key")
+      .all()
+      .map((row) => [row.agent_id, row.scene_key]);
+    assert.deepEqual(rows, [
+      [null, 'tgBot:-880009'],
+      ['orion', 'tgBot:-880001'],
+      ['public', 'tgBot:-880001'],
+    ]);
+  } finally {
+    db.close();
   }
 });
 

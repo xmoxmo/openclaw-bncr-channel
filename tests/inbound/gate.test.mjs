@@ -127,7 +127,7 @@ test('does not enforce legacy group allowlist policy anymore', async () => {
   assert.deepEqual(result, { allowed: true });
 });
 
-test('does not enforce reserved requireMention gate yet', async () => {
+test('ignores the removed requireMention key instead of gating the inbound message', async () => {
   const result = await checkBncrMessageGate({
     parsed: makeParsed({ platform: 'tgBot', groupId: '-1001', userId: '10001' }),
     cfg: makeCfg({ requireMention: true, groupPolicy: 'open' }),

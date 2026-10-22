@@ -188,6 +188,53 @@ test('prepareBncrInboundAcceptance defaults group scenes to admin-only reply mod
   });
 });
 
+test('group reply modes gate uploads and replies as documented', async () => {
+  const cases = [
+    { mode: 'all', isAdmin: true, shouldRespond: false, upload: true, reply: true },
+    { mode: 'all', isAdmin: false, shouldRespond: false, upload: true, reply: true },
+    { mode: 'admin', isAdmin: true, shouldRespond: false, upload: true, reply: true },
+    { mode: 'admin', isAdmin: false, shouldRespond: true, upload: false, reply: false },
+    { mode: 'admin', isAdmin: false, shouldRespond: false, upload: false, reply: false },
+    { mode: 'mention', isAdmin: true, shouldRespond: true, upload: true, reply: true },
+    { mode: 'mention', isAdmin: true, shouldRespond: false, upload: true, reply: false },
+    { mode: 'mention', isAdmin: false, shouldRespond: true, upload: true, reply: true },
+    { mode: 'mention', isAdmin: false, shouldRespond: false, upload: true, reply: false },
+    { mode: 'hybrid', isAdmin: true, shouldRespond: false, upload: true, reply: true },
+    { mode: 'hybrid', isAdmin: false, shouldRespond: true, upload: true, reply: true },
+    { mode: 'hybrid', isAdmin: false, shouldRespond: false, upload: true, reply: false },
+  ];
+
+  for (const item of cases) {
+    const sceneRegistry = new Map();
+    setSceneRecord(sceneRegistry, {
+      sceneKey: 'tgBot:-1001',
+      kind: 'group',
+      status: 'allowed',
+      platform: 'tgBot',
+      groupId: '-1001',
+      agentId: 'public',
+      groupReplyMode: item.mode,
+      historyLimit: 50,
+      historyForce: true,
+      lastSeenAt: 1,
+    });
+    const result = await prepareBncrInboundAcceptance(
+      buildArgs({
+        parsed: buildParsed({
+          peer: { kind: 'group', id: '-1001' },
+          isGroup: true,
+          isAdmin: item.isAdmin,
+          shouldRespond: item.shouldRespond,
+        }),
+        sceneRegistry,
+      }),
+    );
+    const label = item.mode + ' admin=' + item.isAdmin + ' mention=' + item.shouldRespond;
+    assert.equal(result.shouldAccumulate, item.upload, label + ' upload');
+    assert.equal(result.shouldDispatch, item.reply, label + ' reply');
+  }
+});
+
 test('prepareBncrInboundAcceptance honors group reply modes for dispatch decisions', async () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {

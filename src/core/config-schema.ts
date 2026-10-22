@@ -34,12 +34,6 @@ export const BncrConfigSchema = {
         description:
           'Allow tool messages to be forwarded when streaming is enabled. Defaults to false; only explicit true enables forwarding. When enabled, bncr also requests upstream tool summaries/results.',
       },
-      requireMention: {
-        type: 'boolean',
-        default: false,
-        description:
-          'Whether group messages must explicitly mention the bot before bncr handles them. Default false. Current version keeps this as a reserved field and does not enforce it yet.',
-      },
       outboundRequireAck: {
         type: 'boolean',
         default: true,

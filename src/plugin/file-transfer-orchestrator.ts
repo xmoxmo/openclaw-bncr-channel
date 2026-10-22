@@ -1,6 +1,7 @@
 import { buildFileTransferInitPayload } from '../core/file-transfer-payloads.ts';
 import type { BncrRoute, FileSendTransferState } from '../core/types.ts';
 import { asSanitizedString, clampFiniteNumber } from '../core/value-sanitize.ts';
+import { assertPublicInboundMediaUrl } from '../messaging/inbound/media-url-policy.ts';
 import { resolveOutboundFileName } from './channel-utils.ts';
 import type { createBncrFileAckRuntime } from './file-ack-runtime.ts';
 import {
@@ -229,7 +230,15 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
     // 1) HEAD -> Content-Type
     let headerType = '';
     try {
-      const head = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
+      // MIME sniffing is still an outbound request. Keep it on public
+      // destinations only; a rejected URL falls through to the extension
+      // instead of being fetched anyway.
+      await assertPublicInboundMediaUrl(url);
+      const head = await fetch(url, {
+        method: 'HEAD',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10_000),
+      });
       if (head.ok) {
         const raw = (head.headers.get('content-type') || '').trim().toLowerCase();
         const parsed = raw.split(';')[0]?.trim() || '';
@@ -246,9 +255,11 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
 
     // 2) Range GET -> first 512 bytes -> magic byte sniff
     try {
+      await assertPublicInboundMediaUrl(url);
       const range = await fetch(url, {
         method: 'GET',
         headers: { Range: 'bytes=0-511' },
+        redirect: 'manual',
         signal: AbortSignal.timeout(10_000),
       });
       // Only accept 206 Partial Content; 200 (no Range support) or other statuses -> fall through

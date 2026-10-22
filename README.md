@@ -209,6 +209,8 @@ openclaw config get channels.bncr.mediaMaxMb
 /bncr download-media on|off|clear|default on|off [<SceneId>]
 ```
 
+`on` / `off` 只决定发送远端 URL 媒体时的默认行为，不是总控开关：每条消息都可以用 `downloadMedia` 自行选择下载或直接透传 URL。默认不下载是为了减少不必要的下载和缓存占用，属于推荐值；需要时单条消息可以覆盖。`clear` 清除本会话设置并回落到全局值。无论默认值如何，URL 都会经过公网地址校验，不会请求回环或内网地址。
+
 ## 权限规则
 
 管理员可以使用全部 Bncr 命令。管理员发送的裸命令优先交给 OpenClaw 原生命令处理，未处理时才允许交给 Agent；`/bncr` 命令由 Bncr 处理。
