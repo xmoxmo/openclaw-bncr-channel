@@ -1,7 +1,7 @@
 import { buildFileTransferInitPayload } from '../core/file-transfer-payloads.ts';
 import type { BncrRoute, FileSendTransferState } from '../core/types.ts';
 import { asSanitizedString, clampFiniteNumber } from '../core/value-sanitize.ts';
-import { assertPublicInboundMediaUrl } from '../messaging/inbound/media-url-policy.ts';
+import { assertFetchableMediaUrl } from '../messaging/inbound/media-url-policy.ts';
 import { resolveOutboundFileName } from './channel-utils.ts';
 import type { createBncrFileAckRuntime } from './file-ack-runtime.ts';
 import {
@@ -230,10 +230,10 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
     // 1) HEAD -> Content-Type
     let headerType = '';
     try {
-      // MIME sniffing is still an outbound request. Keep it on public
-      // destinations only; a rejected URL falls through to the extension
-      // instead of being fetched anyway.
-      await assertPublicInboundMediaUrl(url);
+      // MIME sniffing is an outbound request. Bncr treats internal and public
+      // destinations identically (trusted client), so no destination limit is
+      // applied; only basic URL shape is validated.
+      await assertFetchableMediaUrl(url);
       const head = await fetch(url, {
         method: 'HEAD',
         redirect: 'manual',
@@ -255,7 +255,7 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
 
     // 2) Range GET -> first 512 bytes -> magic byte sniff
     try {
-      await assertPublicInboundMediaUrl(url);
+      await assertFetchableMediaUrl(url);
       const range = await fetch(url, {
         method: 'GET',
         headers: { Range: 'bytes=0-511' },

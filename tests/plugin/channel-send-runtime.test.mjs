@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createBncrChannelSendRuntime } from '../../src/plugin/channel-send.ts';
 
 function createRuntimeHarness() {
@@ -244,4 +245,119 @@ test('messageSendDispatch passes raw asVoice through; marker not resolved at thi
   // Marker resolution happens in normalizeOutboundSend one layer deeper.
   assert.equal(calls[0].payload.asVoice, true);
   assert.equal(calls[0].payload.text, 'voice [BncrParam:{"asVoice":false}]');
+});
+
+test('messageSendDispatch suppresses NO_REPLY FROM AGENT without enqueuing', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  const result = await runtime.channelMessageSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: 'NO_REPLY FROM AGENT',
+  });
+
+  assert.equal(calls.length, 0);
+  assert.equal(result.status, 'sent');
+});
+
+test('messageSendDispatch does not drop a media send whose text is the marker', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelMessageSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: 'NO_REPLY FROM AGENT',
+    mediaUrl: '/tmp/a.png',
+  });
+
+  assert.equal(calls.length, 1);
+});
+
+test('messageSendDispatch keeps media encoded by a marker path when text is the marker', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+  const mediaPath = fileURLToPath(new URL('../../package.json', import.meta.url));
+
+  await runtime.channelMessageSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: `NO_REPLY FROM AGENT\n[BncrParam:${JSON.stringify({ path: mediaPath })}]`,
+  });
+
+  assert.equal(calls.length, 1);
+});
+
+test('messageSendDispatch keeps a real extra.msg body when text is the marker', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelMessageSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: 'NO_REPLY FROM AGENT',
+    extra: { msg: '真实内容' },
+  });
+
+  assert.equal(calls.length, 1);
+});
+
+test('messageSendDispatch keeps a media send whose marker path is unreachable', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+
+  await runtime.channelMessageSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:10001',
+    text: 'NO_REPLY FROM AGENT\n[BncrParam:{"path":"/nonexistent/bncr-no-such-file.png"}]',
+  });
+
+  // Media intent survives; downstream normalisation owns reachability handling.
+  assert.equal(calls.length, 1);
+});
+
+test('messageSendDispatch does not probe marker media while deciding to drop', async () => {
+  const { runtime, calls } = createRuntimeHarness();
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    return new Response('', { status: 200 });
+  };
+
+  try {
+    await runtime.channelMessageSendText({
+      accountId: 'Primary',
+      to: 'Bncr:tgBot:0:10001',
+      text: 'NO_REPLY FROM AGENT\n[BncrParam:{"path":"https://example.invalid/a.png"}]',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(fetchCalls, 0);
+});
+
+test('messageSendDispatch returns a receipt when the orchestrator suppresses an unreachable-media marker', async () => {
+  const runtime = createBncrChannelSendRuntime({
+    channelId: 'bncr',
+    asString: (value, fallback = '') =>
+      typeof value === 'string' ? value : value == null ? fallback : String(value),
+    syncDebugFlag: async () => {},
+    logInfo: () => {},
+    resolveVerifiedTarget: () => ({
+      sessionKey: 'agent:orion:bncr:direct:1',
+      route: { platform: 'tgBot', groupId: '0', userId: '1' },
+      displayScope: 'Bncr:tgBot:0:1',
+    }),
+    rememberSessionRoute: () => {},
+    // Simulate the orchestrator suppressing the marker without enqueuing.
+    enqueueFromReply: async () => {},
+    listOutboxEntries: () => [],
+  });
+
+  const result = await runtime.channelMessageSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:0:1',
+    text: 'NO_REPLY FROM AGENT\n[BncrParam:{"path":"/nonexistent/bncr-no-such-file.png"}]',
+  });
+
+  assert.equal(result.status, 'sent');
 });

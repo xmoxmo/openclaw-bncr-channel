@@ -1,6 +1,6 @@
 import type { OpenClawLoadedMedia } from '../../openclaw/media-runtime.ts';
 import { downloadInboundMediaUrl, type InboundMediaUrlGuard } from './media-url-download.ts';
-import { assertPublicInboundMediaUrl } from './media-url-policy.ts';
+import { assertFetchableMediaUrl } from './media-url-policy.ts';
 
 type RuntimeChannelMediaReader = {
   runtime?: {
@@ -9,6 +9,7 @@ type RuntimeChannelMediaReader = {
         readRemoteMediaBuffer?: (options: {
           url: string;
           maxBytes?: number;
+          ssrfPolicy?: { allowPrivateNetwork?: boolean };
         }) => Promise<OpenClawLoadedMedia>;
       };
     };
@@ -34,7 +35,10 @@ async function readRemoteMediaBufferFromRuntime(
   if (typeof readRemoteMediaBuffer !== 'function') {
     throw new Error('OpenClaw channel media readRemoteMediaBuffer API is unavailable');
   }
-  return assertLoadedInboundRemoteMedia(await readRemoteMediaBuffer({ url, maxBytes }), 'runtime');
+  return assertLoadedInboundRemoteMedia(
+    await readRemoteMediaBuffer({ url, maxBytes, ssrfPolicy: { allowPrivateNetwork: true } }),
+    'runtime',
+  );
 }
 
 export async function loadInboundRemoteMedia(
@@ -46,10 +50,10 @@ export async function loadInboundRemoteMedia(
   try {
     return await readRemoteMediaBufferFromRuntime(api, url, maxBytes);
   } catch {
-    // The host reader applies its own destination policy. The internal fallback
-    // must enforce the same boundary itself instead of retrying the rejected URL
-    // through a raw fetch.
-    const urlGuard = options?.urlGuard ?? assertPublicInboundMediaUrl;
+    // Host reader failed (unavailable, or host-side policy). The fallback does a
+    // direct fetch under the same trust model: Bncr treats internal and public
+    // destinations identically, so it only validates URL shape, not destination.
+    const urlGuard = options?.urlGuard ?? assertFetchableMediaUrl;
     return assertLoadedInboundRemoteMedia(
       await downloadInboundMediaUrl(url, maxBytes, undefined, urlGuard),
       'fallback',

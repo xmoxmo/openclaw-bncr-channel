@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeOutboundSend } from '../../src/messaging/outbound/normalize-outbound-send.ts';
+import {
+  buildNormalizedSends,
+  normalizeOutboundSend,
+} from '../../src/messaging/outbound/normalize-outbound-send.ts';
 
 /** @param {import('../../src/messaging/outbound/normalize-outbound-send.ts').UnifiedOutboundSendInput} input */
 async function n(input) {
@@ -374,4 +377,51 @@ test('[BncrParam] empty text and no media returns hasMedia=false, asVoice=false'
   assert.equal(r.hasMedia, false);
   assert.equal(r.asVoice, false);
   assert.equal(r.audioAsVoice, false);
+});
+
+/* ===================================================================
+ * Send plan: marker msg vs body text.
+ * A marker-supplied msg is an additional send; a host-supplied extra.msg
+ * only replaces the body of the single frame.
+ * =================================================================== */
+test('[BncrParam] marker msg that differs from body splits into two sends', async () => {
+  const r = await n({ text: '第一段\n[BncrParam:{"msg":"第二段"}]' });
+  const sends = buildNormalizedSends(r);
+
+  assert.equal(sends.length, 2);
+  assert.equal(sends[0].text, '第一段');
+  assert.equal(sends[0].hasMedia, false);
+  assert.equal(sends[0].extra, undefined);
+  assert.equal(sends[1].text, '第一段');
+  assert.equal(sends[1].extra?.msg, '第二段');
+});
+
+test('[BncrParam] marker msg on media sends clean text first, then media caption', async () => {
+  const r = await n({
+    text: '说明文字\n[BncrParam:{"msg":"图注","path":"tests/media/test_thumb.jpg"}]',
+  });
+  const sends = buildNormalizedSends(r);
+
+  assert.equal(sends.length, 2);
+  assert.equal(sends[0].text, '说明文字');
+  assert.equal(sends[0].hasMedia, false);
+  assert.equal(sends[1].hasMedia, true);
+  assert.equal(sends[1].extra?.msg, '图注');
+});
+
+test('[BncrParam] marker msg identical to body stays a single send', async () => {
+  const r = await n({ text: '同一句\n[BncrParam:{"msg":"同一句"}]' });
+  const sends = buildNormalizedSends(r);
+
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].text, '同一句');
+});
+
+test('[structured extra] host extra.msg replaces the single frame body without splitting', async () => {
+  const r = await n({ text: '第一段', extra: { msg: '第二段' } });
+  const sends = buildNormalizedSends(r);
+
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].text, '第一段');
+  assert.equal(sends[0].extra?.msg, '第二段');
 });

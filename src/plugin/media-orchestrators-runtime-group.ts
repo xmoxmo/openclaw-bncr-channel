@@ -1,3 +1,5 @@
+import { buildBncrDebugJsonMessage } from '../core/logging.ts';
+import { isNoReplyDropText, isNoReplyMarkerText } from '../core/no-reply-marker.ts';
 import type { BncrRoute, FileSendTransferState, OutboxEntry } from '../core/types.ts';
 import type {
   NormalizedReplyPayload,
@@ -31,6 +33,53 @@ async function normalizeReplyOrchestratorPayload(args: {
       replyTargetPolicy: args.replyTargetPolicy,
     },
   );
+}
+
+/** True when the payload carries media (so it is a media send). */
+function hasReplyMedia(payload: NormalizedReplyPayload): boolean {
+  return (
+    payload.mediaList.length > 0 || Boolean(payload.mediaUrl) || Boolean(payload.mediaUrls?.length)
+  );
+}
+
+/**
+ * True when the payload is a pure text send whose body is the agent's NO_REPLY
+ * marker. Media sends are never suppressed (their marker caption is stripped).
+ */
+function isNoReplyDropPayload(payload: NormalizedReplyPayload): boolean {
+  if (hasReplyMedia(payload)) return false;
+  return isNoReplyDropText(payload.text, payload.extra?.msg as string | undefined);
+}
+
+/**
+ * Remove NO_REPLY marker text from a payload that still has a real body or media
+ * to deliver. Covers media captions and the extra.msg alternate body. Returns
+ * true when something was removed.
+ */
+function stripNoReplyMarkerFields(payload: NormalizedReplyPayload): boolean {
+  let stripped = false;
+  const hasMedia = hasReplyMedia(payload);
+  const textIsMarker = isNoReplyMarkerText(payload.text);
+  const textIsReal = payload.text.trim().length > 0 && !textIsMarker;
+  const extra = payload.extra;
+  const extraMsg = typeof extra?.msg === 'string' ? extra.msg.trim() : '';
+  const extraIsMarker = Boolean(extraMsg) && isNoReplyMarkerText(extraMsg);
+
+  // extra.msg overrides the outbox body, so a marker there would silence a real
+  // text body or a media caption. Remove it whenever something real remains.
+  if (extraIsMarker && (hasMedia || textIsReal)) {
+    const next: Record<string, unknown> = { ...extra };
+    delete next.msg;
+    payload.extra = Object.keys(next).length > 0 ? next : undefined;
+    stripped = true;
+  }
+
+  // Drop a marker caption/body when media or a real extra.msg body survives.
+  if (textIsMarker && (hasMedia || (extraMsg.length > 0 && !extraIsMarker))) {
+    payload.text = '';
+    stripped = true;
+  }
+  return stripped;
 }
 
 export function createBncrMediaOrchestratorsRuntimeGroup(runtime: {
@@ -162,6 +211,32 @@ export function createBncrMediaOrchestratorsRuntimeGroup(runtime: {
       asString: runtime.asString,
       replyTargetPolicy,
     });
+
+    if (isNoReplyDropPayload(normalized)) {
+      runtime.logInfo(
+        'outbound',
+        buildBncrDebugJsonMessage('no-reply-suppressed', {
+          accountId,
+          sessionKey,
+          textLen: normalized.text.length,
+          kind: normalized.kind,
+        }),
+        { debugOnly: true },
+      );
+      return;
+    }
+
+    if (stripNoReplyMarkerFields(normalized)) {
+      runtime.logInfo(
+        'outbound',
+        buildBncrDebugJsonMessage('no-reply-caption-stripped', {
+          accountId,
+          sessionKey,
+          kind: normalized.kind,
+        }),
+        { debugOnly: true },
+      );
+    }
 
     enqueueNormalizedReplyPayload(
       {

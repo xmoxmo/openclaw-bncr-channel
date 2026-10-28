@@ -1,9 +1,47 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import test from 'node:test';
 import { setSceneRecord } from '../../src/plugin/scene-registry.ts';
 import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
 
-test('MIME sniffing never fetches a non-public URL', async () => {
+test('MIME sniffing probes a loopback URL and reads Content-Type from the server', async () => {
+  const bridge = createBridge();
+  const originalLoad = bridge.loadOutboundTransferMedia;
+  let loadCalls = 0;
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'image/webp', 'content-length': '0' });
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  try {
+    bridge.loadOutboundTransferMedia = async () => {
+      loadCalls += 1;
+      throw new Error('URL passthrough must not download media');
+    };
+
+    const address = server.address();
+    const result = await bridge.transferMediaToBncrClient({
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      mediaUrl: `http://127.0.0.1:${address.port}/asset`,
+    });
+
+    assert.equal(loadCalls, 0);
+    assert.equal(result.mode, 'base64');
+    assert.equal(result.base64, undefined);
+    assert.equal(result.mimeType, 'image/webp');
+  } finally {
+    bridge.loadOutboundTransferMedia = originalLoad;
+    cleanupBridge(bridge);
+    await new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+});
+
+test('MIME sniffing attempts a private destination and falls back to the URL extension when unreachable', async () => {
   const bridge = createBridge();
   const originalFetch = globalThis.fetch;
   const originalLoad = bridge.loadOutboundTransferMedia;
@@ -13,7 +51,7 @@ test('MIME sniffing never fetches a non-public URL', async () => {
   try {
     globalThis.fetch = async () => {
       fetchCalls += 1;
-      throw new Error('non-public media URL must not be fetched');
+      throw new Error('private destination unreachable');
     };
     bridge.loadOutboundTransferMedia = async () => {
       loadCalls += 1;
@@ -27,7 +65,7 @@ test('MIME sniffing never fetches a non-public URL', async () => {
       mediaUrl: 'http://127.0.0.1:9/secret.jpg',
     });
 
-    assert.equal(fetchCalls, 0, 'MIME sniffing must not request a loopback URL');
+    assert.ok(fetchCalls >= 1, 'MIME sniffing is allowed to probe the private destination');
     assert.equal(loadCalls, 0);
     assert.equal(result.mode, 'base64');
     assert.equal(result.base64, undefined);

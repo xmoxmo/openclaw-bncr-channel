@@ -163,7 +163,6 @@ openclaw config get channels.bncr.mediaMaxMb
 
 优先级为 `accounts.<accountId>.mediaMaxMb` > `channels.bncr.mediaMaxMb` > `agents.defaults.mediaMaxMb` > 默认 `2048` MiB。该值同时约束入站媒体、入站文件分片和出站媒体；未显式配置时使用 2 GiB 默认值。传输层仍受分片大小、ACK 超时和网络条件限制。
 
-
 ## 命令
 
 ### 基础命令
@@ -209,7 +208,9 @@ openclaw config get channels.bncr.mediaMaxMb
 /bncr download-media on|off|clear|default on|off [<SceneId>]
 ```
 
-`on` / `off` 只决定发送远端 URL 媒体时的默认行为，不是总控开关：每条消息都可以用 `downloadMedia` 自行选择下载或直接透传 URL。默认不下载是为了减少不必要的下载和缓存占用，属于推荐值；需要时单条消息可以覆盖。`clear` 清除本会话设置并回落到全局值。无论默认值如何，URL 都会经过公网地址校验，不会请求回环或内网地址。
+`on` / `off` 只决定发送远端 URL 媒体时的默认行为，不是总控开关：每条消息都可以用 `downloadMedia` 自行选择下载或直接透传 URL。默认不下载是为了减少不必要的下载和缓存占用，属于推荐值；需要时单条消息可以覆盖。`clear` 清除本会话设置并回落到全局值。
+
+媒体目的地（预期行为）：入站和出站都不区分公网与内网，均可下载和探测；只校验 URL 形状（http/https、无内嵌凭据、有 host），不做 SSRF 或目的地限制。需要内网隔离请在网络出口或宿主侧处理。
 
 ## 权限规则
 
@@ -228,6 +229,8 @@ openclaw config get channels.bncr.mediaMaxMb
 ### 客户端桥接直通
 
 `message` 工具的 `bridgeMethod` 是有意保留的原始透传面：方法名和参数不做白名单校验，直接转发给已连接的 Bncr 客户端，客户端返回的错误原样回给 Agent。调用始终落在本次工具调用解析出的 `accountId` 上，`extra.accountId` 不能改写到其他账号。该能力默认开启，可在 `channels.bncr.allowBridgeCall=false` 关闭。
+
+指令作用域（预期行为）：`bridgeMethod` 不做方法级鉴权，也不提供会话级作用域；需要收敛时用 `allowBridgeCall=false` 整体关闭。
 
 ## 群聊模式
 

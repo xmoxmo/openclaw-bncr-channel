@@ -21,6 +21,7 @@ type RuntimeChannelMediaApi = {
   readRemoteMediaBuffer?: (options: {
     url: string;
     maxBytes?: number;
+    ssrfPolicy?: { allowPrivateNetwork?: boolean };
   }) => Promise<RuntimeMediaLoaded>;
   saveMediaBuffer?: (
     buffer: Buffer,
@@ -180,7 +181,11 @@ export async function loadOpenClawWebMedia(
 ): Promise<RuntimeMediaLoaded> {
   const readRemoteMediaBuffer = api?.runtime?.channel?.media?.readRemoteMediaBuffer;
   if (isOpenClawRemoteHttpMediaUrl(mediaUrl) && typeof readRemoteMediaBuffer === 'function') {
-    return readRemoteMediaBuffer({ url: mediaUrl, maxBytes: options?.maxBytes });
+    return readRemoteMediaBuffer({
+      url: mediaUrl,
+      maxBytes: options?.maxBytes,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
   }
 
   const loadWebMedia = api?.runtime?.media?.loadWebMedia;

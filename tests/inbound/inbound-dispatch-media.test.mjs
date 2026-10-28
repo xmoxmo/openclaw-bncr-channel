@@ -9,7 +9,7 @@ import {
   estimateBase64DecodedBytes,
 } from '../../src/messaging/inbound/dispatch.ts';
 import { downloadInboundMediaUrl } from '../../src/messaging/inbound/media-url-download.ts';
-import { assertPublicInboundMediaUrl } from '../../src/messaging/inbound/media-url-policy.ts';
+import { assertFetchableMediaUrl } from '../../src/messaging/inbound/media-url-policy.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
 import { loadInboundRemoteMedia } from '../../src/messaging/inbound/remote-media.ts';
 import { fallbackBncrMediaMaxBytes } from '../../src/openclaw/media-limit-runtime.ts';
@@ -189,7 +189,11 @@ test('dispatchBncrInbound prefers runtime remote media reader for http media pat
   });
 
   assert.deepEqual(remoteCalls, [
-    { url: 'https://example.test/photos/file_6.jpg', maxBytes: fallbackBncrMediaMaxBytes() },
+    {
+      url: 'https://example.test/photos/file_6.jpg',
+      maxBytes: fallbackBncrMediaMaxBytes(),
+      ssrfPolicy: { allowPrivateNetwork: true },
+    },
   ]);
   assert.equal(calls.savedMediaBuffers.length, 1);
   assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'runtime-jpg');
@@ -239,38 +243,36 @@ test('loadInboundRemoteMedia falls back to internal downloader when runtime read
   }
 });
 
-test('loadInboundRemoteMedia refuses to retry a host-rejected private URL through raw fetch', async () => {
+test('loadInboundRemoteMedia falls back to a raw fetch of a trusted loopback URL when the host reader rejects it', async () => {
   let requests = 0;
   const server = http.createServer((_req, res) => {
     requests += 1;
-    res.writeHead(200, { 'content-type': 'image/jpeg' });
-    res.end('should-not-be-read');
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': '10' });
+    res.end('private-ok');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
   try {
     const address = server.address();
     const mediaUrl = `http://127.0.0.1:${address.port}/private.jpg`;
-    await assert.rejects(
-      () =>
-        loadInboundRemoteMedia(
-          {
-            runtime: {
-              channel: {
-                media: {
-                  async readRemoteMediaBuffer() {
-                    throw new Error('host rejected non-public destination');
-                  },
-                },
+    const loaded = await loadInboundRemoteMedia(
+      {
+        runtime: {
+          channel: {
+            media: {
+              async readRemoteMediaBuffer() {
+                throw new Error('host rejected private destination');
               },
             },
           },
-          mediaUrl,
-          1024,
-        ),
-      /address is not public/,
+        },
+      },
+      mediaUrl,
+      1024,
     );
-    assert.equal(requests, 0, 'the fallback must not reach the rejected destination');
+    assert.equal(loaded.buffer.toString(), 'private-ok');
+    assert.equal(loaded.contentType, 'image/jpeg');
+    assert.equal(requests, 1, 'the fallback is allowed to fetch the trusted private destination');
   } finally {
     await new Promise((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -278,7 +280,7 @@ test('loadInboundRemoteMedia refuses to retry a host-rejected private URL throug
   }
 });
 
-test('assertPublicInboundMediaUrl blocks non-public destinations and allows public literals', async () => {
+test('assertFetchableMediaUrl treats private/loopback destinations like public ones and rejects malformed urls', async () => {
   for (const url of [
     'http://127.0.0.1/x',
     'http://10.1.2.3/x',
@@ -287,12 +289,18 @@ test('assertPublicInboundMediaUrl blocks non-public destinations and allows publ
     'http://[::1]/x',
     'http://localhost/x',
     'http://media.internal/x',
-    'file:///etc/passwd',
-    'http://user:pass@93.184.216.34/x',
+    'https://93.184.216.34/photo.jpg',
   ]) {
-    await assert.rejects(() => assertPublicInboundMediaUrl(url), /inbound media url/, url);
+    await assert.doesNotReject(() => assertFetchableMediaUrl(url), url);
   }
-  await assertPublicInboundMediaUrl('https://93.184.216.34/photo.jpg');
+  for (const url of [
+    'file:///etc/passwd',
+    'ftp://example.com/x',
+    'http://user:pass@93.184.216.34/x',
+    'not a url',
+  ]) {
+    await assert.rejects(() => assertFetchableMediaUrl(url), /media url/, url);
+  }
 });
 
 test('downloadInboundMediaUrl validates every redirect hop', async () => {

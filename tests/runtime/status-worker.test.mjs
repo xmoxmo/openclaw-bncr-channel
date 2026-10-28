@@ -133,9 +133,57 @@ test('status worker delays non-debug health summary until stable window passes',
       logs.some((log) => log.message.includes('status-tick Primary|stable|linked')),
       true,
     );
+    assert.equal(status.lifecycle, 'ready');
   } finally {
     await stopBncrStatusWorker(runtime, { accountId: 'Primary' });
     abort.abort();
     await done;
   }
+});
+
+test('status worker publishes ready on connect and stopped on stop', async () => {
+  const workers = new Map();
+  let status = {};
+  let online = true;
+  const runtime = {
+    workers,
+    bridgeId: 'bridge-lifecycle',
+    hooks: {
+      isOnline: () => online,
+      hasRecentInboundReachability: () => false,
+      getLastActivityAt: () => null,
+      getActiveConnectionKey: () => (online ? 'Primary:conn-1' : null),
+      getActiveConnections: () => (online ? [{ connId: 'conn-1' }] : []),
+      buildStatusMeta: () => ({}),
+      logInfo: () => {},
+      logInfoDedup: () => {},
+      now: () => 0,
+      healthStableWindowMs: 0,
+    },
+  };
+  const abort = new AbortController();
+  const ctx = {
+    accountId: 'Primary',
+    getStatus: () => status,
+    setStatus: (next) => {
+      status = next;
+    },
+    abortSignal: abort.signal,
+  };
+  const done = startBncrStatusWorker(runtime, ctx);
+  try {
+    const worker = workers.get('Primary');
+    assert.ok(worker, 'worker should be registered after start');
+    assert.equal(status.lifecycle, 'ready');
+
+    // 模拟 10.8 host 在 getStatus 里回灌 starting，worker 必须把它纠正回 ready。
+    status = { ...status, lifecycle: 'starting' };
+    worker.timer._onTimeout();
+    assert.equal(status.lifecycle, 'ready');
+  } finally {
+    await stopBncrStatusWorker(runtime, ctx);
+    abort.abort();
+    await done;
+  }
+  assert.equal(status.lifecycle, 'stopped');
 });

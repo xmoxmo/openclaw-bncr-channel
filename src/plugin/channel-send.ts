@@ -1,7 +1,11 @@
+import { randomUUID } from 'node:crypto';
+
 import { normalizeAccountId } from '../core/accounts.ts';
 import { buildBncrDebugJsonMessage } from '../core/logging.ts';
+import { isNoReplyDropText } from '../core/no-reply-marker.ts';
 import type { BncrRoute, OutboxEntry } from '../core/types.ts';
 import { buildBncrDurableQueuedResult } from '../messaging/outbound/durable-queue-adapter.ts';
+import { parseBncrMarker } from '../messaging/outbound/marker-parser.ts';
 
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { BncrChannelSendContext, BncrVerifiedTarget } from './channel-runtime-types.ts';
@@ -34,6 +38,69 @@ function resolveDownloadMedia(
   if (overrideValue !== undefined) return overrideValue;
   if (ctxValue !== undefined) return ctxValue;
   return runtime.resolveSceneDownloadMedia?.(to);
+}
+
+/**
+ * Decide whether this send is a pure NO_REPLY marker. Marker-encoded media
+ * (e.g. a BncrParam path block) counts as media, so the send must go through
+ * normalisation and keep the media rather than being dropped here.
+ */
+function shouldDropNoReplySend(args: {
+  text: string;
+  extra?: Record<string, unknown>;
+  hasMedia: boolean;
+}): boolean {
+  if (args.hasMedia) return false;
+  // Static parse only: never probe media here. Downstream normalisation owns
+  // reachability probing; probing twice would double network calls and could
+  // drop a media send whose marker path is merely unreachable.
+  const { cleanText, params } = parseBncrMarker(args.text);
+  const markerMedia =
+    params.ismedia === true ||
+    Boolean(params.path || params.paths || params.mediaUrl || params.mediaUrls);
+  if (markerMedia) return false;
+  const markerMsg = typeof params.msg === 'string' ? params.msg : undefined;
+  const hostMsg = typeof args.extra?.msg === 'string' ? args.extra.msg : undefined;
+  return isNoReplyDropText(cleanText, markerMsg ?? hostMsg);
+}
+
+/** Build a receipt-shaped result for a text send dropped as a NO_REPLY marker. */
+function buildNoReplyDroppedResult(args: {
+  accountId: string;
+  sessionKey: string;
+  route: BncrRoute;
+  replyToId?: string;
+}): ReturnType<typeof buildBncrDurableQueuedResult> {
+  const entry = buildSuppressedEntry(args);
+  return buildBncrDurableQueuedResult({ entry, replyToId: args.replyToId });
+}
+
+/** True when the reply payload is a pure NO_REPLY marker (static parse only). */
+function isSuppressedReplyPayload(payload: ReplyPayloadInput): boolean {
+  const text = typeof payload.text === 'string' ? payload.text : '';
+  const { cleanText, params } = parseBncrMarker(text);
+  const markerMsg = typeof params.msg === 'string' ? params.msg : undefined;
+  const extraMsg = typeof payload.extra?.msg === 'string' ? payload.extra.msg : undefined;
+  return isNoReplyDropText(cleanText, markerMsg ?? extraMsg);
+}
+
+/** Synthetic outbox entry for a send suppressed as a NO_REPLY marker. */
+function buildSuppressedEntry(args: {
+  accountId: string;
+  sessionKey: string;
+  route: BncrRoute;
+}): OutboxEntry {
+  const now = Date.now();
+  return {
+    messageId: `no-reply-${randomUUID()}`,
+    accountId: args.accountId,
+    sessionKey: args.sessionKey,
+    route: args.route,
+    payload: {},
+    createdAt: now,
+    retryCount: 0,
+    nextAttemptAt: now,
+  };
 }
 
 export type BncrChannelSendRuntime = {
@@ -74,6 +141,16 @@ async function enqueueChannelMessageHandoff(
   });
   const entries = runtime.listOutboxEntries().filter((entry) => !before.has(entry.messageId));
   if (!entries.length) {
+    // The orchestrator suppresses pure NO_REPLY markers without enqueuing.
+    // A marker carrying an unreachable media path is kept visible downstream
+    // and dropped there; return a receipt instead of throwing from the handoff.
+    if (isSuppressedReplyPayload(payload)) {
+      return buildSuppressedEntry({
+        accountId,
+        sessionKey: verified.sessionKey,
+        route: verified.route,
+      });
+    }
     throw new Error('bncr channel.message handoff did not enqueue an outbox entry');
   }
   return entries[entries.length - 1];
@@ -210,6 +287,25 @@ export function createBncrChannelSendRuntime(runtime: BncrChannelSendRuntime) {
     const verified = runtime.resolveVerifiedTarget(to, accountId);
     runtime.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
 
+    const hasMedia = Boolean(mediaUrl || (Array.isArray(mediaUrls) && mediaUrls.length));
+    if (shouldDropNoReplySend({ text, extra, hasMedia })) {
+      runtime.logInfo(
+        'outbound',
+        buildBncrDebugJsonMessage('no-reply-suppressed', {
+          accountId,
+          to,
+          textLen: text.length,
+          channel: 'send',
+        }),
+        { debugOnly: true },
+      );
+      return {
+        channel: runtime.channelId,
+        messageId: `no-reply-${randomUUID()}`,
+        chatId: verified.sessionKey,
+      };
+    }
+
     const entry = await enqueueChannelMessageHandoff(runtime, ctx, {
       text: text,
       mediaUrl: mediaUrl || undefined,
@@ -259,6 +355,29 @@ export function createBncrChannelSendRuntime(runtime: BncrChannelSendRuntime) {
       extra,
       downloadMedia,
     } = extractSendFields(ctx, overrides);
+
+    const hasMedia = Boolean(mediaUrl || (Array.isArray(mediaUrls) && mediaUrls.length));
+    if (shouldDropNoReplySend({ text, extra, hasMedia })) {
+      const accountId = normalizeAccountId(ctx.accountId);
+      const to = runtime.asString(ctx.to || '').trim();
+      const verified = runtime.resolveVerifiedTarget(to, accountId);
+      runtime.logInfo(
+        'outbound',
+        buildBncrDebugJsonMessage('no-reply-suppressed', {
+          accountId,
+          to,
+          textLen: text.length,
+          channel: 'message.send',
+        }),
+        { debugOnly: true },
+      );
+      return buildNoReplyDroppedResult({
+        accountId,
+        sessionKey: verified.sessionKey,
+        route: verified.route,
+        replyToId,
+      });
+    }
 
     const entry = await enqueueChannelMessageHandoff(runtime, ctx, {
       text: text,

@@ -23,6 +23,7 @@ type StatusRuntimeState = {
   accountId?: string;
   running?: boolean;
   connected?: boolean;
+  lifecycle?: 'starting' | 'ready' | 'recovering' | 'blocked' | 'stopped';
   restartPending?: boolean;
   lastEventAt?: number | null;
   lastStopAt?: number | null;
@@ -175,11 +176,22 @@ export async function startBncrStatusWorker(
       debugOnly: true,
     });
 
+    // 10.8 起 host 会把生命周期作为权威字段下发（getStatus 返回含 lifecycle）。
+    // 若把 previous 里的 lifecycle 原样 spread 回去，会把它永久钉在 starting。
+    // 这里按连接态显式发布：在线 ready；曾经 ready 后掉线 recovering；否则保持起始态。
+    const previousLifecycle = previous.lifecycle;
+    const nextLifecycle: StatusRuntimeState['lifecycle'] = connected
+      ? 'ready'
+      : previousLifecycle === 'ready'
+        ? 'recovering'
+        : (previousLifecycle ?? 'starting');
+
     ctx.setStatus?.({
       ...previous,
       accountId,
       running: true,
       connected,
+      lifecycle: nextLifecycle,
       lastEventAt: lastActAt,
       // 状态映射：在线=linked，离线=configured
       mode: connected ? 'linked' : 'configured',
@@ -242,6 +254,7 @@ export async function stopBncrStatusWorker(
     ...previous,
     accountId,
     running: false,
+    lifecycle: 'stopped',
     restartPending: false,
     lastStopAt: Date.now(),
     meta: runtime.hooks.buildStatusMeta(accountId),

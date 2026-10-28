@@ -73,6 +73,7 @@ test('status worker marks linked from recent inbound reachability when no live c
   assert.ok(status, 'expected status update');
   assert.equal(status.connected, true);
   assert.equal(status.mode, 'linked');
+  assert.equal(status.lifecycle, 'ready');
   assert.ok(status.meta, 'expected status meta');
 });
 

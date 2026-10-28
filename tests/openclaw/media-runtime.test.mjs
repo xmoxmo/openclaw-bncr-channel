@@ -44,7 +44,10 @@ test('loadOpenClawWebMedia prefers channel remote reader for http urls and falls
   assert.equal(remote.buffer.toString(), 'remote');
   assert.equal(local.buffer.toString(), 'local');
   assert.deepEqual(calls, [
-    ['readRemoteMediaBuffer', { url: 'https://example.com/a.png', maxBytes: 64 }],
+    [
+      'readRemoteMediaBuffer',
+      { url: 'https://example.com/a.png', maxBytes: 64, ssrfPolicy: { allowPrivateNetwork: true } },
+    ],
     ['loadWebMedia', '/tmp/a.png', { localRoots: ['/tmp'] }],
   ]);
 });
