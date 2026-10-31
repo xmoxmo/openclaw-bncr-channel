@@ -45,6 +45,7 @@ import type {
 } from './core/types.ts';
 import {
   type BncrConversationHistoryMap,
+  buildBncrConversationHistoryKeyFromRoute,
   resolveBncrHistoryLimit,
 } from './messaging/inbound/conversation-history.ts';
 import {
@@ -2539,6 +2540,100 @@ class BncrBridgeRuntime {
     this.targetRuntime.rememberSessionRoute(sessionKey, accountId, route);
   }
 
+  /**
+   * Remove every artifact of one pruned chat session.
+   *
+   * The archived transcript file is handled separately by the host session
+   * store; this clears the bridge-owned state so the session stops showing up
+   * in routing, history replay, and outbound queues. In-memory maps are cleared
+   * first so the debounced flush cannot write the removed rows back.
+   */
+  private async purgeSceneSessionState(args: {
+    sceneKey: string;
+    agentId: string;
+    sessionKey: string | null;
+  }): Promise<void> {
+    const sceneKey = asString(args.sceneKey).trim();
+    if (!sceneKey) return;
+
+    const sessionKeys = new Set<string>();
+    const directSessionKey = asString(args.sessionKey).trim();
+    if (directSessionKey) sessionKeys.add(directSessionKey);
+    // Unowned legacy rows have no agentId, so the canonical session key cannot
+    // be rebuilt from the scene alone. Fall back to every remembered route that
+    // still points at this chat.
+    if (sessionKeys.size === 0) {
+      for (const [key, info] of this.sessionRoutes.entries()) {
+        if (buildRouteSceneKey(info.route) === sceneKey) sessionKeys.add(key);
+      }
+    }
+
+    const historyKeys = new Set<string>();
+    const bufferKeys = new Set<string>();
+    const collectHistoryKey = (accountId: string, route: BncrRoute) => {
+      const historyKey = buildBncrConversationHistoryKeyFromRoute({
+        accountId,
+        platform: route.platform,
+        groupId: route.groupId,
+        userId: route.userId,
+      });
+      if (!historyKey) return;
+      historyKeys.add(historyKey);
+      bufferKeys.add(historyKey);
+    };
+    for (const sessionKey of sessionKeys) {
+      const info = this.sessionRoutes.get(sessionKey);
+      if (info) collectHistoryKey(info.accountId, info.route);
+    }
+    if (historyKeys.size === 0) {
+      // No live route survived; recover the bucket from the history/replay maps
+      // themselves so a pruned scene does not leave orphaned buckets behind.
+      const matchesScene = (key: string) => key === sceneKey || key.endsWith(':' + sceneKey);
+      for (const key of this.conversationHistories.keys()) {
+        if (matchesScene(key)) {
+          historyKeys.add(key);
+          bufferKeys.add(key);
+        }
+      }
+      for (const key of this.outboundReplayCache.keys()) {
+        if (matchesScene(key)) {
+          historyKeys.add(key);
+          bufferKeys.add(key);
+        }
+      }
+    }
+
+    for (const sessionKey of sessionKeys) {
+      const info = this.sessionRoutes.get(sessionKey);
+      this.sessionRoutes.delete(sessionKey);
+      if (info) {
+        const aliasKey = routeKey(info.accountId, info.route);
+        if (this.routeAliases.get(aliasKey) === info) this.routeAliases.delete(aliasKey);
+        const lastSession = this.lastSessionByAccount.get(info.accountId);
+        if (lastSession && lastSession.sessionKey === sessionKey) {
+          this.lastSessionByAccount.delete(info.accountId);
+        }
+      }
+      this.recentMediaDedupeBySession.delete(sessionKey);
+      for (const [messageId, entry] of this.outbox) {
+        if (entry.sessionKey === sessionKey) this.outbox.delete(messageId);
+      }
+      this.deadLetter = this.deadLetter.filter((entry) => entry.sessionKey !== sessionKey);
+    }
+    for (const key of historyKeys) {
+      this.conversationHistories.delete(key);
+      this.outboundReplayCache.delete(key);
+      this.conversationHistoryVersions.delete(key);
+    }
+
+    await this.stateStore.purgeSessionArtifacts({
+      historyKeys: Array.from(historyKeys),
+      bufferKeys: Array.from(bufferKeys),
+      sessionKeys: Array.from(sessionKeys),
+    });
+    this.scheduleSave();
+  }
+
   resolveRouteBySession(sessionKey: string, accountId: string): BncrRoute | null {
     return this.targetRuntime.resolveRouteBySession(sessionKey, accountId);
   }
@@ -3116,6 +3211,7 @@ class BncrBridgeRuntime {
       enqueueFromReply: (args: Parameters<BncrBridgeRuntime['enqueueFromReply']>[0]) =>
         this.enqueueFromReply(args),
       scheduleSave: () => this.scheduleSave(),
+      purgeSceneSession: (args) => this.purgeSceneSessionState(args),
       buildCanonicalSessionKey: (route: BncrRoute) =>
         buildCanonicalBncrSessionKey(route, this.canonicalAgentId || 'main'),
       fileRecvTransfers: this.fileRecvTransfers,

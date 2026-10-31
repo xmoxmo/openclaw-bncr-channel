@@ -180,7 +180,7 @@ test('createBncrSqliteStateDatabase creates schema and reports json store mode',
     assert.equal((await stat(dbPath)).mode & 0o777, 0o600);
     assert.equal(db.getStoreMode(), null);
     const checksumRows = validateSqliteMigrationChecksums(db.getPath());
-    assert.equal(checksumRows.length, 7);
+    assert.equal(checksumRows.length, 8);
     assert.match(checksumRows[0], /^1:[0-9a-f]{64}$/);
     assert.match(checksumRows[1], /^2:[0-9a-f]{64}$/);
     assert.match(checksumRows[2], /^3:[0-9a-f]{64}$/);
@@ -188,6 +188,7 @@ test('createBncrSqliteStateDatabase creates schema and reports json store mode',
     assert.match(checksumRows[4], /^5:[0-9a-f]{64}$/);
     assert.match(checksumRows[5], /^6:[0-9a-f]{64}$/);
     assert.match(checksumRows[6], /^7:[0-9a-f]{64}$/);
+    assert.match(checksumRows[7], /^8:[0-9a-f]{64}$/);
     db.close();
 
     const reopened = createBncrSqliteStateDatabase(dbPath);
@@ -2156,6 +2157,106 @@ test('completed shard tombstones prevent stale memory from reactivating consumed
   }
 });
 
+test('purgeSessionArtifacts removes shards, conversation rows, outbound and last-session pointer', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-purge-'));
+  try {
+    const dbPath = join(dir, 'bncr.sqlite3');
+    const db = createBncrSqliteStateDatabase(dbPath);
+    const sessionKey = 'agent:orion:bncr:direct:demo';
+    const historyKey = 'Primary:tgBot:10001';
+    const control = buildControlState();
+    control.lastSessionByAccount = [
+      { accountId: 'Primary', sessionKey, scope: 'Bncr:tgBot:0:10001', updatedAt: 130 },
+    ];
+    db.importControlState(control, { storeMode: 'dual' });
+    const fixture = buildHistoryState();
+    db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
+    db.createHistoryShard({
+      historyKey,
+      payloadJson: '{}',
+      messageIds: ['h1', 'h2'],
+      bufferKeys: [historyKey],
+    });
+    const outbound = buildOutboundState();
+    db.importOutboundState(outbound.outbox, outbound.deadLetter);
+    assert.equal(db.listHistoryShards().length, 1);
+    assert.equal(db.loadOutboundState().outbox.length, 1);
+
+    db.purgeSessionArtifacts({
+      historyKeys: [historyKey],
+      bufferKeys: [historyKey],
+      sessionKeys: [sessionKey],
+    });
+
+    assert.equal(db.listHistoryShards().length, 0);
+    assert.deepEqual(db.loadOutboundState(), { outbox: [], deadLetter: [] });
+    const raw = new DatabaseSync(dbPath);
+    try {
+      const rows = raw
+        .prepare(
+          'SELECT COUNT(*) AS count FROM conversation_messages WHERE history_key = ? OR buffer_key = ?',
+        )
+        .get(historyKey, historyKey);
+      assert.equal(Number(rows.count), 0);
+      const lastSession = raw
+        .prepare(
+          "SELECT COUNT(*) AS count FROM account_activity WHERE activity_type = 'last_session' AND session_key = ?",
+        )
+        .get(sessionKey);
+      assert.equal(Number(lastSession.count), 0);
+      const sessionRoute = raw
+        .prepare('SELECT COUNT(*) AS count FROM session_routes WHERE session_key = ?')
+        .get(sessionKey);
+      assert.equal(Number(sessionRoute.count), 0);
+      const routes = raw.prepare('SELECT COUNT(*) AS count FROM routes').get();
+      assert.equal(Number(routes.count), 0);
+    } finally {
+      raw.close();
+    }
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('purgeSessionArtifacts removes consumed-message tombstones', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-purge-tombstone-'));
+  try {
+    const dbPath = join(dir, 'bncr.sqlite3');
+    const db = createBncrSqliteStateDatabase(dbPath);
+    const historyKey = 'Primary:tgBot:10001';
+    db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
+    const fixture = buildHistoryState();
+    db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
+    const { shardId } = db.createHistoryShard({
+      historyKey,
+      payloadJson: '{}',
+      messageIds: ['h1', 'h2'],
+      bufferKeys: [historyKey],
+    });
+    db.markHistoryShardProcessing(shardId);
+    db.completeHistoryShard(shardId);
+    const readTombstones = () => {
+      const raw = new DatabaseSync(dbPath);
+      try {
+        const row = raw
+          .prepare('SELECT COUNT(*) AS count FROM history_message_consumed WHERE history_key = ?')
+          .get(historyKey);
+        return Number(row.count);
+      } finally {
+        raw.close();
+      }
+    };
+    assert.ok(readTombstones() > 0);
+
+    db.purgeSessionArtifacts({ historyKeys: [historyKey], bufferKeys: [historyKey] });
+    assert.equal(readTombstones(), 0);
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('expired history consumed tombstones are pruned after the retention window', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-consumed-retention-'));
   const dbPath = join(dir, 'bncr.sqlite3');
@@ -3047,7 +3148,7 @@ test('migration 6 rebuilds scenes with per agent identity and preserves rows', a
     raw.exec('ALTER TABLE scenes_legacy RENAME TO scenes');
     raw.exec('CREATE INDEX idx_scenes_status ON scenes(status, kind, platform)');
     raw.exec('CREATE INDEX idx_scenes_last_seen ON scenes(last_seen_at)');
-    raw.prepare('DELETE FROM schema_migrations WHERE version IN (6, 7)').run();
+    raw.prepare('DELETE FROM schema_migrations WHERE version IN (6, 7, 8)').run();
     raw.close();
 
     const reopened = createBncrSqliteStateDatabase(dbPath);
@@ -3343,6 +3444,41 @@ test('scoped flush keeps legacy unowned scenes unowned and owns only new local s
     }
   } finally {
     db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('scene custom name and sidebar group survive a sqlite round trip', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-scene-identity-'));
+  const dbPath = join(dir, 'bncr.sqlite3');
+  try {
+    const db = createBncrSqliteStateDatabase(dbPath);
+    const state = buildControlState();
+    state.sceneRegistry[1] = {
+      ...state.sceneRegistry[1],
+      customName: '项目群',
+      category: '私聊',
+    };
+    db.importControlState(state, { storeMode: 'dual' });
+
+    const group = db.loadControlState().sceneRegistry.find((s) => s.sceneKey === 'tgBot:-1001');
+    assert.equal(group?.customName, '项目群');
+    assert.equal(group?.category, '私聊');
+
+    const cleared = { ...group };
+    delete cleared.customName;
+    delete cleared.category;
+    const next = db.loadControlState();
+    db.saveControlState({
+      ...next,
+      sceneRegistry: next.sceneRegistry.map((s) => (s.sceneKey === 'tgBot:-1001' ? cleared : s)),
+    });
+
+    const reloaded = db.loadControlState().sceneRegistry.find((s) => s.sceneKey === 'tgBot:-1001');
+    assert.equal(reloaded?.customName, undefined);
+    assert.equal(reloaded?.category, undefined);
+    db.close();
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

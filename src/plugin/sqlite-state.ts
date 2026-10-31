@@ -71,6 +71,13 @@ export type BncrHistoryShardCreateResult = {
   created: boolean;
 };
 
+/** Keys that identify every persisted artifact of one chat session. */
+export type BncrPurgeSessionArtifactsArgs = {
+  historyKeys?: readonly string[];
+  bufferKeys?: readonly string[];
+  sessionKeys?: readonly string[];
+};
+
 export type BncrHistoryShardRow = {
   id: number;
   historyKey: string;
@@ -149,6 +156,7 @@ export type BncrSqliteStateDatabase = {
     deadLetter: OutboxEntry[],
     scope?: { agentId?: string | null },
   ) => void;
+  purgeSessionArtifacts: (args: BncrPurgeSessionArtifactsArgs) => void;
   createHistoryShard: (input: BncrHistoryShardCreateInput) => BncrHistoryShardCreateResult;
   markHistoryShardProcessing: (shardId: number, owner?: string) => boolean;
   markHistoryShardFailed: (
@@ -497,6 +505,14 @@ CREATE UNIQUE INDEX idx_scenes_agent_scene ON scenes(COALESCE(agent_id, ''), sce
     name: 'bncr-scenes-explicit-approval',
     up: `
 ALTER TABLE scenes ADD COLUMN approved_at INTEGER;
+`,
+  },
+  {
+    version: 8,
+    name: 'bncr-scenes-session-identity',
+    up: `
+ALTER TABLE scenes ADD COLUMN custom_name TEXT;
+ALTER TABLE scenes ADD COLUMN category TEXT;
 `,
   },
 ];
@@ -988,8 +1004,8 @@ function replaceControlState(
       `INSERT INTO scenes (
          scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
          agent_id, group_reply_mode, history_limit, history_force, download_media,
-         approved_at, last_seen_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         approved_at, custom_name, category, last_seen_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(COALESCE(agent_id, ''), scene_key) DO UPDATE SET
          kind = excluded.kind,
          status = excluded.status,
@@ -1003,6 +1019,8 @@ function replaceControlState(
          history_force = excluded.history_force,
          download_media = excluded.download_media,
          approved_at = excluded.approved_at,
+         custom_name = excluded.custom_name,
+         category = excluded.category,
          last_seen_at = excluded.last_seen_at,
          updated_at = excluded.updated_at
        WHERE excluded.last_seen_at >= scenes.last_seen_at`,
@@ -1032,6 +1050,8 @@ function replaceControlState(
         scene.historyForce === undefined ? null : scene.historyForce ? 1 : 0,
         scene.downloadMedia === undefined ? null : scene.downloadMedia ? 1 : 0,
         typeof scene.approvedAt === 'number' && scene.approvedAt > 0 ? scene.approvedAt : null,
+        scene.customName ?? null,
+        scene.category ?? null,
         Number(scene.lastSeenAt) || timestamp,
         timestamp,
         timestamp,
@@ -1149,7 +1169,7 @@ function loadControlState(db: DatabaseSync): BncrSqliteControlState {
       .prepare(
         `SELECT scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
             agent_id, group_reply_mode, history_limit, history_force, download_media,
-            approved_at, last_seen_at
+            approved_at, custom_name, category, last_seen_at
      FROM scenes
      ORDER BY last_seen_at ASC, scene_key ASC`,
       )
@@ -1168,6 +1188,8 @@ function loadControlState(db: DatabaseSync): BncrSqliteControlState {
       history_force: number | null;
       download_media: number | null;
       approved_at: number | null;
+      custom_name: string | null;
+      category: string | null;
       last_seen_at: number;
     }>
   ).map((row) => {
@@ -1188,6 +1210,8 @@ function loadControlState(db: DatabaseSync): BncrSqliteControlState {
     if (row.history_force !== null) scene.historyForce = row.history_force === 1;
     if (row.download_media !== null) scene.downloadMedia = row.download_media === 1;
     if (row.approved_at !== null) scene.approvedAt = row.approved_at;
+    if (row.custom_name !== null) scene.customName = row.custom_name;
+    if (row.category !== null) scene.category = row.category;
     return scene;
   });
 
@@ -1862,6 +1886,144 @@ function replaceOutboundState(
        VALUES ('outbound_imported_at', ?, ?)
        ON CONFLICT(meta_key) DO NOTHING`,
     ).run(String(timestamp), timestamp);
+  });
+}
+
+function normalizeArtifactKeys(values: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const raw of values ?? []) {
+    const key = String(raw ?? '').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+function placeholdersFor(values: readonly string[]): string {
+  return values.map(() => '?').join(', ');
+}
+
+/**
+ * Remove every persisted trace of one chat session: history shards, active and
+ * shard-owned conversation rows, consumed-message tombstones, queued outbound
+ * rows, and the account's last-session pointer when it names this session.
+ *
+ * The archived session transcript lives in the host session store and is not
+ * touched here; `deleteSession({ archiveTranscript: true })` keeps that file.
+ */
+function purgeSessionArtifactsInDb(
+  db: DatabaseSync,
+  args: BncrPurgeSessionArtifactsArgs,
+  now: () => number,
+): void {
+  const inputHistoryKeys = normalizeArtifactKeys(args.historyKeys);
+  const inputBufferKeys = normalizeArtifactKeys(args.bufferKeys);
+  const sessionKeys = normalizeArtifactKeys(args.sessionKeys);
+  if (inputHistoryKeys.length === 0 && inputBufferKeys.length === 0 && sessionKeys.length === 0) {
+    return;
+  }
+  const timestamp = now();
+  runWriteTransaction(db, () => {
+    const historyKeySet = new Set(inputHistoryKeys);
+    const bufferKeySet = new Set(inputBufferKeys);
+    if (sessionKeys.length > 0) {
+      // session_routes owns the account and route identity for a session. Use it
+      // to rebuild the history keys even when the caller only knows the session
+      // key, so cross-agent prunes still clear the right history buckets.
+      const routeRows = db
+        .prepare(
+          `SELECT account_id, platform, group_id, user_id
+           FROM session_routes
+           WHERE session_key IN (${placeholdersFor(sessionKeys)})`,
+        )
+        .all(...sessionKeys) as Array<{
+        account_id: string;
+        platform: string;
+        group_id: string;
+        user_id: string;
+      }>;
+      for (const row of routeRows) {
+        const platform = String(row.platform || '').trim();
+        if (!platform) continue;
+        const groupId = String(row.group_id || '0').trim() || '0';
+        const userId = String(row.user_id || '0').trim() || '0';
+        const id = groupId !== '0' ? groupId : userId;
+        if (!id || id === '0') continue;
+        const key = `${normalizeAccountId(String(row.account_id || ''))}:${platform}:${id}`;
+        historyKeySet.add(key);
+        bufferKeySet.add(key);
+      }
+    }
+    const historyKeys = Array.from(historyKeySet);
+    const bufferKeys = Array.from(bufferKeySet);
+    const historyOrBufferKeys = Array.from(new Set([...historyKeys, ...bufferKeys]));
+    const conversationClauses: string[] = [];
+    const conversationParams: string[] = [];
+    if (historyKeys.length > 0) {
+      conversationClauses.push(`history_key IN (${placeholdersFor(historyKeys)})`);
+      conversationParams.push(...historyKeys);
+    }
+    if (bufferKeys.length > 0) {
+      conversationClauses.push(`buffer_key IN (${placeholdersFor(bufferKeys)})`);
+      conversationParams.push(...bufferKeys);
+    }
+    if (sessionKeys.length > 0) {
+      conversationClauses.push(`session_key IN (${placeholdersFor(sessionKeys)})`);
+      conversationParams.push(...sessionKeys);
+    }
+    if (conversationClauses.length > 0) {
+      db.prepare(`DELETE FROM conversation_messages WHERE ${conversationClauses.join(' OR ')}`).run(
+        ...conversationParams,
+      );
+    }
+    if (historyOrBufferKeys.length > 0) {
+      db.prepare(
+        `DELETE FROM history_shards WHERE history_key IN (${placeholdersFor(historyOrBufferKeys)})`,
+      ).run(...historyOrBufferKeys);
+      const tombstoneClauses: string[] = [];
+      const tombstoneParams: string[] = [];
+      if (historyKeys.length > 0) {
+        tombstoneClauses.push(`history_key IN (${placeholdersFor(historyKeys)})`);
+        tombstoneParams.push(...historyKeys);
+      }
+      if (bufferKeys.length > 0) {
+        tombstoneClauses.push(`buffer_key IN (${placeholdersFor(bufferKeys)})`);
+        tombstoneParams.push(...bufferKeys);
+      }
+      db.prepare(`DELETE FROM history_message_consumed WHERE ${tombstoneClauses.join(' OR ')}`).run(
+        ...tombstoneParams,
+      );
+    }
+    if (sessionKeys.length > 0) {
+      db.prepare(
+        `DELETE FROM session_routes WHERE session_key IN (${placeholdersFor(sessionKeys)})`,
+      ).run(...sessionKeys);
+      db.prepare('DELETE FROM routes WHERE id NOT IN (SELECT route_id FROM session_routes)').run();
+      db.prepare(
+        `DELETE FROM outbound_messages WHERE session_key IN (${placeholdersFor(sessionKeys)})`,
+      ).run(...sessionKeys);
+      db.prepare(
+        `DELETE FROM account_activity
+         WHERE activity_type = 'last_session'
+           AND session_key IN (${placeholdersFor(sessionKeys)})`,
+      ).run(...sessionKeys);
+    }
+    if (historyOrBufferKeys.length > 0) {
+      // Bump the history revision so any other instance holding a pre-purge
+      // snapshot hits a revision conflict and reloads instead of re-inserting
+      // the rows we just removed.
+      const revisionRow = db
+        .prepare("SELECT meta_value FROM state_meta WHERE meta_key = 'history_revision'")
+        .get() as { meta_value: string } | undefined;
+      const nextRevision = Number(revisionRow?.meta_value ?? 0) + 1;
+      db.prepare(
+        `INSERT INTO state_meta (meta_key, meta_value, updated_at)
+         VALUES ('history_revision', ?, ?)
+         ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value, updated_at = excluded.updated_at`,
+      ).run(String(nextRevision), timestamp);
+    }
   });
 }
 
@@ -2966,6 +3128,11 @@ export function createBncrSqliteStateDatabase(
       const mode = getStoreMode();
       assertWritable(mode);
       replaceOutboundState(db, outbox, deadLetter, now, scope?.agentId ?? null);
+    },
+    purgeSessionArtifacts: (args) => {
+      const mode = getStoreMode();
+      assertWritable(mode);
+      purgeSessionArtifactsInDb(db, args, now);
     },
     createHistoryShard,
     markHistoryShardProcessing,

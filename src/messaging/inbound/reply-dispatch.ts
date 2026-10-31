@@ -6,6 +6,8 @@ import {
   resolveBncrPinnedMainDmOwnerFromAllowlist,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
+import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
+import { buildSceneKey } from '../../plugin/scene-registry.ts';
 import { mergeBncrOwnerAllowFromIntoConfig } from './command-owner.ts';
 import type {
   BncrEnqueueFromReply,
@@ -27,6 +29,7 @@ import {
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { runBncrReplyDispatchSerial } from './reply-dispatch-serial.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
+import { resolveBncrSceneIdentity, resolveBncrSessionCategory } from './session-identity.ts';
 import {
   buildBncrInboundSessionIdentityPatch,
   correctBncrInboundSessionLabel,
@@ -106,6 +109,7 @@ export async function runBncrInboundReplyDispatch(args: {
   shouldDispatch: boolean;
   silentHistoryFlush?: boolean;
   deliveryId?: string;
+  sceneRegistry?: Map<string, BncrSceneRecord>;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
   enqueueFromReply: BncrEnqueueFromReply;
@@ -126,19 +130,37 @@ export async function runBncrInboundReplyDispatch(args: {
     shouldDispatch,
     silentHistoryFlush = false,
     deliveryId,
+    sceneRegistry,
     setInboundActivity,
     scheduleSave,
     enqueueFromReply,
   } = args;
 
   const effectiveReply = buildBncrReplyConfig(cfg);
+  const sceneKey = buildSceneKey(parsed);
+  const sceneIdentity = sceneRegistry
+    ? resolveBncrSceneIdentity(sceneRegistry, sceneKey, resolution.resolvedRoute.agentId)
+    : undefined;
+  // The sidebar group rides on the same session patch as the label, so a direct
+  // chat is filed under 私聊 in the same atomic write that names it.
+  const sceneCategory = sceneRegistry
+    ? resolveBncrSessionCategory({ kind: resolution.chatType, identity: sceneIdentity })
+    : undefined;
   const sessionIdentityPatch = buildBncrInboundSessionIdentityPatch({
     channelId,
     accountId: resolution.accountId,
     chatType: resolution.chatType,
     displayTo: resolution.canonicalTo,
     senderId: senderIdForContext,
+    category: sceneCategory,
+    scene: {
+      platform: parsed.platform,
+      id: resolution.chatType === 'group' ? parsed.groupId : parsed.userId,
+      name: resolution.chatType === 'group' ? parsed.groupName : parsed.userName,
+      ...(sceneIdentity?.customName ? { customName: sceneIdentity.customName } : {}),
+    },
   });
+
   const channelPolicy = resolveBncrChannelPolicy(cfg?.channels?.bncr || {});
   const pinnedMainDmOwner =
     peer.kind === 'direct'

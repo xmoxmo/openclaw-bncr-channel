@@ -67,6 +67,39 @@ function createDynamicChannelPlugin(args) {
   return plugin2;
 }
 
+// src/core/logging.ts
+var BNCR_PREFIX = "[bncr]";
+function resolveConsoleMethod(level) {
+  switch (level) {
+    case "warn":
+      return "warn";
+    case "error":
+      return "error";
+    default:
+      return "log";
+  }
+}
+function emitConsole(method, line) {
+  if (method === "warn") {
+    console.warn(line);
+    return;
+  }
+  if (method === "error") {
+    console.error(line);
+    return;
+  }
+  console.log(line);
+}
+function normalizeBncrLogLine(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return BNCR_PREFIX;
+  return text.startsWith(BNCR_PREFIX) ? text : `${BNCR_PREFIX} ${text}`;
+}
+function emitBncrLogLine(level, line, options, isDebugEnabled) {
+  if (options?.debugOnly && !(isDebugEnabled?.() ?? false)) return;
+  emitConsole(resolveConsoleMethod(level), normalizeBncrLogLine(line));
+}
+
 // src/openclaw/config-runtime.ts
 function resolveConfigApi(api) {
   const config = api?.runtime?.config;
@@ -138,39 +171,6 @@ function registerBncrCli(api) {
   );
 }
 var shouldSkipNonRuntimeRegister = (mode) => mode === "cli-metadata" || mode === "discovery";
-
-// src/core/logging.ts
-var BNCR_PREFIX = "[bncr]";
-function resolveConsoleMethod(level) {
-  switch (level) {
-    case "warn":
-      return "warn";
-    case "error":
-      return "error";
-    default:
-      return "log";
-  }
-}
-function emitConsole(method, line) {
-  if (method === "warn") {
-    console.warn(line);
-    return;
-  }
-  if (method === "error") {
-    console.error(line);
-    return;
-  }
-  console.log(line);
-}
-function normalizeBncrLogLine(raw) {
-  const text = String(raw || "").trim();
-  if (!text) return BNCR_PREFIX;
-  return text.startsWith(BNCR_PREFIX) ? text : `${BNCR_PREFIX} ${text}`;
-}
-function emitBncrLogLine(level, line, options, isDebugEnabled) {
-  if (options?.debugOnly && !(isDebugEnabled?.() ?? false)) return;
-  emitConsole(resolveConsoleMethod(level), normalizeBncrLogLine(line));
-}
 
 // src/bootstrap/register-lifecycle.ts
 function normalizeString(value, fallback = "unknown") {

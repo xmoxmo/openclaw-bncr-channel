@@ -46,6 +46,7 @@ import type {
   BncrHistoryShardCreateInput,
   BncrHistoryShardCreateResult,
   BncrHistoryShardQueue,
+  BncrPurgeSessionArtifactsArgs,
   BncrSqliteControlState,
   BncrSqliteHistoryState,
   BncrSqliteOutboundState,
@@ -365,6 +366,12 @@ export function createBncrStateStore(runtime: {
           : {}),
         ...(typeof item.historyForce === 'boolean' ? { historyForce: item.historyForce } : {}),
         ...(typeof item.downloadMedia === 'boolean' ? { downloadMedia: item.downloadMedia } : {}),
+        ...(runtime.asString(item.customName || '').trim()
+          ? { customName: runtime.asString(item.customName || '').trim() }
+          : {}),
+        ...(runtime.asString(item.category || '').trim()
+          ? { category: runtime.asString(item.category || '').trim() }
+          : {}),
         ...(typeof item.approvedAt === 'number' && item.approvedAt > 0
           ? { approvedAt: item.approvedAt }
           : {}),
@@ -856,6 +863,20 @@ export function createBncrStateStore(runtime: {
     loadPersistedOutboundReplayCache(sqliteHistory.replayBuckets, {
       historyMap: runtime.conversationHistories,
     });
+  }
+
+  /**
+   * Drop every persisted artifact for one session from SQLite. The caller has
+   * already cleared the matching in-memory maps, so the next flush cannot put
+   * these rows back. JSON-only stores have nothing to purge here: the next
+   * flush rewrites the JSON snapshot from the cleared maps.
+   */
+  async function purgeSessionArtifacts(args: BncrPurgeSessionArtifactsArgs): Promise<void> {
+    const state = await resolveSqliteState(runtime.getStatePath());
+    if (!state) return;
+    const mode = state.getStoreMode();
+    if (mode !== 'dual' && mode !== 'sqlite') return;
+    state.purgeSessionArtifacts(args);
   }
 
   function loadPersistedAccountTimestampMap(target: Map<string, number>, persisted: unknown): void {
@@ -1374,6 +1395,7 @@ export function createBncrStateStore(runtime: {
     backfillAccountActivityFromSessionRoutes,
     loadState,
     flushState,
+    purgeSessionArtifacts,
     beginSqliteLifecycle,
     closeSqliteLifecycle,
     exportSqliteStateToJson,

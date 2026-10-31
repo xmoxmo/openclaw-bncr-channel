@@ -5,6 +5,7 @@ import {
   recordBncrSessionMetaFromInbound,
   updateBncrSessionStoreEntry,
 } from '../../openclaw/inbound-session-runtime.ts';
+import { formatBncrSceneLabel } from './session-identity.ts';
 
 function formatBncrSessionLabel(displayTo: string): string {
   const raw = String(displayTo || '').trim();
@@ -47,14 +48,27 @@ export function buildBncrInboundSessionIdentityPatch(args: {
   chatType: 'direct' | 'group';
   displayTo: string;
   senderId: string;
+  /** Scene facts used for the readable label; falls back to the raw target. */
+  scene?: {
+    platform: string;
+    id?: string;
+    name?: string;
+    customName?: string;
+  };
+  /** Sidebar group for this session; undefined leaves the host value alone. */
+  category?: string | null;
 }) {
-  const { channelId, accountId, chatType, displayTo, senderId } = args;
-  const displayLabel = formatBncrSessionLabel(displayTo);
+  const { channelId, accountId, chatType, displayTo, senderId, scene, category } = args;
+  const displayLabel =
+    (scene ? formatBncrSceneLabel(scene) : null) || formatBncrSessionLabel(displayTo);
   const routeTarget = formatBncrSessionRouteTarget(displayTo);
   const groupKey = chatType === 'group' ? formatBncrSessionGroupKey(displayTo) : null;
   return {
     label: displayLabel,
     displayName: displayLabel,
+    // An empty string is how the store drops a group: the sqlite writer maps it
+    // back to NULL, which is what "no sidebar group" means for the host.
+    ...(category !== undefined ? { category: category ?? '' } : {}),
     channel: channelId,
     chatType,
     ...(groupKey ? { groupId: groupKey } : {}),
@@ -113,6 +127,7 @@ export async function correctBncrInboundSessionLabel(args: {
     )?.to,
   );
   const expectedLastTo = normalizeNonEmptyString(expectedPatch.lastTo);
+  const expectedCategory = expectedPatch.category as string | undefined;
   if (
     !expectedLabel ||
     !expectedDisplayName ||
@@ -148,6 +163,8 @@ export async function correctBncrInboundSessionLabel(args: {
         const unchanged =
           entry?.label === expectedLabel &&
           entry?.displayName === expectedDisplayName &&
+          (expectedCategory === undefined ||
+            ((entry?.category ?? '') as string) === expectedCategory) &&
           normalizeNonEmptyString(entry?.groupId) === expectedGroupId &&
           normalizeNonEmptyString(origin.to) === expectedOriginTo &&
           normalizeNonEmptyString(deliveryContext.to) === expectedDeliveryTo &&
@@ -156,6 +173,7 @@ export async function correctBncrInboundSessionLabel(args: {
         if (unchanged) return null;
 
         return {
+          ...(expectedCategory !== undefined ? { category: expectedCategory } : {}),
           ...(expectedGroupId ? { groupId: expectedGroupId } : {}),
           label: expectedLabel,
           displayName: expectedDisplayName,

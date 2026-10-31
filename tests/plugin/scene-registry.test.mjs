@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildAgentSceneRegistryKey,
   decideSceneAdmission,
+  resolveEffectiveSceneStatus,
   resolveSceneAgentId,
   resolveSceneRecord,
   setSceneRecord,
@@ -171,4 +172,98 @@ test('two agents serving the same group keep independent rows', () => {
   assert.equal(rowB?.historyLimit, 80);
   assert.equal(rowA?.groupReplyMode, 'admin');
   assert.equal(rowB?.groupReplyMode, 'all');
+});
+
+test('a new agent row inherits mode, name and group from the scene', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: '无界社区',
+    agentId: 'orion',
+    groupReplyMode: 'all',
+    customName: '项目群',
+    category: 'Ops',
+    historyLimit: 80,
+    historyForce: false,
+    downloadMedia: true,
+    lastSeenAt: 5,
+  });
+
+  const parsed = {
+    isAdmin: true,
+    peer: { kind: 'group' },
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '9',
+  };
+  const decision = decideSceneAdmission({
+    parsed,
+    now: 99,
+    sceneRegistry,
+    defaultAdminAgentId: ADMIN_AGENT,
+    defaultPublicAgentId: PUBLIC_AGENT,
+    // Admission is keyed by the agent the host routed the message to, which is
+    // how a second agent ends up with its own row for a shared scene.
+    sceneAgentId: PUBLIC_AGENT,
+  });
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.scene.agentId, PUBLIC_AGENT);
+  assert.equal(decision.scene.groupReplyMode, 'all');
+  assert.equal(decision.scene.customName, '项目群');
+  assert.equal(decision.scene.category, 'Ops');
+  assert.equal(decision.scene.historyLimit, 80);
+  assert.equal(decision.scene.historyForce, false);
+  assert.equal(decision.scene.downloadMedia, true);
+
+  const created = sceneRegistry.get(buildAgentSceneRegistryKey('tgBot:-1001', PUBLIC_AGENT));
+  assert.equal(created?.groupReplyMode, 'all');
+  assert.equal(created?.customName, '项目群');
+  assert.equal(created?.category, 'Ops');
+  assert.equal(created?.historyLimit, 80);
+  assert.equal(created?.historyForce, false);
+  assert.equal(created?.downloadMedia, true);
+});
+
+test('a new admin scene row carries its approval mark', () => {
+  const sceneRegistry = new Map();
+  const decision = decideSceneAdmission({
+    parsed: {
+      isAdmin: true,
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+      userId: '10001',
+      groupId: '0',
+    },
+    now: 42,
+    sceneRegistry,
+    defaultAdminAgentId: ADMIN_AGENT,
+    defaultPublicAgentId: PUBLIC_AGENT,
+  });
+
+  assert.equal(decision.allowed, true);
+  const row = resolveSceneRecord(sceneRegistry, 'tgBot:10001', ADMIN_AGENT);
+  assert.equal(row?.approvedAt, 42);
+  assert.equal(resolveEffectiveSceneStatus(row), 'allowed');
+});
+
+test('a legacy allowed direct row reads as pending until it is approved', () => {
+  const legacy = {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    lastSeenAt: 1,
+  };
+  assert.equal(resolveEffectiveSceneStatus(legacy), 'pending');
+  assert.equal(resolveEffectiveSceneStatus({ ...legacy, approvedAt: 5 }), 'allowed');
+  assert.equal(
+    resolveEffectiveSceneStatus({ ...legacy, kind: 'group', status: 'allowed' }),
+    'allowed',
+  );
 });

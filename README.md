@@ -182,22 +182,61 @@ openclaw config get channels.bncr.mediaMaxMb
 ### 场景管理
 
 ```text
-/bncr allow [<SceneId>]
-/bncr deny [<SceneId>]
+/bncr allow [<agentId>] [<SceneId>]
+/bncr deny [<agentId>] [<SceneId>]
 /bncr bind <agentId> [<SceneId>]
-/bncr revoke [<SceneId>]
+/bncr revoke [<agentId>] [<SceneId>]
 /bncr list pending [filters...]
 /bncr list scenes [filters...]
 /bncr mode help
-/bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]
+/bncr mode [<agentId>] [<SceneId>]
+/bncr mode <admin|mention|hybrid|all|clear> [<agentId>] [<SceneId>]
 ```
+
+省略 `<agentId>` 时改动该场景所有 agent 的行；同群多 agent 因此始终统一。新建场景行会继承同场景已有的
+模式、名字和分组，不会退回默认值。
+
+`<agentId>` 可以是任意 agent 名字（数字也算），但必须真在这个场景里有一行；点不到时所有命令统一回
+`Agent <id> has no scene row for <SceneId>. Agents here: ...`，后半句列出这个场景实际有哪些 agent。
+
+`/bncr list` 显示的是准入实际生效的状态——私聊行如果是历史遗留的
+`allowed` 但没有批准记录，会写成 `status=pending (stored allowed)`，因为它下一条消息就会被判成待批准。
+
+### 会话名与分组
+
+```text
+/bncr name [<agentId>] [<SceneId>]
+/bncr name set <text> [<agentId>] [<SceneId>]
+/bncr name clear [<agentId>] [<SceneId>]
+/bncr group [<agentId>] [<SceneId>]
+/bncr group set <name> [<agentId>] [<SceneId>]
+/bncr group clear [<agentId>] [<SceneId>]
+/bncr name help
+/bncr group help
+```
+
+会话展示名由插件在每次入站时写入，格式为 `平台 · 名称 · id`；用 `name set` 设置自定义名后变成 `平台 · 自定义名`，
+不再带 id。群名或用户名为空（含只有空白）时省略中间段，直接显示 `平台 · id`；名称会去掉换行和控制字符，
+`·` 转成 `-`，超过 32 字截断。分隔符用半角空格隔开。网页端改名或拖动分组只保留到下一条消息。
+
+私聊默认归入「私聊」分组；`group clear` 对私聊仍然回到「私聊」。群聊不设置时沿用宿主的 Groups 分区。
+分组在侧边栏的先后顺序由宿主维护，插件只写会话归属，不碰分组目录，也不新建、改名或删除任何分组。
+名字和分组按场景保存：省略 `<agentId>` 时把该场景所有 agent 的行写成同一份，写 `<agentId>`
+时只改那一行，和 `/bncr mode` 完全一致。`mode`、准入状态和历史设置存在各自 agent 的行里，
+省略 `<agentId>` 只是让一条命令把这些行一次写齐。
+
+展示名只影响显示，投递目标 `delivery.context.to` 不随名字变化。
+
+`[<agentId>] [<SceneId>]` 是所有场景设置的统一尾缀：两个都省略作用于当前会话，只写 `<SceneId>` 作用于该场景的
+全部 agent，只写 `<agentId>` 作用于当前会话里的那个 agent，两个都写则精确定位。`mode`、`name`、`group`、
+`history-limit`、`history-force`、`download-media` 都是这一套。
 
 ### 会话历史
 
 ```text
 /bncr history-help
-/bncr history-limit [<number>|clear] [<SceneId>]
-/bncr history-force on|off|clear [<SceneId>]
+/bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]
+/bncr history-force on|off|clear [<agentId>] [<SceneId>]
 ```
 
 会话历史统一累计用户消息和 Bot 回复，默认窗口为 50 条。达到上限后会在后续消息到达时整理并发送历史上下文。
@@ -205,12 +244,32 @@ openclaw config get channels.bncr.mediaMaxMb
 ### 远程媒体
 
 ```text
-/bncr download-media on|off|clear|default on|off [<SceneId>]
+/bncr download-media on|off|clear|default on|off [<agentId>] [<SceneId>]
 ```
 
 `on` / `off` 只决定发送远端 URL 媒体时的默认行为，不是总控开关：每条消息都可以用 `downloadMedia` 自行选择下载或直接透传 URL。默认不下载是为了减少不必要的下载和缓存占用，属于推荐值；需要时单条消息可以覆盖。`clear` 清除本会话设置并回落到全局值。
 
 媒体目的地（预期行为）：入站和出站都不区分公网与内网，均可下载和探测；只校验 URL 形状（http/https、无内嵌凭据、有 host），不做 SSRF 或目的地限制。需要内网隔离请在网络出口或宿主侧处理。
+
+### 场景清理
+
+```text
+/bncr stale [all|swapped|solo|missing|archived]
+/bncr stale help
+/bncr prune <SceneId> [<agentId>] [force]
+```
+
+`stale` 只读，列出两种清理候选。一是静默：场景行的最后活动时间超过 72 小时（入站，或管理员改配置时刷新该行），并且该行对应 sessionKey 的宿主会话活动时间也超过 72 小时。只满足一条的不列——例如 cron 直接投递的会话，场景行很久没更新，但会话还在动。二是会话异常：用宿主 SDK 只读列出该 agent 的会话项（`listSessionEntries`，不建库、不迁移），再按 sessionKey 查；查不到就是 `missing`（被 UI 删除或从未建过），`archivedAt` 有值就是 `archived`（被 UI 归档）；这两种不看场景行时钟，直接列出。列表读不出来时回退到时间戳判定：只按上面那条 72 小时双静默规则列，状态标 `unreadable (unknown)`，不会判 `missing` / `archived`；列表和时间戳都读不出来才整行跳过，不当成死行。
+
+每条给出侧边栏 label、agent、两个时间和各自静默时长，会话异常时改为标 `missing (no session row)` 或 `archived`。第三个维度是兄弟场景：同一个 `group_id`、不同平台的另一行在 24 小时内有活动（取行入站与会话活动里较新的那个；只有确认仍然存活的会话才算活动，missing / archived / 读不出来的兄弟只按行入站算，避免归档动作或读不到的时间冒充活动），说明这个群已经换到那个平台。`swapped` 只列这一类，`solo` 只列既没有兄弟活动、也没有会话异常的行（就是单纯静默），`missing` / `archived` 只列对应异常，默认 `all`。私聊不参与兄弟匹配。
+
+`prune` 必须显式写 `<SceneId>`，不提供当前会话快捷方式；`<SceneId>` 和 `<agentId>` 顺序不限，末位的 `force` 是保留字（agent 名字真叫 force 时写两遍）。执行顺序：归档宿主 transcript → 清掉桥接侧会话状态（路由、历史分片、发件队列）→ 删除场景行。目标 72 小时内还有活动会拒绝，确认要删再加 `force`；会话状态读不出来（unknown）同样拒绝，因为读不到不等于没在动；会话说 `missing` / `archived` 的行本身已是清理候选，不需要 `force`。删除前会再核对一次行的 `lastSeenAt`，期间来了新消息就跳过并回报。内部配置行（`__global__` 全局媒体默认值）不会被列出，也不能删除。
+
+一次最多列 50 行，超出的部分会提示还剩多少行，可用上面的过滤收窄。场景表还是空的（这台桥上没进来过任何消息）时直接回一句 `No scene rows yet`，不输出空列表。
+
+删除会带走该场景的模式、名字和分组设置，群再进来会新建默认行；如果定时任务仍按旧 sessionKey 投递，宿主会重新建一个空会话。
+
+列表带各场景的名称和 id（含私聊），和 `/bncr list scenes` 一样，管理员在群里执行会展示给群成员；这类操作建议私聊里跑。
 
 ## 权限规则
 
@@ -224,6 +283,8 @@ openclaw config get channels.bncr.mediaMaxMb
 - `/bncr` 命令始终由 Bncr 识别；未知或不可用的 Bncr 命令会直接提示，不会转交 Agent。
 - `/bncr help` 会根据当前会话类型和权限，仅展示当前可用的命令。
 - 私聊非管理员使用 `history-*` 或 `download-media` 时，只能操作当前私聊会话，不能通过参数修改其他会话。
+- `/bncr name`、`/bncr group` 在当前私聊由本人操作，在群聊需要管理员；带其他 `<SceneId>` 时仅管理员可用。
+- 带 `<agentId>` 只允许管理员使用，或者指定自己所在的那个 agent；指向别的 agent 会被直接拒绝。
 - 全局默认值 `/bncr download-media default on|off` 影响所有会话，仅管理员可设置；非管理员执行会被直接拒绝。
 
 ### 客户端桥接直通
@@ -240,6 +301,8 @@ openclaw config get channels.bncr.mediaMaxMb
 /bncr mode hybrid
 /bncr mode all
 /bncr mode clear
+/bncr mode all orion
+/bncr mode all orion tnBot:123456
 ```
 
 | 模式 | 说明 |
@@ -250,7 +313,15 @@ openclaw config get channels.bncr.mediaMaxMb
 | `all` | 处理群内符合接入条件的消息 |
 | `clear` | 清除当前场景的自定义模式 |
 
+`/bncr mode` 不带参数时列出该场景各 agent 的模式；不一致时逐行列出。
+
 新群聊默认需要管理员授权。管理员可以使用 `/bncr allow`、`/bncr deny`、`/bncr bind` 和 `/bncr revoke` 管理场景。
+`allow` / `deny` 和其它场景设置同一套尾缀：省略 `<agentId>` 时把该场景所有 agent 的行一起改，写 `<agentId>` 只改那一行；
+同一群由两个 agent 负责时不会出现一个已放行、另一个静默被挡。
+
+`revoke` 是这套规则里唯一的例外：放行可以一次给全场，删除只能一行一行来。场景只有一个 agent 时
+`/bncr revoke` 直接生效；同群多 agent 时不写 `<agentId>` 只会得到一句提示，不会替你挑一个删掉。
+删完若还有别的 agent 持有该场景，会明说 `Still admitted for ...`。
 
 ## 检查状态
 

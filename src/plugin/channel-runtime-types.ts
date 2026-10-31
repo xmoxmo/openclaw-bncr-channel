@@ -76,6 +76,10 @@ export type BncrSceneRecord = {
   groupName?: string;
   agentId?: string;
   groupReplyMode?: BncrGroupReplyMode;
+  /** Operator-set sidebar name for this scene; shared by every agent watching it. */
+  customName?: string;
+  /** Sidebar group this scene's session belongs to; direct scenes default to 私聊. */
+  category?: string;
   historyLimit?: number;
   historyForce?: boolean;
   downloadMedia?: boolean;

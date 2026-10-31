@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-
+import { STALE_SCENES_FILTERS } from '../../src/messaging/inbound/command-constants.ts';
 import { parseBncrNativeCommand } from '../../src/messaging/inbound/commands.ts';
 import {
   isBncrStopCommandText,
@@ -165,10 +165,21 @@ test('resolveBncrNativeHelpCommand returns full help for admin callers', () => {
   assert.match(helpText, /\/bncr new/);
   assert.match(helpText, /\/bncr reset/);
   assert.match(helpText, /\/bncr verbose on\|off\|full/);
-  assert.match(helpText, /\/bncr allow \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all\|clear> \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr history-limit \[<number>\|clear\] \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr allow \[<agentId>\] \[<SceneId>\]/);
+  assert.match(
+    helpText,
+    /\/bncr mode <admin\|mention\|hybrid\|all\|clear> \[<agentId>\] \[<SceneId>\]/,
+  );
+  assert.match(helpText, /🏷 Session identity/);
+  assert.match(helpText, /\/bncr name set <text> \[<agentId>\] \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr group set <name> \[<agentId>\] \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr history-limit \[<number>\|clear\] \[<agentId>\] \[<SceneId>\]/);
   assert.match(helpText, /\/bncr download-media on\|off\|clear\|default on\|off/);
+  assert.match(
+    helpText,
+    new RegExp('/bncr stale \\[' + STALE_SCENES_FILTERS.join('\\|') + '\\]'),
+    'the help label must list every stale filter',
+  );
   assert.match(helpText, /📋 Conversation history/);
   assert.doesNotMatch(helpText, /📋 Group history/);
   assert.doesNotMatch(helpText, /💬 Group reply modes/);
@@ -182,8 +193,12 @@ test('resolveBncrNativeHelpCommand returns full management help for direct admin
   assert.match(helpText, /\/bncr whoami/);
   assert.match(helpText, /\/bncr new/);
   assert.match(helpText, /\/bncr verbose on\|off\|full/);
-  assert.match(helpText, /\/bncr allow \[<SceneId>\]/);
-  assert.match(helpText, /\/bncr mode <admin\|mention\|hybrid\|all\|clear> \[<SceneId>\]/);
+  assert.match(helpText, /\/bncr allow \[<agentId>\] \[<SceneId>\]/);
+  assert.match(
+    helpText,
+    /\/bncr mode <admin\|mention\|hybrid\|all\|clear> \[<agentId>\] \[<SceneId>\]/,
+  );
+  assert.match(helpText, /\/bncr name set <text> \[<agentId>\] \[<SceneId>\]/);
   assert.match(helpText, /📋 Conversation history/);
 });
 
@@ -201,7 +216,7 @@ test('resolveBncrNativeHelpCommand returns direct non-admin help with self-servi
   assert.match(helpText, /📋 Conversation history/);
   assert.match(helpText, /\/bncr history-help/);
   assert.match(helpText, /\/bncr download-media/);
-  assert.doesNotMatch(helpText, /\/bncr allow \[<SceneId>\]/);
+  assert.doesNotMatch(helpText, /\/bncr allow \[<agentId>\] \[<SceneId>\]/);
   assert.doesNotMatch(helpText, /\/bncr mode /);
   assert.doesNotMatch(helpText, /\/status/);
   assert.doesNotMatch(helpText, /\/whoami/);
@@ -218,8 +233,12 @@ test('resolveBncrNativeHelpCommand returns group non-admin help with only availa
   assert.doesNotMatch(helpText, /\/bncr new/);
   assert.doesNotMatch(helpText, /\/bncr reset/);
   assert.doesNotMatch(helpText, /\/bncr verbose on\|off\|full/);
-  assert.doesNotMatch(helpText, /\/bncr allow \[<SceneId>\]/);
+  assert.doesNotMatch(helpText, /\/bncr allow \[<agentId>\] \[<SceneId>\]/);
   assert.doesNotMatch(helpText, /\/bncr mode /);
+  // Renaming is admin-only in groups, so the help must not advertise it here.
+  assert.doesNotMatch(helpText, /🏷 Session identity/);
+  assert.doesNotMatch(helpText, /\/bncr name/);
+  assert.doesNotMatch(helpText, /\/bncr group/);
   assert.doesNotMatch(helpText, /📋 Conversation history/);
   assert.doesNotMatch(helpText, /🌐 Remote media/);
   assert.doesNotMatch(helpText, /\/status/);
@@ -508,9 +527,22 @@ test('parseSceneAdminCommand parses allow deny revoke bind mode and list command
     valid: true,
     command: {
       kind: 'allow',
-      sceneKey: undefined,
     },
   });
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr allow orion')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'allow', agentId: 'orion' },
+  });
+  assert.deepEqual(
+    parseSceneAdminCommand(parseBncrNativeCommand('/bncr allow orion tgBot:10001')),
+    {
+      matched: true,
+      valid: true,
+      command: { kind: 'allow', agentId: 'orion', sceneKey: 'tgBot:10001' },
+    },
+  );
+  assert.equal(parseSceneAdminCommand(parseBncrNativeCommand('/bncr allow a b c')).valid, false);
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr bind tgBot:10001')), {
     matched: true,
     valid: true,
@@ -521,8 +553,8 @@ test('parseSceneAdminCommand parses allow deny revoke bind mode and list command
   });
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr mode tgBot:-1001 nope')), {
     matched: true,
-    valid: false,
-    text: 'Usage: /bncr mode | /bncr mode <admin|mention|hybrid|all> [<sceneKey>]',
+    valid: true,
+    command: { kind: 'mode-get', sceneKey: 'tgBot:-1001', agentId: 'nope' },
   });
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr list nope')), {
     matched: true,
@@ -612,6 +644,96 @@ test('executeSceneAdminCommand requires admin and mutates scene registry determi
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001') !== undefined, false);
 });
 
+test('allow and deny fan out to every agent row unless an agent is named', () => {
+  const sceneRegistry = new Map();
+  const row = (agentId) => ({
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'pending',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: '无界社区',
+    agentId,
+    lastSeenAt: 1,
+  });
+  setSceneRecord(sceneRegistry, row('main'));
+  setSceneRecord(sceneRegistry, row('public'));
+  const run = (command) =>
+    executeSceneAdminCommand({
+      parsed: { isAdmin: true, platform: 'tgBot', groupId: '-1001' },
+      command,
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 7,
+    });
+  const rows = () => [...sceneRegistry.values()];
+
+  assert.deepEqual(run({ kind: 'allow', sceneKey: 'tgBot:-1001' }), {
+    ok: true,
+    text: 'Allowed scene tgBot:-1001 for all 2 agents.',
+  });
+  assert.deepEqual(
+    rows().map((entry) => [entry.agentId, entry.status, entry.approvedAt]),
+    [
+      ['main', 'allowed', 7],
+      ['public', 'allowed', 7],
+    ],
+  );
+
+  assert.deepEqual(run({ kind: 'deny', sceneKey: 'tgBot:-1001', agentId: 'public' }), {
+    ok: true,
+    text: 'Denied scene tgBot:-1001 for public.',
+  });
+  assert.deepEqual(
+    rows().map((entry) => [entry.agentId, entry.status, entry.approvedAt]),
+    [
+      ['main', 'allowed', 7],
+      ['public', 'denied', undefined],
+    ],
+  );
+
+  assert.deepEqual(run({ kind: 'allow', sceneKey: 'tgBot:-1001', agentId: 'ghost' }), {
+    ok: false,
+    text: 'Agent ghost has no scene row for tgBot:-1001. Agents here: main, public.',
+  });
+});
+
+test('fan-out approves a legacy unowned row without inventing an owner', () => {
+  const sceneRegistry = new Map();
+  const row = (agentId) => ({
+    sceneKey: 'qqBot:grp_1',
+    kind: 'group',
+    status: 'pending',
+    platform: 'qqBot',
+    groupId: 'grp_1',
+    agentId,
+    lastSeenAt: 1,
+  });
+  setSceneRecord(sceneRegistry, row(''));
+  setSceneRecord(sceneRegistry, row('orion'));
+
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'qqBot', groupId: 'grp_1' },
+    command: { kind: 'allow', sceneKey: 'qqBot:grp_1' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 7,
+  });
+
+  assert.deepEqual(outcome, { ok: true, text: 'Allowed scene qqBot:grp_1 for all 2 agents.' });
+  assert.deepEqual(
+    [...sceneRegistry.values()]
+      .map((entry) => [entry.agentId, entry.status])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    [
+      ['', 'allowed'],
+      ['orion', 'allowed'],
+    ],
+  );
+});
+
 test('parseSceneAdminCommand parses history-limit and history-force commands', () => {
   // history-limit with 0 args → get
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit')), {
@@ -647,7 +769,7 @@ test('parseSceneAdminCommand parses history-limit and history-force commands', (
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit x y z')), {
     matched: true,
     valid: false,
-    text: 'Usage: /bncr history-limit [<number>|clear] [<sceneKey>]',
+    text: 'Usage: /bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]',
   });
 
   // history-force with 0 args → get
@@ -943,7 +1065,7 @@ test('parseSceneAdminCommand: mode clear', () => {
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr mode clear')), {
     matched: true,
     valid: true,
-    command: { kind: 'mode', sceneKey: '', mode: 'clear' },
+    command: { kind: 'mode', mode: 'clear' },
   });
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr mode clear tgBot:-1001')), {
     matched: true,
@@ -1218,4 +1340,270 @@ test('executeSceneAdminCommand: non-admin still manages the per-chat download sw
   });
   assert.equal(other.ok, false);
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:20002', 'public'), undefined);
+});
+
+test('a numeric agent id is a normal agent, and an unknown one gets the shared error', () => {
+  assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit 80 90')), {
+    matched: true,
+    valid: true,
+    command: { kind: 'history-limit-set', sceneKey: '', limit: 80, agentId: '90' },
+  });
+
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'main',
+    lastSeenAt: 1,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: '90',
+    lastSeenAt: 1,
+  });
+  const run = (command) =>
+    executeSceneAdminCommand({
+      parsed: { isAdmin: true, platform: 'tgBot', groupId: '-1001' },
+      command,
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 7,
+    });
+
+  assert.deepEqual(
+    run({ kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 80, agentId: '90' }),
+    {
+      ok: true,
+      text: 'Set tgBot:-1001 history limit to 80 for 90.',
+    },
+  );
+  assert.deepEqual(
+    run({ kind: 'history-limit-set', sceneKey: 'tgBot:-1001', limit: 80, agentId: '91' }),
+    {
+      ok: false,
+      text: 'Agent 91 has no scene row for tgBot:-1001. Agents here: 90, main.',
+    },
+  );
+});
+
+test('/bncr list reports the status the gate will apply', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    lastSeenAt: 5,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10002',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10002',
+    approvedAt: 4,
+    lastSeenAt: 4,
+  });
+  const run = (command) =>
+    executeSceneAdminCommand({
+      parsed: { isAdmin: true, platform: 'tgBot' },
+      command,
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 9,
+    });
+
+  const listed = run({ kind: 'list', scope: 'scenes' }).text;
+  assert.match(listed, /SceneId: tgBot:10001\n {2}Details: status=pending \(stored allowed\)/);
+  assert.match(listed, /SceneId: tgBot:10002\n {2}Details: status=allowed id=10002/);
+
+  const pending = run({ kind: 'list', scope: 'pending' }).text;
+  assert.match(pending, /tgBot:10001/);
+  assert.doesNotMatch(pending, /tgBot:10002/);
+});
+
+test('history help documents the shared agent tail', () => {
+  assert.match(
+    HISTORY_HELP_TEXT,
+    /\/bncr history-limit \[<number>\|clear\] \[<agentId>\] \[<SceneId>\]/,
+  );
+  assert.match(
+    HISTORY_HELP_TEXT,
+    /\/bncr history-force on\|off\|clear \[<agentId>\] \[<SceneId>\]/,
+  );
+});
+
+test('list filters on the status the operator sees', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    lastSeenAt: 5,
+  });
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot' },
+    command: { kind: 'list', scope: 'scenes', filters: ['pending'] },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 9,
+  });
+
+  assert.match(outcome.text, /SceneId: tgBot:10001/);
+
+  // The stored value stays searchable, so an operator who read "allowed"
+  // earlier can still find the row.
+  const stored = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot' },
+    command: { kind: 'list', scope: 'scenes', filters: ['allowed'] },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 9,
+  });
+  assert.match(stored.text, /SceneId: tgBot:10001/);
+});
+
+test('list hides the internal global media default row', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: '__global__',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'bncr',
+    downloadMedia: true,
+    lastSeenAt: 1,
+  });
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot' },
+    command: { kind: 'list', scope: 'scenes' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 9,
+  });
+
+  assert.doesNotMatch(outcome.text, /__global__/);
+});
+
+test('revoke refuses a bare call when the scene has more than one agent', () => {
+  const sceneRegistry = new Map();
+  for (const agentId of ['main', 'public']) {
+    setSceneRecord(sceneRegistry, {
+      sceneKey: 'tgBot:-1001',
+      kind: 'group',
+      status: 'allowed',
+      platform: 'tgBot',
+      groupId: '-1001',
+      agentId,
+      approvedAt: 3,
+      lastSeenAt: 3,
+    });
+  }
+  const run = (command) =>
+    executeSceneAdminCommand({
+      parsed: { isAdmin: true, platform: 'tgBot', groupId: '-1001' },
+      command,
+      sceneRegistry,
+      defaultAdminAgentId: 'main',
+      defaultPublicAgentId: 'public',
+      now: () => 9,
+    });
+
+  assert.deepEqual(run({ kind: 'revoke', sceneKey: 'tgBot:-1001' }), {
+    ok: false,
+    text: 'Scene tgBot:-1001 is served by 2 agents (main, public). Name one: /bncr revoke <agentId> [<SceneId>].',
+  });
+  assert.equal([...sceneRegistry.values()].length, 2);
+
+  assert.deepEqual(run({ kind: 'revoke', sceneKey: 'tgBot:-1001', agentId: 'main' }), {
+    ok: true,
+    text: 'Revoked scene tgBot:-1001. Still admitted for public.',
+  });
+  assert.deepEqual(run({ kind: 'revoke', sceneKey: 'tgBot:-1001', agentId: 'public' }), {
+    ok: true,
+    text: 'Revoked scene tgBot:-1001.',
+  });
+  assert.equal([...sceneRegistry.values()].length, 0);
+});
+
+test('revoke stays shorthand for a scene with a single agent', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    agentId: 'main',
+    approvedAt: 3,
+    lastSeenAt: 3,
+  });
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot' },
+    command: { kind: 'revoke', sceneKey: 'tgBot:10001' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 9,
+  });
+
+  assert.deepEqual(outcome, { ok: true, text: 'Revoked scene tgBot:10001.' });
+  assert.equal([...sceneRegistry.values()].length, 0);
+});
+
+test('bind refuses to overwrite an agent that already holds the scene', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'main',
+    historyLimit: 20,
+    approvedAt: 1,
+    lastSeenAt: 1,
+  });
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'public',
+    historyLimit: 80,
+    approvedAt: 2,
+    lastSeenAt: 2,
+  });
+
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot', groupId: '-1001' },
+    command: { kind: 'bind', sceneKey: 'tgBot:-1001', agentId: 'public' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 9,
+    agentId: 'main',
+  });
+
+  assert.deepEqual(outcome, {
+    ok: false,
+    text: 'Agent public already has a row for tgBot:-1001. Revoke it first: /bncr revoke public [<SceneId>].',
+  });
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'public')?.historyLimit, 80);
+  assert.equal([...sceneRegistry.values()].length, 2);
 });

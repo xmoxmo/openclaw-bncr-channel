@@ -81,6 +81,12 @@ export async function dispatchBncrInbound(params: {
   enqueueFromReply: BncrEnqueueFromReply;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
+  /** Wipe every stored artifact for one pruned scene session. */
+  purgeSceneSession?: (args: {
+    sceneKey: string;
+    agentId: string;
+    sessionKey: string | null;
+  }) => Promise<void> | void;
   logger?: BncrInboundLogger;
 }) {
   const {
@@ -106,6 +112,7 @@ export async function dispatchBncrInbound(params: {
     enqueueFromReply,
     setInboundActivity,
     scheduleSave,
+    purgeSceneSession,
     logger,
   } = params;
   const historyShardQueue = params.historyShardQueue;
@@ -125,6 +132,7 @@ export async function dispatchBncrInbound(params: {
     now,
     rememberSessionRoute,
     enqueueFromReply,
+    purgeSceneSession,
     logger,
   });
   if (nativeCommand.handled && !nativeCommand.fallbackToAgent) {
@@ -215,6 +223,7 @@ export async function dispatchBncrInbound(params: {
       senderIdForContext,
       senderDisplayName,
       shouldDispatch: true,
+      sceneRegistry,
       silentHistoryFlush: false,
       setInboundActivity,
       scheduleSave,
@@ -480,6 +489,7 @@ export async function dispatchBncrInbound(params: {
         senderIdForContext,
         senderDisplayName,
         shouldDispatch,
+        sceneRegistry,
         silentHistoryFlush,
         setInboundActivity,
         scheduleSave,
@@ -597,6 +607,7 @@ export async function dispatchBncrInbound(params: {
             senderIdForContext,
             senderDisplayName,
             shouldDispatch,
+            sceneRegistry,
             silentHistoryFlush,
             deliveryId:
               historyShardDeliveryId ??

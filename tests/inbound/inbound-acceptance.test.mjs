@@ -184,6 +184,7 @@ test('prepareBncrInboundAcceptance defaults group scenes to admin-only reply mod
     groupReplyMode: 'admin',
     historyLimit: 50,
     historyForce: true,
+    approvedAt: 123,
     lastSeenAt: 123,
   });
 });
@@ -229,9 +230,9 @@ test('group reply modes gate uploads and replies as documented', async () => {
         sceneRegistry,
       }),
     );
-    const label = item.mode + ' admin=' + item.isAdmin + ' mention=' + item.shouldRespond;
-    assert.equal(result.shouldAccumulate, item.upload, label + ' upload');
-    assert.equal(result.shouldDispatch, item.reply, label + ' reply');
+    const label = `${item.mode} admin=${item.isAdmin} mention=${item.shouldRespond}`;
+    assert.equal(result.shouldAccumulate, item.upload, `${label} upload`);
+    assert.equal(result.shouldDispatch, item.reply, `${label} reply`);
   }
 });
 
@@ -496,6 +497,7 @@ test('prepareBncrInboundAcceptance lets admin callers recover denied group scene
     groupReplyMode: 'admin',
     historyLimit: 50,
     historyForce: true,
+    approvedAt: 123,
     lastSeenAt: 123,
   });
 });
@@ -542,6 +544,7 @@ test('prepareBncrInboundAcceptance promotes denied group scenes to public when a
     groupReplyMode: 'admin',
     historyLimit: 50,
     historyForce: true,
+    approvedAt: 123,
     lastSeenAt: 123,
   });
 });

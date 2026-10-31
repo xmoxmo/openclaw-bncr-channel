@@ -1,7 +1,9 @@
 import { recordInboundSession as sdkRecordInboundSession } from 'openclaw/plugin-sdk/conversation-runtime';
 import { resolvePinnedMainDmOwnerFromAllowlist as sdkResolvePinnedMainDmOwnerFromAllowlist } from 'openclaw/plugin-sdk/security-runtime';
 import {
+  deleteSessionEntry as sdkDeleteSessionEntry,
   getSessionEntryAsync as sdkGetSessionEntryAsync,
+  listSessionEntries as sdkListSessionEntries,
   patchSessionEntry as sdkPatchSessionEntry,
   readSessionUpdatedAtAsync as sdkReadSessionUpdatedAtAsync,
   recordSessionMetaFromInbound as sdkRecordSessionMetaFromInbound,
@@ -17,7 +19,9 @@ type RecordSessionMetaFromInboundFn = typeof sdkRecordSessionMetaFromInbound;
 type PatchSessionEntryFn = typeof sdkPatchSessionEntry;
 type GetSessionEntryAsyncFn = typeof sdkGetSessionEntryAsync;
 type ReadSessionUpdatedAtAsyncFn = typeof sdkReadSessionUpdatedAtAsync;
+type DeleteSessionEntryFn = typeof sdkDeleteSessionEntry;
 type ResolvePinnedMainDmOwnerFromAllowlistFn = typeof sdkResolvePinnedMainDmOwnerFromAllowlist;
+type ListSessionEntriesFn = typeof sdkListSessionEntries;
 
 type BncrInboundSessionRuntime = {
   resolveStorePath: ResolveStorePathFn;
@@ -26,6 +30,8 @@ type BncrInboundSessionRuntime = {
   patchSessionEntry: PatchSessionEntryFn;
   getSessionEntryAsync: GetSessionEntryAsyncFn;
   readSessionUpdatedAtAsync: ReadSessionUpdatedAtAsyncFn;
+  deleteSessionEntry: DeleteSessionEntryFn;
+  listSessionEntries: ListSessionEntriesFn;
   resolvePinnedMainDmOwnerFromAllowlist: ResolvePinnedMainDmOwnerFromAllowlistFn;
 };
 
@@ -41,6 +47,8 @@ function resolveRuntime(): BncrInboundSessionRuntime {
     getSessionEntryAsync: testRuntimeOverride?.getSessionEntryAsync ?? sdkGetSessionEntryAsync,
     readSessionUpdatedAtAsync:
       testRuntimeOverride?.readSessionUpdatedAtAsync ?? sdkReadSessionUpdatedAtAsync,
+    deleteSessionEntry: testRuntimeOverride?.deleteSessionEntry ?? sdkDeleteSessionEntry,
+    listSessionEntries: testRuntimeOverride?.listSessionEntries ?? sdkListSessionEntries,
     resolvePinnedMainDmOwnerFromAllowlist:
       testRuntimeOverride?.resolvePinnedMainDmOwnerFromAllowlist ??
       sdkResolvePinnedMainDmOwnerFromAllowlist,
@@ -77,6 +85,31 @@ export function readBncrSessionUpdatedAt(params: {
   sessionKey: string;
 }): ReturnType<ReadSessionUpdatedAtAsyncFn> {
   return resolveRuntime().readSessionUpdatedAtAsync(params);
+}
+
+/**
+ * Lists one agent's host session entries. `readOnly` keeps the call out of the
+ * agent database writable lifecycle (no create/register/migrate), which is what
+ * the stale-scene inspection needs: it must never create the store it inspects.
+ */
+export function listBncrSessionEntries(
+  params: Parameters<ListSessionEntriesFn>[0],
+): ReturnType<ListSessionEntriesFn> {
+  return resolveRuntime().listSessionEntries(params);
+}
+
+/**
+ * Drop one host session. Operator commands use it to clear a scene whose row
+ * and session are both long dead; nothing on the inbound path calls it.
+ */
+export function deleteBncrSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  agentId?: string;
+  /** Keep the session transcript file and only remove the store entry. */
+  archiveTranscript?: boolean;
+}): ReturnType<DeleteSessionEntryFn> {
+  return resolveRuntime().deleteSessionEntry(params);
 }
 
 export async function readBncrSessionEntry(params: {

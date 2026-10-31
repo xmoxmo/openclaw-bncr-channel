@@ -116,8 +116,55 @@ function defaultGroupReplyMode(kind: BncrSceneKind): BncrGroupReplyMode | undefi
   return kind === 'group' ? 'admin' : undefined;
 }
 
+/**
+ * A brand-new row belongs to the scene, so it picks up whatever the operator
+ * already set for that scene (reply mode, display name, sidebar group) instead
+ * of silently starting from defaults and splitting an otherwise uniform chat.
+ */
+function inheritSceneDefaults(
+  registry: ReadonlyMap<string, BncrSceneRecord>,
+  record: BncrSceneRecord,
+): BncrSceneRecord {
+  let source: BncrSceneRecord | undefined;
+  for (const row of registry.values()) {
+    if (asString(row.sceneKey).trim() !== record.sceneKey) continue;
+    if (!source || (row.lastSeenAt ?? 0) >= (source.lastSeenAt ?? 0)) source = row;
+  }
+  if (!source) return record;
+  return {
+    ...record,
+    // A fresh row only ever carries the built-in default, so a scene-wide mode
+    // set by the operator always wins here.
+    ...(source.groupReplyMode ? { groupReplyMode: source.groupReplyMode } : {}),
+    ...(source.customName && !record.customName ? { customName: source.customName } : {}),
+    ...(source.category && !record.category ? { category: source.category } : {}),
+    // The same holds for the history and media settings: they are written to
+    // every row when no agent is named, so a later agent must not start over
+    // from the defaults and behave differently inside the same chat.
+    ...(source.historyLimit !== undefined ? { historyLimit: source.historyLimit } : {}),
+    ...(source.historyForce !== undefined ? { historyForce: source.historyForce } : {}),
+    ...(source.downloadMedia !== undefined ? { downloadMedia: source.downloadMedia } : {}),
+  };
+}
+
 function isSceneApproved(scene: BncrSceneRecord): boolean {
   return typeof scene.approvedAt === 'number' && scene.approvedAt > 0;
+}
+
+/**
+ * Status the gate will actually apply to a row.
+ *
+ * A private-chat row can be stored as `allowed` without an approval mark — that
+ * is what the old auto-admission wrote, and what the gate turns into `pending`
+ * on the next message. Reporting it as `allowed` would tell the operator a chat
+ * is open while every non-admin message in it is silently dropped, so the
+ * effective status is what list output and `list pending` must use.
+ */
+export function resolveEffectiveSceneStatus(scene: BncrSceneRecord): BncrSceneStatus {
+  if (scene.kind === 'direct' && scene.status === 'allowed' && !isSceneApproved(scene)) {
+    return 'pending';
+  }
+  return scene.status;
 }
 
 export function buildRouteSceneKey(route: BncrRoute): string {
@@ -148,6 +195,9 @@ function buildSceneRecord(args: {
     sceneKey,
     kind,
     status,
+    // An allowed row always carries its approval mark, otherwise the gate has
+    // to treat it as pending and the stored status lies.
+    ...(status === 'allowed' ? { approvedAt: lastSeenAt } : {}),
     platform: parsed.platform,
     ...(parsed.userId ? { userId: parsed.userId } : {}),
     ...(parsed.userName ? { userName: parsed.userName } : {}),
@@ -178,9 +228,7 @@ export function decideSceneAdmission(args: {
   // Defence in depth: a row owned by a different agent is not this agent's
   // admission state, so it must never drive this decision or be overwritten.
   const existing =
-    resolved && resolved.agentId && sceneAgentId && resolved.agentId !== sceneAgentId
-      ? undefined
-      : resolved;
+    resolved?.agentId && sceneAgentId && resolved.agentId !== sceneAgentId ? undefined : resolved;
   const shouldForceDirectNonAdminPublic = (agentId?: string) =>
     kind === 'direct' && parsed.isAdmin !== true && (!agentId || agentId === defaultAdminAgentId);
 
@@ -207,6 +255,7 @@ export function decideSceneAdmission(args: {
       const allowedScene = {
         ...nextScene,
         status: 'allowed',
+        approvedAt: now,
       } satisfies BncrSceneRecord;
       setSceneRecord(sceneRegistry, allowedScene, { previousAgentId: existing.agentId });
       return {
@@ -263,8 +312,9 @@ export function decideSceneAdmission(args: {
       agentId,
       lastSeenAt: now,
     });
-    setSceneRecord(sceneRegistry, scene);
-    return { allowed: true, scene, agentId };
+    const inherited = inheritSceneDefaults(sceneRegistry, scene);
+    setSceneRecord(sceneRegistry, inherited);
+    return { allowed: true, scene: inherited, agentId };
   }
 
   if (kind === 'direct') {
@@ -278,10 +328,11 @@ export function decideSceneAdmission(args: {
       status: 'pending',
       lastSeenAt: now,
     });
-    setSceneRecord(sceneRegistry, scene);
+    const inherited = inheritSceneDefaults(sceneRegistry, scene);
+    setSceneRecord(sceneRegistry, inherited);
     return {
       allowed: false,
-      scene,
+      scene: inherited,
       reason: 'scene pending approval',
       replyPolicy: 'silent',
     };
@@ -294,10 +345,11 @@ export function decideSceneAdmission(args: {
     status: 'denied',
     lastSeenAt: now,
   });
-  setSceneRecord(sceneRegistry, scene);
+  const inherited = inheritSceneDefaults(sceneRegistry, scene);
+  setSceneRecord(sceneRegistry, inherited);
   return {
     allowed: false,
-    scene,
+    scene: inherited,
     reason: 'scene denied',
     replyPolicy: 'silent',
   };

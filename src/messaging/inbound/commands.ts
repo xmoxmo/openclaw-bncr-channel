@@ -3,17 +3,24 @@ import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import { formatDisplayScope } from '../../core/targets.ts';
 import {
+  deleteBncrSessionEntry,
+  listBncrSessionEntries,
   readBncrSessionEntry,
+  readBncrSessionUpdatedAt,
   recordBncrInboundSession,
   resolveBncrInboundSessionStorePath,
   resolveBncrPinnedMainDmOwnerFromAllowlist,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
 import { resolveOpenClawAgentRoute } from '../../openclaw/routing-runtime.ts';
-import { performBncrGatewaySessionReset } from '../../openclaw/session-reset-runtime.ts';
+import {
+  type BncrSessionNodeStatus,
+  buildBncrSessionNodeIndex,
+} from '../../openclaw/session-node-status.ts';
 import { addNativeElevation, removeNativeElevation } from '../../plugin/config.ts';
 import { buildSceneKey, resolveSceneAgentId } from '../../plugin/scene-registry.ts';
 import { mergeBncrOwnerAllowFromIntoConfig } from './command-owner.ts';
+import { dispatchLocalCommand } from './command-registry.ts';
 import type {
   BncrEnqueueFromReply,
   BncrInboundApi,
@@ -31,11 +38,6 @@ import {
   parseBncrNativeCommand,
   parseBncrUnsupportedDirectCommand,
   resolveBncrNativeCommandParseOptions,
-  resolveBncrNativeHelpCommand,
-  resolveBncrNativeSessionResetCommand,
-  resolveBncrNativeStatusCommand,
-  resolveBncrNativeVerboseCommand,
-  resolveBncrNativeWhoamiCommand,
 } from './native-command.ts';
 import {
   buildBncrNativeCommandSessionState,
@@ -50,7 +52,7 @@ import {
 } from './native-command-runtime.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
-import { executeSceneAdminCommand, parseSceneAdminCommand } from './scene-admin.ts';
+import { resolveBncrSceneIdentity, resolveBncrSessionCategory } from './session-identity.ts';
 import {
   buildBncrInboundSessionIdentityPatch,
   recordAndPatchBncrInboundSessionEntry,
@@ -99,6 +101,12 @@ export async function handleBncrNativeCommand(params: {
   now: () => number;
   rememberSessionRoute: BncrRememberSessionRoute;
   enqueueFromReply: BncrEnqueueFromReply;
+  /** Wipe every stored artifact for one pruned scene session. */
+  purgeSceneSession?: (args: {
+    sceneKey: string;
+    agentId: string;
+    sessionKey: string | null;
+  }) => Promise<void> | void;
   logger?: BncrInboundLogger;
 }): Promise<
   | { handled: false }
@@ -117,6 +125,7 @@ export async function handleBncrNativeCommand(params: {
     now,
     rememberSessionRoute,
     enqueueFromReply,
+    purgeSceneSession,
   } = params;
   const { accountId, route, peer, clientId, extracted, msgId } = parsed;
 
@@ -329,13 +338,34 @@ export async function handleBncrNativeCommand(params: {
     }),
   );
 
-  const sessionIdentityPatch = buildBncrInboundSessionIdentityPatch({
-    channelId,
-    accountId,
-    chatType: peer.kind,
-    displayTo,
-    senderId: senderIdForContext,
-  });
+  // The readable label depends on operator-set scene identity, which this very
+  // command may just have changed, so it is rebuilt on demand.
+  const buildSessionIdentityPatch = () => {
+    const identity = resolveBncrSceneIdentity(
+      sceneRegistry,
+      buildSceneKey(parsed),
+      resolveSceneAgentId(
+        sceneRegistry,
+        buildSceneKey(parsed),
+        resolvedAgentId || canonicalAgentId,
+      ),
+    );
+    return buildBncrInboundSessionIdentityPatch({
+      channelId,
+      accountId,
+      chatType: peer.kind,
+      displayTo,
+      senderId: senderIdForContext,
+      category: resolveBncrSessionCategory({ kind: peer.kind, identity }),
+      scene: {
+        platform: parsed.platform,
+        id: peer.kind === 'group' ? parsed.groupId : parsed.userId,
+        name: peer.kind === 'group' ? parsed.groupName : parsed.userName,
+        ...(identity.customName ? { customName: identity.customName } : {}),
+      },
+    });
+  };
+  const sessionIdentityPatch = buildSessionIdentityPatch();
 
   const currentVerboseLevel = storePath
     ? ((await readBncrSessionEntry({ storePath, sessionKey }))?.verboseLevel as
@@ -344,397 +374,105 @@ export async function handleBncrNativeCommand(params: {
         | 'full'
         | undefined)
     : undefined;
-  const nativeVerbose = resolveBncrNativeVerboseCommand(command, currentVerboseLevel);
-  const nativeHelp = resolveBncrNativeHelpCommand(command, {
-    isAdmin: effectiveIsAdmin,
-    peerKind: parsed.peer.kind as 'direct' | 'group',
-  });
-  const nativeWhoami = resolveBncrNativeWhoamiCommand({
-    command,
-    platform: parsed.platform,
-    groupId: parsed.groupId,
-    groupName: parsed.groupName,
-    userId: parsed.userId,
-    userName: parsed.userName,
-    isGroup: parsed.isGroup,
-    isAdmin: effectiveIsAdmin,
-  });
-  const nativeStatus = resolveBncrNativeStatusCommand({
-    command,
-    accountId,
-    platform: parsed.platform,
-    userId: parsed.userId,
-    userName: parsed.userName,
-    resolvedAgentId: resolvedRoute.agentId || canonicalAgentId,
-    sessionKey,
-  });
-  const nativeSessionReset = resolveBncrNativeSessionResetCommand({
-    command,
-    peerKind: parsed.peer.kind as 'direct' | 'group',
-  });
+  const knownAgentIds = new Set(
+    Array.from(sceneRegistry.values())
+      .map((row) => String(row.agentId ?? '').trim())
+      .filter(Boolean),
+  );
+  const sceneAgentId = resolveSceneAgentId(
+    sceneRegistry,
+    buildSceneKey(parsed),
+    resolvedAgentId || canonicalAgentId,
+  );
+  // One read-only session listing per agent per command. `null` means the read
+  // could not be trusted, which every caller must treat as unknown.
+  const sessionNodeIndexByAgent = new Map<string, Map<string, BncrSessionNodeStatus> | null>();
   if (!dispatchToOpenClaw) {
-    if (nativeHelp) {
-      logBncrNativeCommandSummary(
-        buildBncrNativeCommandSummary({
-          kind: 'help',
-          command: command.command,
-          accountId,
-          to: displayTo,
-          msgId: msgId || null,
-          result: 'handled',
-        }),
-      );
-      await recordAndPatchBncrInboundSessionEntry({
-        storePath,
-        sessionKey,
-        ctx: ctxPayload,
-        patch: sessionIdentityPatch,
-      });
-      rememberSessionRoute(baseSessionKey, accountId, route);
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: nativeHelp.text,
-          replyToId: msgId || undefined,
-        },
-      });
-      return { handled: true, command: command.command, sessionKey };
-    }
-
-    if (nativeWhoami) {
-      logBncrNativeCommandSummary(
-        buildBncrNativeCommandSummary({
-          kind: 'whoami',
-          command: command.command,
-          accountId,
-          to: displayTo,
-          msgId: msgId || null,
-          result: 'handled',
-        }),
-      );
-      await recordAndPatchBncrInboundSessionEntry({
-        storePath,
-        sessionKey,
-        ctx: ctxPayload,
-        patch: sessionIdentityPatch,
-      });
-      rememberSessionRoute(baseSessionKey, accountId, route);
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: nativeWhoami.text,
-          replyToId: msgId || undefined,
-        },
-      });
-      return { handled: true, command: command.command, sessionKey };
-    }
-
-    if (nativeStatus) {
-      logBncrNativeCommandSummary(
-        buildBncrNativeCommandSummary({
-          kind: 'status',
-          command: command.command,
-          accountId,
-          to: displayTo,
-          msgId: msgId || null,
-          result: 'handled',
-        }),
-      );
-      await recordAndPatchBncrInboundSessionEntry({
-        storePath,
-        sessionKey,
-        ctx: ctxPayload,
-        patch: sessionIdentityPatch,
-      });
-      rememberSessionRoute(baseSessionKey, accountId, route);
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: nativeStatus.text,
-          replyToId: msgId || undefined,
-        },
-      });
-      return { handled: true, command: command.command, sessionKey };
-    }
-
-    if (nativeSessionReset) {
-      const allowLocalSessionReset = parsed.peer.kind === 'direct' || effectiveIsAdmin;
-      if (!allowLocalSessionReset) {
-        logBncrNativeCommandSummary(
-          buildBncrNativeCommandSummary({
-            kind: nativeSessionReset.reason,
-            command: command.command,
-            accountId,
-            to: displayTo,
-            msgId: msgId || null,
-            result: 'rejected',
-          }),
-        );
-        await recordAndPatchBncrInboundSessionEntry({
-          storePath,
-          sessionKey,
-          ctx: ctxPayload,
-          patch: sessionIdentityPatch,
+    const localResult = await dispatchLocalCommand({
+      command,
+      parsed,
+      effectiveIsAdmin,
+      accountId,
+      msgId: msgId ?? null,
+      route,
+      peer,
+      displayTo,
+      baseSessionKey,
+      sessionKey,
+      storePath,
+      ctxPayload,
+      sessionIdentityPatch,
+      buildSessionIdentityPatch,
+      currentVerboseLevel,
+      knownAgentIds,
+      sceneRegistry,
+      routeAgentId: resolvedRoute.agentId || canonicalAgentId,
+      sceneAgentId,
+      defaultAdminAgentId,
+      defaultPublicAgentId,
+      now,
+      rememberSessionRoute,
+      enqueueFromReply,
+      purgeSceneSession,
+      readSessionUpdatedAt: async ({ agentId, sessionKey: targetSessionKey }) => {
+        const targetStorePath = resolveBncrInboundSessionStorePath({
+          storeConfig: cfg?.session?.store,
+          agentId,
         });
-        rememberSessionRoute(baseSessionKey, accountId, route);
-        return { handled: true, command: command.command, sessionKey };
-      }
-
-      const requestedAgentId = resolvedRoute.agentId || canonicalAgentId;
-      await recordAndPatchBncrInboundSessionEntry({
-        storePath,
-        sessionKey,
-        ctx: ctxPayload,
-        patch: sessionIdentityPatch,
-      });
-      let resetResult: { ok?: boolean } | undefined;
-      try {
-        resetResult = await performBncrGatewaySessionReset({
-          key: baseSessionKey,
-          reason: nativeSessionReset.reason,
-          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          commandSource: 'bncr:native-command',
-        });
-      } catch (resetError) {
-        emitBncrLogLine(
-          'error',
-          `[bncr] native-command sessions.reset failed|key=${baseSessionKey}|err=${resetError instanceof Error ? resetError.message : String(resetError)}`,
-        );
-        await enqueueFromReply({
-          accountId,
-          sessionKey: baseSessionKey,
-          route,
-          payload: {
-            text: `Session reset failed: ${resetError instanceof Error ? resetError.message : String(resetError)}`,
-            replyToId: msgId || undefined,
-          },
-        });
-        return { handled: true, command: command.command, sessionKey: baseSessionKey };
-      }
-      if (resetResult?.ok === false) {
-        await enqueueFromReply({
-          accountId,
-          sessionKey: baseSessionKey,
-          route,
-          payload: {
-            text: 'Session reset was rejected by the gateway.',
-            replyToId: msgId || undefined,
-          },
-        });
-        return { handled: true, command: command.command, sessionKey: baseSessionKey };
-      }
-      logBncrNativeCommandSummary(
-        buildBncrNativeCommandSummary({
-          kind: nativeSessionReset.reason,
-          command: command.command,
-          accountId,
-          to: displayTo,
-          msgId: msgId || null,
-          result: 'handled',
-        }),
-      );
-      rememberSessionRoute(baseSessionKey, accountId, route);
-      await enqueueFromReply({
-        accountId,
-        sessionKey: baseSessionKey,
-        route,
-        payload: {
-          text: nativeSessionReset.text,
-          replyToId: msgId || undefined,
-        },
-      });
-      return { handled: true, command: command.command, sessionKey: baseSessionKey };
-    }
-
-    if (nativeVerbose) {
-      if (!effectiveIsAdmin && parsed.peer.kind !== 'direct') {
-        logBncrNativeCommandSummary(
-          buildBncrNativeCommandSummary({
-            kind: 'verbose',
-            command: command.command,
-            accountId,
-            to: displayTo,
-            msgId: msgId || null,
-            result: 'rejected',
-          }),
-        );
-        await recordAndPatchBncrInboundSessionEntry({
-          storePath,
-          sessionKey,
-          ctx: ctxPayload,
-          patch: sessionIdentityPatch,
-        });
-        rememberSessionRoute(baseSessionKey, accountId, route);
-        if (parsed.peer.kind !== 'group') {
-          await enqueueFromReply({
-            accountId,
-            sessionKey,
-            route,
-            payload: {
-              text: 'Admin permission required.',
-              replyToId: msgId || undefined,
-            },
+        try {
+          const value = await readBncrSessionUpdatedAt({
+            storePath: targetStorePath,
+            sessionKey: targetSessionKey,
           });
+          return typeof value === 'number' && Number.isFinite(value) ? value : null;
+        } catch {
+          // Unknown, not dead: a failed read must never prune a live chat.
+          return undefined;
         }
-        return { handled: true, command: command.command, sessionKey };
-      }
-
-      logBncrNativeCommandSummary(
-        buildBncrNativeCommandSummary({
-          kind: 'verbose',
-          command: command.command,
-          accountId,
-          to: displayTo,
-          msgId: msgId || null,
-          result: 'handled',
-        }),
-      );
-      logBncrNativeCommandEvent(
-        'handled-verbose',
-        {
-          command: command.command,
-          accountId,
-          sessionKey,
-          to: displayTo,
-          msgId: msgId || null,
-          fallbackToAgent: false,
-        },
-        { debugOnly: true, debugEnabled: nativeCommandDebugEnabled },
-      );
-      await recordAndPatchBncrInboundSessionEntry({
-        storePath,
-        sessionKey,
-        ctx: ctxPayload,
-        patch: {
-          ...sessionIdentityPatch,
-          ...(nativeVerbose.verboseLevel ? { verboseLevel: nativeVerbose.verboseLevel } : {}),
-        },
-      });
-      rememberSessionRoute(baseSessionKey, accountId, route);
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: nativeVerbose.text,
-          replyToId: msgId || undefined,
-        },
-      });
-      return { handled: true, command: command.command, sessionKey };
-    }
-
-    const sceneAdmin = parseSceneAdminCommand(command);
-    if (sceneAdmin.matched) {
-      const directSelfAdminCommand =
-        parsed.peer.kind === 'direct' &&
-        new Set(['history-help', 'history-limit', 'history-force', 'download-media']).has(
-          command.command,
-        );
-      if (!effectiveIsAdmin && !directSelfAdminCommand) {
-        logBncrNativeCommandSummary(
-          buildBncrNativeCommandSummary({
-            kind: 'scene-admin',
-            command: command.command,
-            accountId,
-            to: displayTo,
-            msgId: msgId ?? null,
-            result: 'rejected',
-          }),
-        );
-        await recordAndPatchBncrInboundSessionEntry({
-          storePath,
-          sessionKey,
-          ctx: ctxPayload,
-          patch: sessionIdentityPatch,
+      },
+      readSessionNode: async ({ agentId, sessionKey: targetSessionKey }) => {
+        if (!sessionNodeIndexByAgent.has(agentId)) {
+          let index: Map<string, BncrSessionNodeStatus> | null = null;
+          try {
+            // Read through the host SDK: it resolves the sqlite store itself,
+            // so the plugin never has to guess where sessions actually live.
+            // The configured store path is passed along so a custom
+            // `session.store` still resolves to its own sqlite target.
+            index =
+              buildBncrSessionNodeIndex(
+                listBncrSessionEntries({
+                  agentId,
+                  readOnly: true,
+                  storePath: resolveBncrInboundSessionStorePath({
+                    storeConfig: cfg?.session?.store,
+                    agentId,
+                  }),
+                }),
+              ) ?? null;
+          } catch {
+            index = null;
+          }
+          sessionNodeIndexByAgent.set(agentId, index);
+        }
+        const index = sessionNodeIndexByAgent.get(agentId);
+        if (!index) return undefined;
+        return index.get(targetSessionKey) ?? { exists: false, archivedAt: null, updatedAt: null };
+      },
+      deleteSession: async ({ agentId, sessionKey: targetSessionKey }) => {
+        const targetStorePath = resolveBncrInboundSessionStorePath({
+          storeConfig: cfg?.session?.store,
+          agentId,
         });
-        await enqueueFromReply({
-          accountId,
-          sessionKey,
-          route,
-          payload: {
-            text: 'Admin permission required.',
-            replyToId: msgId || undefined,
-          },
+        return deleteBncrSessionEntry({
+          storePath: targetStorePath,
+          sessionKey: targetSessionKey,
+          agentId,
+          archiveTranscript: true,
         });
-        return { handled: true, command: command.command, sessionKey };
-      }
-
-      if (!sceneAdmin.valid) {
-        logBncrNativeCommandSummary(
-          buildBncrNativeCommandSummary({
-            kind: 'scene-admin',
-            command: command.command,
-            accountId,
-            to: displayTo,
-            msgId: msgId ?? null,
-            result: 'rejected',
-          }),
-        );
-        await recordAndPatchBncrInboundSessionEntry({
-          storePath,
-          sessionKey,
-          ctx: ctxPayload,
-          patch: sessionIdentityPatch,
-        });
-        await enqueueFromReply({
-          accountId,
-          sessionKey,
-          route,
-          payload: {
-            text: sceneAdmin.text,
-            replyToId: msgId || undefined,
-          },
-        });
-        return { handled: true, command: command.command, sessionKey };
-      }
-
-      const outcome = executeSceneAdminCommand({
-        parsed,
-        command: sceneAdmin.command,
-        sceneRegistry,
-        defaultAdminAgentId,
-        defaultPublicAgentId,
-        now,
-        allowNonAdminSelfAdmin: !!directSelfAdminCommand,
-        agentId: resolveSceneAgentId(
-          sceneRegistry,
-          buildSceneKey(parsed),
-          resolvedAgentId || canonicalAgentId,
-        ),
-      });
-      logBncrNativeCommandSummary(
-        buildBncrNativeCommandSummary({
-          kind: 'scene-admin',
-          command: command.command,
-          accountId,
-          to: displayTo,
-          msgId: msgId ?? null,
-          result: outcome.ok ? 'handled' : 'rejected',
-        }),
-      );
-      await recordAndPatchBncrInboundSessionEntry({
-        storePath,
-        sessionKey,
-        ctx: ctxPayload,
-        patch: sessionIdentityPatch,
-      });
-      await enqueueFromReply({
-        accountId,
-        sessionKey,
-        route,
-        payload: {
-          text: outcome.text,
-          replyToId: msgId || undefined,
-        },
-      });
-      return { handled: true, command: command.command, sessionKey };
-    }
+      },
+      nativeCommandDebugEnabled,
+    });
+    if (localResult) return localResult;
   }
 
   await recordAndPatchBncrInboundSessionEntry({

@@ -234,6 +234,11 @@ export function createBncrInboundHandlersComponent(runtime: {
   }) => Promise<void>;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
+  purgeSceneSession?: (args: {
+    sceneKey: string;
+    agentId: string;
+    sessionKey: string | null;
+  }) => Promise<void> | void;
 }) {
   return createBncrInboundHandlers({
     channelId: runtime.channelId,
@@ -310,6 +315,7 @@ export function createBncrInboundHandlersComponent(runtime: {
         enqueueFromReply: runtime.enqueueFromReply,
         setInboundActivity: runtime.setInboundActivity,
         scheduleSave: runtime.scheduleSave,
+        purgeSceneSession: runtime.purgeSceneSession,
         logger: {
           warn: (msg: string) => emitBncrLogLine('warn', msg),
           error: (msg: string) => emitBncrLogLine('error', msg),

@@ -156,6 +156,11 @@ export function buildBncrInboundSurfaceRuntime(deps: {
   }) => Promise<void>;
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
+  purgeSceneSession?: (args: {
+    sceneKey: string;
+    agentId: string;
+    sessionKey: string | null;
+  }) => Promise<void> | void;
   buildCanonicalSessionKey: (route: BncrRoute) => string;
   fileRecvTransfers: Parameters<typeof createBncrFileInboundHandlers>[0]['fileRecvTransfers'];
   resolveInboundFileTransferMaxBytes: (accountId: string) => number;

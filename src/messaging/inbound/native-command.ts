@@ -1,3 +1,5 @@
+import { STALE_SCENES_FILTERS } from './command-constants.ts';
+
 export type NativeCommand = {
   command: string;
   raw: string;
@@ -127,12 +129,16 @@ export const BNCR_NATIVE_COMMANDS = new Set([
   'deny',
   'bind',
   'mode',
+  'name',
+  'group',
   'revoke',
   'list',
   'history-limit',
   'history-help',
   'history-force',
   'download-media',
+  'stale',
+  'prune',
 ]);
 
 export const BNCR_DIRECT_ALLOWED_BARE_COMMANDS = new Set(['whoami', 'status', 'new', 'reset']);
@@ -143,6 +149,8 @@ export const BNCR_DIRECT_ALLOWED_SUBCOMMANDS = new Set([
   'status',
   'new',
   'reset',
+  'name',
+  'group',
 ]);
 
 export function parseBncrNativeCommand(
@@ -224,18 +232,31 @@ const BNCR_HELP_SECTIONS = [
     ],
   },
   {
+    title: '🏷 Session identity',
+    audience: 'all',
+    commands: [
+      { label: '/bncr name [<agentId>] [<SceneId>]', scopes: ['admin', 'direct'] },
+      { label: '/bncr name set <text> [<agentId>] [<SceneId>]', scopes: ['admin', 'direct'] },
+      { label: '/bncr name clear [<agentId>] [<SceneId>]', scopes: ['admin', 'direct'] },
+      { label: '/bncr group [<agentId>] [<SceneId>]', scopes: ['admin', 'direct'] },
+      { label: '/bncr group set <name> [<agentId>] [<SceneId>]', scopes: ['admin', 'direct'] },
+      { label: '/bncr group clear [<agentId>] [<SceneId>]', scopes: ['admin', 'direct'] },
+      { label: '/bncr name help | /bncr group help', scopes: ['admin', 'direct'] },
+    ],
+  },
+  {
     title: '🛡 Scene approval',
     audience: 'admin',
     commands: [
-      { label: '/bncr allow [<SceneId>]', scopes: ['admin'] },
-      { label: '/bncr deny [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr allow [<agentId>] [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr deny [<agentId>] [<SceneId>]', scopes: ['admin'] },
       { label: '/bncr bind <agentId> [<SceneId>]', scopes: ['admin'] },
       { label: '/bncr mode help', scopes: ['admin'] },
       {
-        label: '/bncr mode <admin|mention|hybrid|all|clear> [<SceneId>]',
+        label: '/bncr mode <admin|mention|hybrid|all|clear> [<agentId>] [<SceneId>]',
         scopes: ['admin'],
       },
-      { label: '/bncr revoke [<SceneId>]', scopes: ['admin'] },
+      { label: '/bncr revoke [<agentId>] [<SceneId>]', scopes: ['admin'] },
       { label: '/bncr list pending [filters...]', scopes: ['admin'] },
       { label: '/bncr list scenes [filters...]', scopes: ['admin'] },
     ],
@@ -245,8 +266,14 @@ const BNCR_HELP_SECTIONS = [
     audience: 'all',
     commands: [
       { label: '/bncr history-help', scopes: ['admin', 'direct'] },
-      { label: '/bncr history-limit [<number>|clear] [<SceneId>]', scopes: ['admin', 'direct'] },
-      { label: '/bncr history-force on|off|clear [<SceneId>]', scopes: ['admin', 'direct'] },
+      {
+        label: '/bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]',
+        scopes: ['admin', 'direct'],
+      },
+      {
+        label: '/bncr history-force on|off|clear [<agentId>] [<SceneId>]',
+        scopes: ['admin', 'direct'],
+      },
     ],
   },
   {
@@ -254,9 +281,18 @@ const BNCR_HELP_SECTIONS = [
     audience: 'all',
     commands: [
       {
-        label: '/bncr download-media on|off|clear|default on|off [<SceneId>]',
+        label: '/bncr download-media on|off|clear|default on|off [<agentId>] [<SceneId>]',
         scopes: ['admin', 'direct'],
       },
+    ],
+  },
+  {
+    title: '🧹 Maintenance',
+    audience: 'admin',
+    commands: [
+      { label: '/bncr stale [' + STALE_SCENES_FILTERS.join('|') + ']', scopes: ['admin'] },
+      { label: '/bncr prune <SceneId> [<agentId>] [force]', scopes: ['admin'] },
+      { label: '/bncr stale help', scopes: ['admin'] },
     ],
   },
 ];

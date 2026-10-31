@@ -1,4 +1,7 @@
+import { emitBncrLogLine } from '../core/logging.ts';
 import type { BncrChannelConfigRoot } from '../plugin/channel-runtime-types.ts';
+
+let warnedConfigFallback = false;
 
 type RuntimeConfigApi = {
   current?: () => BncrChannelConfigRoot;
@@ -38,7 +41,16 @@ export function getOpenClawRuntimeConfigOrDefault<T>(
 ): BncrChannelConfigRoot | T {
   try {
     return getOpenClawRuntimeConfig(api);
-  } catch {
+  } catch (error) {
+    // Falling back silently would look like "the setting did not apply", so say
+    // it once: everything below this point uses built-in defaults.
+    if (!warnedConfigFallback) {
+      warnedConfigFallback = true;
+      emitBncrLogLine(
+        'warn',
+        `[bncr] runtime config unavailable; using built-in defaults|err=${String(error)}`,
+      );
+    }
     return fallback;
   }
 }

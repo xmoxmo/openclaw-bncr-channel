@@ -114,6 +114,11 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
   enqueueFromReply: Parameters<typeof createBncrInboundHandlersComponent>[0]['enqueueFromReply'];
   setInboundActivity: (accountId: string, at: number) => void;
   scheduleSave: () => void;
+  purgeSceneSession?: (args: {
+    sceneKey: string;
+    agentId: string;
+    sessionKey: string | null;
+  }) => Promise<void> | void;
   fileRecvTransfers: Parameters<
     typeof createBncrFileInboundHandlersComponent
   >[0]['fileRecvTransfers'];
@@ -169,6 +174,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     enqueueFromReply: runtime.enqueueFromReply,
     setInboundActivity: runtime.setInboundActivity,
     scheduleSave: runtime.scheduleSave,
+    purgeSceneSession: runtime.purgeSceneSession,
   });
 
   return {

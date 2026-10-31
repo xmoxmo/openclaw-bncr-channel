@@ -144,7 +144,7 @@ test('status worker delays non-debug health summary until stable window passes',
 test('status worker publishes ready on connect and stopped on stop', async () => {
   const workers = new Map();
   let status = {};
-  let online = true;
+  const online = true;
   const runtime = {
     workers,
     bridgeId: 'bridge-lifecycle',

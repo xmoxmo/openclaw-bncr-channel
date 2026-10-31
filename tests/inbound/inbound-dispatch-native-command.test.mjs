@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import { dispatchBncrInbound } from '../../src/messaging/inbound/dispatch.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
+import { setBncrSessionResetRuntimeForTest } from '../../src/openclaw/session-reset-runtime.ts';
 import { resolveSceneRecord, setSceneRecord } from '../../src/plugin/scene-registry.ts';
 import { withConsoleCapture } from '../helpers/console-capture.mjs';
 import { buildParsedInboundText, createInboundApiStub } from '../helpers/inbound-runtime.mjs';
@@ -51,7 +52,7 @@ test('slash verbose command is handled natively and preserves bncr session ident
   const entry = stored['agent:orion:bncr:group:7467426f743a2d31303031'];
   assert.ok(entry);
   assert.equal(entry.verboseLevel, 'on');
-  assert.equal(entry.label, 'Bncr:tgBot:Group:-1001');
+  assert.equal(entry.label, 'tgBot · -1001');
   assert.equal(entry.channel, 'bncr');
   assert.equal(entry.chatType, 'group');
   assert.equal(entry.origin.to, 'Bncr:tgBot:-1001:0');
@@ -534,6 +535,52 @@ test('bare reset command is handled via elevated native session reset for non-ad
   assert.equal(enqueueCalls[0].sessionKey, 'agent:orion:bncr:direct:7467426f743a3130303031');
   assert.equal(enqueueCalls[0].payload.text, '✅ Session reset.');
   assert.equal(enqueueCalls[0].payload.replyToId, 'bare-reset-user');
+});
+
+test('a failed session reset keeps host paths out of the chat', async () => {
+  const { api } = createInboundApiStub();
+  const restore = setBncrSessionResetRuntimeForTest(async () => {
+    throw new Error('OpenClaw dist directory not found: /usr/lib/node_modules/openclaw/dist');
+  });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'bncr-client-long-id',
+    bridgeId: 'bncr-client-long-id',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr reset',
+    mimeType: 'text/plain',
+    msgId: 'reset-failure-privacy',
+  });
+  const enqueueCalls = [];
+  try {
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'orion',
+      rememberSessionRoute() {},
+      enqueueFromReply: async (args) => {
+        enqueueCalls.push(args);
+      },
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+  } finally {
+    restore();
+  }
+
+  assert.equal(
+    enqueueCalls[0].payload.text,
+    'Session reset failed. Check the server log for details.',
+  );
+  assert.equal(/\/(usr|root|home)\//.test(enqueueCalls[0].payload.text), false);
 });
 
 test('bare new with extra arguments does not invoke session reset', async () => {
@@ -1252,7 +1299,64 @@ test('scene admin mode command queries current group reply mode in group chat', 
     scheduleSave() {},
   });
 
-  assert.equal(enqueueCalls[0].payload.text, 'Current tgBot:-1001 reply mode is mention.');
+  assert.equal(enqueueCalls[0].payload.text, 'Mode tgBot:-1001 is mention.');
+});
+
+test('bncr name set rewrites the current group session label end to end', async () => {
+  const { api, storePath } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr name set 项目群',
+    mimeType: 'text/plain',
+    msgId: 'slash-name-set',
+  });
+  const enqueueCalls = [];
+  const sceneRegistry = new Map();
+  // Admission runs before dispatch in the real channel path; seed the row it
+  // would have created so the command has a scene to rewrite.
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupName: '无界社区',
+    agentId: 'main',
+    groupReplyMode: 'admin',
+    lastSeenAt: 1,
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 5,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(enqueueCalls[0].payload.text, 'Name set: tgBot · 项目群 (custom)');
+  const stored = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+  const entries = Object.values(stored);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].label, 'tgBot · 项目群');
+  assert.equal(entries[0].displayName, 'tgBot · 项目群');
+  assert.equal(entries[0].deliveryContext.to, 'Bncr:tgBot:-1001:0');
 });
 
 test('scene admin mode query rejects direct chats', async () => {
@@ -1716,6 +1820,7 @@ test('scene admin list scenes sorts multiple group chat sections by title after 
     platform: 'tgBot',
     userId: '10001',
     userName: 'xmo',
+    approvedAt: 3,
     lastSeenAt: 3,
   });
   setSceneRecord(sceneRegistry, {
@@ -3491,4 +3596,109 @@ test('non-admin group bare /whoami maps to bncr identity (whitelist mapped to /b
   assert.match(enqueueCalls[0].payload.text, /Admin: false/);
   assert.match(enqueueCalls[0].payload.text, /Group: testgroup/);
   assert.equal(enqueueCalls[0].payload.replyToId, 'group-bare-whoami');
+});
+
+test('admin /bncr stale answers from the live scene registry', async () => {
+  const { api } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr stale',
+    mimeType: 'text/plain',
+    msgId: 'slash-stale-1',
+  });
+  const enqueueCalls = [];
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry: new Map(),
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  assert.equal(enqueueCalls.length, 1);
+  assert.match(enqueueCalls[0].payload.text, /No scene rows yet: nothing to clean up\./);
+  assert.equal(enqueueCalls[0].payload.replyToId, 'slash-stale-1');
+});
+
+test('non-admin /bncr stale is refused without a turn', async () => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-2',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '20002',
+    isGroup: true,
+    isAdmin: false,
+    type: 'text',
+    msg: '/bncr stale',
+    mimeType: 'text/plain',
+    msgId: 'slash-stale-2',
+  });
+  const enqueueCalls = [];
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    sceneRegistry: new Map(),
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Admin permission required.');
+});
+
+test('admin /bncr prune reports an unknown scene instead of deleting', async () => {
+  const { api } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-3',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr prune tgBot:-1001',
+    mimeType: 'text/plain',
+    msgId: 'slash-prune-1',
+  });
+  const enqueueCalls = [];
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'main',
+    sceneRegistry: new Map(),
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  assert.equal(enqueueCalls.length, 1);
+  assert.match(enqueueCalls[0].payload.text, /Scene not found: tgBot:-1001/);
 });
