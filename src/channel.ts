@@ -10,6 +10,7 @@ import {
   normalizeAccountId,
   resolveAccount,
 } from './core/accounts.ts';
+import { HOST_DEFAULT_AGENT_ID, resolvePublicFallbackAgent } from './core/agent-surface.ts';
 import {
   countInvalidOutboxSessionKeys as countInvalidOutboxSessionKeysFromRuntime,
   countLegacyAccountResidue as countLegacyAccountResidueFromRuntime,
@@ -317,13 +318,18 @@ class BncrBridgeRuntime {
   getSceneRegistry(): Map<string, BncrSceneRecord> {
     return this.sceneRegistry;
   }
-  resolveOutboundAgentId(route: BncrRoute): string {
-    return (
-      asString(
-        resolveSceneRecord(this.sceneRegistry, buildRouteSceneKey(route), this.canonicalAgentId)
-          ?.agentId,
-      ).trim() || this.defaultPublicAgentId()
-    );
+  resolveOutboundAgentId(route: BncrRoute, cfg?: BncrChannelConfigRoot): string {
+    const assigned = asString(
+      resolveSceneRecord(this.sceneRegistry, buildRouteSceneKey(route), this.canonicalAgentId)
+        ?.agentId,
+    ).trim();
+    if (assigned) return assigned;
+    // No row owns this route yet: hand it to public when the host serves that
+    // agent, otherwise keep the conversation on the agent already serving it.
+    // Callers that already hold the runtime config pass it in; the read below is
+    // only for callers that do not.
+    const runtimeCfg = cfg ?? getOpenClawRuntimeConfig(this.api as OpenClawChannelRuntimeApiHolder);
+    return this.defaultPublicAgentId({ cfg: runtimeCfg, fallbackAgentId: this.servingAgentId() });
   }
   private conversationHistories: BncrConversationHistoryMap = new Map();
   private conversationHistoryVersions = new Map<string, number>();
@@ -1092,8 +1098,20 @@ class BncrBridgeRuntime {
     return this.ensureCanonicalAgentId(args);
   }
 
-  private defaultPublicAgentId(): string {
-    return 'public';
+  private defaultPublicAgentId(args: {
+    cfg: BncrChannelConfigRoot;
+    fallbackAgentId: string;
+  }): string {
+    return resolvePublicFallbackAgent(args.cfg, args.fallbackAgentId);
+  }
+
+  /**
+   * The agent already serving this channel. Canonical resolution guarantees a
+   * non-empty id; the host default is the documented last resort for the window
+   * before that resolution runs.
+   */
+  private servingAgentId(): string {
+    return this.canonicalAgentId || HOST_DEFAULT_AGENT_ID;
   }
 
   private countInvalidOutboxSessionKeys(accountId: string): number {
@@ -1714,6 +1732,13 @@ class BncrBridgeRuntime {
         payload: ReturnType<typeof buildInboundResponsePayload>;
       }
   > {
+    const cfg = getOpenClawRuntimeConfig(this.api as OpenClawChannelRuntimeApiHolder);
+    const defaultAdminAgentId = this.defaultAdminAgentId({
+      cfg,
+      accountId: args.parsed.accountId,
+      peer: args.parsed.peer,
+      channelId: CHANNEL_ID,
+    });
     return await prepareBncrInboundAcceptance({
       api: this.api,
       parsed: args.parsed,
@@ -1726,13 +1751,11 @@ class BncrBridgeRuntime {
       buildInboundResponsePayload,
       markInboundDedupSeen: (key) => this.markInboundDedupSeen(key),
       sceneRegistry: this.sceneRegistry,
-      defaultAdminAgentId: this.defaultAdminAgentId({
-        cfg: getOpenClawRuntimeConfig(this.api as OpenClawChannelRuntimeApiHolder),
-        accountId: args.parsed.accountId,
-        peer: args.parsed.peer,
-        channelId: CHANNEL_ID,
+      defaultAdminAgentId,
+      defaultPublicAgentId: this.defaultPublicAgentId({
+        cfg,
+        fallbackAgentId: defaultAdminAgentId,
       }),
-      defaultPublicAgentId: this.defaultPublicAgentId(),
     });
   }
 
@@ -2360,6 +2383,7 @@ class BncrBridgeRuntime {
     scheduleSave: () => this.scheduleSave(),
     flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
     logInfo: (scope, message, options) => this.logInfo(scope, message, options),
+    logError: (scope, message, options) => this.logError(scope, message, options),
     logOutboundSummary: (entry) => this.logOutboundSummary(entry),
     logDeadLetterSummary: (accountId, options) => this.logDeadLetterSummary(accountId, options),
     resolveMessageAck: (messageId, result) =>
@@ -3040,7 +3064,7 @@ class BncrBridgeRuntime {
 
   private flushConversationHistoryFromOutbound(entry: OutboxEntry, historyVersion?: number) {
     const cfg = getOpenClawRuntimeConfig(this.api);
-    const canonicalAgentId = this.canonicalAgentId || 'main';
+    const canonicalAgentId = this.servingAgentId();
     void dispatchBncrOutboundHistoryFlush({
       api: this.api,
       channelId: CHANNEL_ID,
@@ -3054,7 +3078,7 @@ class BncrBridgeRuntime {
       outboundReplayCache: this.outboundReplayCache,
       historyShardQueue: this.stateStore.historyShardQueue,
       defaultAdminAgentId: canonicalAgentId,
-      defaultPublicAgentId: this.defaultPublicAgentId(),
+      defaultPublicAgentId: this.defaultPublicAgentId({ cfg, fallbackAgentId: canonicalAgentId }),
       now,
       rememberSessionRoute: (sessionKey, accountId, route) =>
         this.rememberSessionRoute(sessionKey, accountId, route),
@@ -3197,7 +3221,7 @@ class BncrBridgeRuntime {
       ...inboundActivityRuntime,
       ensureCanonicalAgentId: (args) => this.ensureCanonicalAgentId(args),
       defaultAdminAgentId: (args) => this.defaultAdminAgentId(args),
-      defaultPublicAgentId: () => this.defaultPublicAgentId(),
+      defaultPublicAgentId: (args) => this.defaultPublicAgentId(args),
       sceneRegistry: this.sceneRegistry,
       conversationHistories: this.conversationHistories,
       conversationHistoryVersions: this.conversationHistoryVersions,
@@ -3213,7 +3237,7 @@ class BncrBridgeRuntime {
       scheduleSave: () => this.scheduleSave(),
       purgeSceneSession: (args) => this.purgeSceneSessionState(args),
       buildCanonicalSessionKey: (route: BncrRoute) =>
-        buildCanonicalBncrSessionKey(route, this.canonicalAgentId || 'main'),
+        buildCanonicalBncrSessionKey(route, this.servingAgentId()),
       fileRecvTransfers: this.fileRecvTransfers,
       resolveInboundFileTransferMaxBytes: (accountId: string) =>
         resolveBncrMediaMaxBytes(this.api, accountId),

@@ -1607,3 +1607,99 @@ test('bind refuses to overwrite an agent that already holds the scene', () => {
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'public')?.historyLimit, 80);
   assert.equal([...sceneRegistry.values()].length, 2);
 });
+
+const seedBindableScene = () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: 'main',
+    historyLimit: 20,
+    approvedAt: 1,
+    lastSeenAt: 1,
+  });
+  return sceneRegistry;
+};
+
+test('bind refuses an agent the host does not declare', () => {
+  const sceneRegistry = seedBindableScene();
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot', groupId: '-1001' },
+    command: { kind: 'bind', sceneKey: 'tgBot:-1001', agentId: 'ghost' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    configuredAgentIds: new Set(['main', 'public']),
+    now: () => 9,
+    agentId: 'main',
+  });
+
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.text, /Agent ghost is not configured on this host/);
+  assert.match(outcome.text, /openclaw agents add ghost/);
+  assert.match(outcome.text, /Configured agents: main, public[.]/);
+  assert.equal([...sceneRegistry.values()].length, 1);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'main')?.agentId, 'main');
+});
+
+test('bind writes the row when the agent is declared in config', () => {
+  const sceneRegistry = seedBindableScene();
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot', groupId: '-1001' },
+    command: { kind: 'bind', sceneKey: 'tgBot:-1001', agentId: 'public' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    configuredAgentIds: new Set(['main', 'public']),
+    now: () => 9,
+    agentId: 'main',
+  });
+
+  assert.deepEqual(outcome, { ok: true, text: 'Bound tgBot:-1001 to agent public.' });
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'public')?.agentId, 'public');
+});
+
+test('bind keeps its old behaviour when the agent list cannot be read', () => {
+  const sceneRegistry = seedBindableScene();
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot', groupId: '-1001' },
+    command: { kind: 'bind', sceneKey: 'tgBot:-1001', agentId: 'orion' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    configuredAgentIds: new Set(),
+    now: () => 9,
+    agentId: 'main',
+  });
+
+  assert.deepEqual(outcome, { ok: true, text: 'Bound tgBot:-1001 to agent orion.' });
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:-1001', 'orion')?.agentId, 'orion');
+});
+
+test('scene list labels unowned rows with the resolved fallback agent', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    lastSeenAt: 5,
+  });
+
+  const outcome = executeSceneAdminCommand({
+    parsed: { isAdmin: true, platform: 'tgBot' },
+    command: { kind: 'list', scope: 'all' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'orion',
+    now: () => 9,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.match(outcome.text, /📱 Private Chat orion/);
+  assert.doesNotMatch(outcome.text, /Private Chat public/);
+});

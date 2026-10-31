@@ -7,7 +7,7 @@ export const TEST_ROUTE = { platform: 'tgBot', groupId: '-1001', userId: '10001'
 export function createApiStub(logs = null) {
   const options = logs && typeof logs === 'object' && !Array.isArray(logs) ? logs : {};
   const sink = Array.isArray(logs) ? logs : options.logs || null;
-  const currentConfig = {};
+  const currentConfig = options.config || {};
   return {
     logger: {
       info(scope, message) {
@@ -42,7 +42,10 @@ export function createApiStub(logs = null) {
 }
 
 export function createBridge(logs = null, options = {}) {
-  return createBncrBridge(createApiStub(Array.isArray(logs) ? { ...options, logs } : logs));
+  const stubOptions = Array.isArray(logs)
+    ? { ...options, logs }
+    : { ...(logs && typeof logs === 'object' ? logs : {}), ...options };
+  return createBncrBridge(createApiStub(stubOptions));
 }
 
 export function makeEntry(messageId, text = messageId, overrides = {}) {

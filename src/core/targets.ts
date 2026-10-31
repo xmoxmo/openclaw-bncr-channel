@@ -1,3 +1,4 @@
+import { HOST_DEFAULT_AGENT_ID } from './agent-surface.ts';
 import type { BncrRoute } from './types.ts';
 import { asString } from './value-sanitize.ts';
 
@@ -317,7 +318,7 @@ export function parseRouteFromDisplayScope(scope: string): BncrRoute | null {
 }
 
 export function buildCanonicalBncrSessionKey(route: BncrRoute, canonicalAgentId: string): string {
-  const agentId = asString(canonicalAgentId).trim() || 'main';
+  const agentId = asString(canonicalAgentId).trim() || HOST_DEFAULT_AGENT_ID;
   if (route.groupId !== '0') {
     return `agent:${agentId}:bncr:group:${groupScopeToHex(route)}`;
   }

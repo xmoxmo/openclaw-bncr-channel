@@ -57,6 +57,11 @@ export function createBncrBridgeOutboxFacade(runtime: {
     reason?: string;
   }) => void;
   logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) => void;
+  logError?: (
+    scope: string | undefined,
+    message: string,
+    options?: { debugOnly?: boolean },
+  ) => void;
   logOutboundSummary: (entry: OutboxEntry) => void;
   logDeadLetterSummary: (accountId: string, options?: { force?: boolean; source?: string }) => void;
   resolveMessageAck: (messageId: string, result?: 'acked' | 'timeout') => boolean;
@@ -85,7 +90,16 @@ export function createBncrBridgeOutboxFacade(runtime: {
       status,
     });
     if (replayResult.historyOverflow && runtime.resolveOutboundHistoryForce?.(entry) !== false) {
-      runtime.onConversationHistoryOverflow?.(entry, replayResult.historyVersion);
+      try {
+        runtime.onConversationHistoryOverflow?.(entry, replayResult.historyVersion);
+      } catch (error) {
+        // A history flush failure must not turn a delivered message into a
+        // failed ack; report it and let the next overflow retry.
+        runtime.logError?.(
+          'outbound',
+          `history overflow flush failed: ${getErrorMessage(error, 'unknown error')}`,
+        );
+      }
     }
   };
 

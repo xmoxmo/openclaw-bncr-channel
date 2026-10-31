@@ -15,7 +15,7 @@ function formatBncrHumanDisplay(route: BncrRoute): string {
 }
 
 type BncrMessagingRuntimeBridge = {
-  resolveOutboundAgentId: (route: BncrRoute) => string;
+  resolveOutboundAgentId: (route: BncrRoute, cfg?: BncrChannelConfigRoot) => string;
   resolveRouteBySession: (raw: string, accountId: string) => BncrRoute | null;
 };
 
@@ -141,7 +141,9 @@ export function createBncrMessagingOutboundSessionRouteResolver(
         params.threadId === null || params.threadId === undefined
           ? undefined
           : asSanitizedString(params.threadId),
-      resolveAgentId: (route) => runtimeBridge.resolveOutboundAgentId(route),
+      // The host hands us the config it used to build this route; pass it on so
+      // owner resolution does not need a second read of its own.
+      resolveAgentId: (route) => runtimeBridge.resolveOutboundAgentId(route, params.cfg),
       resolveRouteBySession: (raw: string, acc: string) =>
         runtimeBridge.resolveRouteBySession(raw, acc),
     });

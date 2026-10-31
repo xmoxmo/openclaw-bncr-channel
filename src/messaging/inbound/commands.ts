@@ -1,4 +1,5 @@
 import { hasControlCommand } from 'openclaw/plugin-sdk/command-detection';
+import { listConfiguredAgentIds } from '../../core/agent-surface.ts';
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import { formatDisplayScope } from '../../core/targets.ts';
@@ -379,6 +380,9 @@ export async function handleBncrNativeCommand(params: {
       .map((row) => String(row.agentId ?? '').trim())
       .filter(Boolean),
   );
+  // Host-declared agents: binding a scene to an id this OpenClaw does not serve
+  // would write a row no one picks up, so the bind command checks against this.
+  const configuredAgentIds = new Set(listConfiguredAgentIds(cfg));
   const sceneAgentId = resolveSceneAgentId(
     sceneRegistry,
     buildSceneKey(parsed),
@@ -405,6 +409,7 @@ export async function handleBncrNativeCommand(params: {
       buildSessionIdentityPatch,
       currentVerboseLevel,
       knownAgentIds,
+      configuredAgentIds,
       sceneRegistry,
       routeAgentId: resolvedRoute.agentId || canonicalAgentId,
       sceneAgentId,

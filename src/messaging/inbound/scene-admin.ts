@@ -417,8 +417,10 @@ function formatSceneEntry(scene: BncrSceneRecord): string {
   return [`  SceneId: ${scene.sceneKey}`, formatSceneDetailsLine(scene)].join('\n');
 }
 
-function buildSceneGroupTitle(scene: BncrSceneRecord): string {
-  const agentId = normalizeToken(scene.agentId || '') || 'public';
+function buildSceneGroupTitle(scene: BncrSceneRecord, unassignedAgentId: string): string {
+  // A pending row has no owner yet. Show the agent that will claim it at
+  // approval time instead of a hard-coded name the host may not serve.
+  const agentId = normalizeToken(scene.agentId || '') || unassignedAgentId;
   if (scene.kind === 'group') {
     const mode = normalizeToken(scene.groupReplyMode || '') || 'admin';
     return `👥 Group Chat ${agentId} ${mode}`;
@@ -426,11 +428,11 @@ function buildSceneGroupTitle(scene: BncrSceneRecord): string {
   return `📱 Private Chat ${agentId}`;
 }
 
-function formatSceneGroups(scenes: BncrSceneRecord[]): string {
+function formatSceneGroups(scenes: BncrSceneRecord[], unassignedAgentId: string): string {
   const directGrouped = new Map<string, string[]>();
   const groupGrouped = new Map<string, string[]>();
   for (const scene of scenes) {
-    const title = buildSceneGroupTitle(scene);
+    const title = buildSceneGroupTitle(scene, unassignedAgentId);
     const target = scene.kind === 'group' ? groupGrouped : directGrouped;
     const current = target.get(title) || [];
     current.push(formatSceneEntry(scene));
@@ -487,6 +489,11 @@ export function executeSceneAdminCommand(args: {
   sceneRegistry: Map<string, BncrSceneRecord>;
   defaultAdminAgentId: string;
   defaultPublicAgentId: string;
+  /**
+   * Agent ids this host declares in config. Empty means the list could not be
+   * read, in which case the bind command must not pretend to verify anything.
+   */
+  configuredAgentIds?: ReadonlySet<string>;
   now: () => number;
   /**
    * When true, non-admin callers in direct chat are allowed to execute
@@ -577,7 +584,7 @@ export function executeSceneAdminCommand(args: {
               : 'No scenes recorded.',
       };
     }
-    return { ok: true, text: formatSceneGroups(scenes) };
+    return { ok: true, text: formatSceneGroups(scenes, defaultPublicAgentId) };
   }
 
   if (command.kind === 'mode-help') {
@@ -920,6 +927,18 @@ export function executeSceneAdminCommand(args: {
   }
 
   if (command.kind === 'bind') {
+    const wantedAgent = normalizeToken(command.agentId);
+    const configured = args.configuredAgentIds;
+    if (configured && configured.size > 0 && !configured.has(wantedAgent)) {
+      const known = Array.from(configured).sort().join(', ');
+      return {
+        ok: false,
+        text:
+          `Agent ${wantedAgent} is not configured on this host. ` +
+          `Add it first: openclaw agents add ${wantedAgent} --workspace <dir> --bind bncr. ` +
+          `Configured agents: ${known}.`,
+      };
+    }
     // Rebinding rewrites the row's owner, so landing on an agent that already
     // holds this scene would overwrite its settings without a trace. Refuse and
     // ask for the revoke first.

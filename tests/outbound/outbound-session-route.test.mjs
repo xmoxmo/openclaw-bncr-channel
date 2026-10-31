@@ -146,3 +146,15 @@ test('resolveBncrOutboundSessionRoute preserves thread route ref when threadId i
     chatType: 'direct',
   });
 });
+
+test('resolveBncrOutboundSessionRoute returns null when no agent can be resolved', () => {
+  const resolved = resolveBncrOutboundSessionRoute({
+    cfg,
+    channel,
+    resolveAgentId: () => '',
+    accountId: 'Primary',
+    target: 'Bncr:tgBot:0:10001',
+  });
+
+  assert.equal(resolved, null);
+});

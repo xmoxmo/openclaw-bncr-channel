@@ -253,3 +253,67 @@ test('bridge outbox facade does not trigger history flush when auto flush is off
   assert.deepEqual(overflows, []);
   assert.equal(conversationHistories.get('Primary:tgBot:10001')?.length, 3);
 });
+
+test('bridge outbox facade keeps ack when history overflow flush throws', () => {
+  const outbox = new Map();
+  let deadLetter = [];
+  const errors = [];
+  const lastOutboundByAccount = new Map();
+  const outboundReplayCache = new Map();
+  const conversationHistories = new Map();
+  const conversationHistoryVersions = new Map();
+
+  const facade = createBncrBridgeOutboxFacade({
+    bridgeId: 'bridge-1',
+    normalizeAccountId: (accountId) => String(accountId || '').trim(),
+    asString: (value, fallback = '') =>
+      typeof value === 'string' ? value : value == null ? fallback : String(value),
+    now: () => 10,
+    backoffMs: () => 100,
+    maxRetry: 1,
+    maxDeadLetterEntries: 5,
+    outbox,
+    getDeadLetter: () => deadLetter,
+    setDeadLetter: (entries) => {
+      deadLetter = entries;
+    },
+    incrementCounter: (map, accountId) => map.set(accountId, (map.get(accountId) || 0) + 1),
+    outboundEnqueueCountByAccount: new Map(),
+    lastOutboundEnqueueAtByAccount: new Map(),
+    prePushGuardSkipCountByAccount: new Map(),
+    lastPrePushGuardSkipAtByAccount: new Map(),
+    lastPrePushGuardSkipReasonByAccount: new Map(),
+    deadLetterSinceStartByAccount: new Map(),
+    lastOutboundByAccount,
+    outboundReplayCache,
+    conversationHistories,
+    conversationHistoryVersions,
+    resolveOutboundHistoryLimit: () => 2,
+    resolveOutboundHistoryForce: () => true,
+    onConversationHistoryOverflow: () => {
+      throw new Error('session store unavailable');
+    },
+    isOutboundAckRequired: () => true,
+    scheduleSave() {},
+    flushPushQueueBestEffort() {},
+    logInfo() {},
+    logError: (scope, message) => errors.push([scope, message]),
+    logOutboundSummary() {},
+    logDeadLetterSummary() {},
+    resolveMessageAck: () => true,
+    markActivity: (accountId, at) => lastOutboundByAccount.set(`${accountId}:activity`, at),
+  });
+
+  assert.doesNotThrow(() => {
+    for (let index = 1; index <= 2; index += 1) {
+      facade.markRecentOutboundAcked(makeEntry(`out-throw-${index}`));
+    }
+  });
+  assert.equal(
+    errors.some(
+      ([scope, message]) =>
+        scope === 'outbound' && message.includes('history overflow flush failed'),
+    ),
+    true,
+  );
+});

@@ -75,7 +75,11 @@ export function resolveBncrOutboundSessionRoute(params: ResolveBncrOutboundSessi
 
   if (!route) return null;
 
-  const agentId = asString(params.resolveAgentId(route)).trim() || 'public';
+  // No agent resolved means this route cannot be attributed to a session we
+  // own. Guessing a name here would build a session key the host may not serve,
+  // so fall through to the caller's normal routing instead.
+  const agentId = asString(params.resolveAgentId(route)).trim();
+  if (!agentId) return null;
   const peerId = routeScopeToHex(route);
   const sessionKey = buildCanonicalBncrSessionKey(route, agentId);
   const displayTo = formatDisplayScope(route);

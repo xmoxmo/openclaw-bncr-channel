@@ -1,3 +1,4 @@
+import { HOST_DEFAULT_AGENT_ID } from '../core/agent-surface.ts';
 import { asSanitizedString } from '../core/value-sanitize.ts';
 import type { BncrChannelConfigRoot } from './channel-runtime-types.ts';
 
@@ -113,15 +114,14 @@ export function createBridgeSupportRuntime(args: {
       return agentId;
     }
 
-    args.writeCachedCanonicalAgentId('main');
+    args.writeCachedCanonicalAgentId(HOST_DEFAULT_AGENT_ID);
+    // Same family as the missing-public warning: a silent fallback leaves the
+    // operator wondering which agent is answering, so this one is visible.
     args.logWarn(
       'target',
-      'binding agent unresolved; fallback to main for current process lifetime',
-      {
-        debugOnly: true,
-      },
+      `no binding matched channel ${args.channelId}; running as ${HOST_DEFAULT_AGENT_ID} until restart`,
     );
-    return 'main';
+    return HOST_DEFAULT_AGENT_ID;
   };
 
   return {

@@ -64,3 +64,25 @@ test('plugin messaging resolveOutboundSessionRoute uses persisted owner instead 
     `agent:public:bncr:group:${Buffer.from('tgBot:-5384397128', 'utf8').toString('hex')}`,
   );
 });
+
+test('plugin messaging resolveOutboundSessionRoute forwards host cfg to agent resolver', () => {
+  const seen = [];
+  const resolve = createBncrMessagingOutboundSessionRouteResolver(() => ({
+    resolveOutboundAgentId: (route, cfg) => {
+      seen.push({ route, cfg });
+      return 'public';
+    },
+    resolveRouteBySession: () => null,
+  }));
+  const cfg = { channels: { bncr: { accounts: { Primary: { enabled: true } } } } };
+  const result = resolve({
+    cfg,
+    agentId: 'orion',
+    accountId: 'Primary',
+    target: 'Bncr:tgBot:0:10001',
+  });
+
+  assert.ok(result);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].cfg, cfg);
+});

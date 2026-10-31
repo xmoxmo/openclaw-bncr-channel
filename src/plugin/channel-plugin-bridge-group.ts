@@ -34,7 +34,7 @@ export type BncrChannelPluginBridge = {
     channelId: string;
     peer: { kind: 'direct'; id: string };
   }) => string;
-  resolveOutboundAgentId: (route: BncrRoute) => string;
+  resolveOutboundAgentId: (route: BncrRoute, cfg?: BncrChannelConfigRoot) => string;
   resolveRouteBySession: (raw: string, accountId: string) => BncrRoute | null;
   getChannelSummary: (defaultAccountId: string) => Record<string, unknown>;
   getAccountRuntimeSnapshot: (accountId: string) => BncrStatusRuntimeSnapshot;
@@ -91,7 +91,8 @@ export function createBncrChannelPluginBridgeGroup(runtime: {
   const getMessagingBridge = () => {
     const bridge = runtime.getBridge();
     return {
-      resolveOutboundAgentId: (route: BncrRoute) => bridge.resolveOutboundAgentId(route),
+      resolveOutboundAgentId: (route: BncrRoute, cfg?: BncrChannelConfigRoot) =>
+        bridge.resolveOutboundAgentId(route, cfg),
       resolveRouteBySession: (raw: string, accountId: string) =>
         bridge.resolveRouteBySession(raw, accountId),
     };

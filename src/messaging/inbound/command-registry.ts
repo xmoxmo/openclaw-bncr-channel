@@ -1,3 +1,4 @@
+import { describeMissingPublicAgentFromIds } from '../../core/agent-surface.ts';
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { performBncrGatewaySessionReset } from '../../openclaw/session-reset-runtime.ts';
 import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
@@ -63,6 +64,8 @@ export type LocalCommandContext = {
   buildSessionIdentityPatch: () => Record<string, unknown>;
   currentVerboseLevel?: 'on' | 'off' | 'full';
   knownAgentIds: ReadonlySet<string>;
+  /** Agents this host declares in config; empty means "cannot verify". */
+  configuredAgentIds: ReadonlySet<string>;
   sceneRegistry: Map<string, BncrSceneRecord>;
   routeAgentId: string;
   sceneAgentId: string;
@@ -262,7 +265,11 @@ const LOCAL_COMMAND_HANDLERS: LocalCommandHandler[] = [
     },
     run: async (ctx, parsed) => {
       const status = (parsed as { data: NativeStatusCommand }).data;
-      await reply(ctx, { text: status.text, kind: 'status' });
+      const hint = describeMissingPublicAgentFromIds(ctx.configuredAgentIds);
+      await reply(ctx, {
+        text: hint ? `${status.text}\n\nWarn: ${hint}` : status.text,
+        kind: 'status',
+      });
       return handled(ctx);
     },
   },
@@ -468,6 +475,7 @@ const LOCAL_COMMAND_HANDLERS: LocalCommandHandler[] = [
         sceneRegistry: ctx.sceneRegistry,
         defaultAdminAgentId: ctx.defaultAdminAgentId,
         defaultPublicAgentId: ctx.defaultPublicAgentId,
+        configuredAgentIds: ctx.configuredAgentIds,
         now: ctx.now,
         allowNonAdminSelfAdmin: isDirectSelfAdminCommand(ctx),
         agentId: ctx.sceneAgentId,

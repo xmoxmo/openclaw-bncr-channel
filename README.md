@@ -93,6 +93,15 @@ openclaw devices approve --latest
 
 配置位于 `channels.bncr`。最小配置：
 
+宿主侧还有两处是插件管不到的，缺了装上也接不到消息：`plugins.allow` 里要有 `bncr`，`bindings`
+至少要有一条把 `channel: "bncr"` 路由到某个 agent。`openclaw bncr miniconfig` 只补
+`channels.bncr` 的 `enabled` / `allowTool`，这两处得单独确认。要一份完整推荐配置（含
+`bindings`、`plugins.allow`、`public` 兜底 agent），在 BNCR 侧发 `config` 看，发 `autoconfig`
+交给 agent 按现有配置最小化补齐。
+
+一条 `bindings` 都没有时，插件按宿主默认 agent `main` 运行，并在首条消息处理时 warn 一条，
+重启前一直沿用这个结果。
+
 ```json
 {
   "channels": {
@@ -198,6 +207,15 @@ openclaw config get channels.bncr.mediaMaxMb
 
 `<agentId>` 可以是任意 agent 名字（数字也算），但必须真在这个场景里有一行；点不到时所有命令统一回
 `Agent <id> has no scene row for <SceneId>. Agents here: ...`，后半句列出这个场景实际有哪些 agent。
+
+`/bncr bind` 会先核对宿主配置里的 agent 清单（`agents.entries`）。绑定宿主没声明的 agent 直接
+拒绝，并给出 `openclaw agents add <id>` 的补救命令，不会写出一行的 `agentId` 指向不存在的 agent。
+配置里根本没有 `agents` 段时读不到清单，这时不拦，维持原有行为。
+
+未绑定场景的落点默认是 `public`。宿主没配置 `public` 时不会把消息塞给一个不存在的 agent，
+而是留在当前正在服务的 agent 上；启动日志会 warn 一条，`/bncr status` 也会在末尾带一行 `Warn`。
+补法在 BNCR 侧：管理员发 `oc config` 看推荐配置（里面含 `public` 的沙箱最小骨架，可直接投喂
+`openclaw config patch`），或发 `oc autoconfig` 由 agent 按推荐配置做最小化补齐。
 
 `/bncr list` 显示的是准入实际生效的状态——私聊行如果是历史遗留的
 `allowed` 但没有批准记录，会写成 `status=pending (stored allowed)`，因为它下一条消息就会被判成待批准。

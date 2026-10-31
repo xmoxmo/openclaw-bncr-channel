@@ -113,7 +113,7 @@ export type BncrInboundHandlersRuntime = {
     peer: EnsureCanonicalAgentIdPeer;
     channelId: string;
   }) => string;
-  defaultPublicAgentId: () => string;
+  defaultPublicAgentId: (args: { cfg: BncrChannelConfigRoot; fallbackAgentId: string }) => string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: BncrConversationHistoryMap;
   conversationHistoryVersions?: Map<string, number>;
@@ -317,7 +317,10 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           outboundReplayCache: runtime.outboundReplayCache,
           historyShardQueue: runtime.historyShardQueue,
           defaultAdminAgentId,
-          defaultPublicAgentId: runtime.defaultPublicAgentId(),
+          defaultPublicAgentId: runtime.defaultPublicAgentId({
+            cfg,
+            fallbackAgentId: defaultAdminAgentId,
+          }),
           now: runtime.now,
         });
       }).catch((err) => {

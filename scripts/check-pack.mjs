@@ -26,6 +26,7 @@ const requiredSourceFiles = [
   'src/bootstrap/runtime-loader.ts',
   'src/channel.ts',
   'src/core/accounts.ts',
+  'src/core/agent-surface.ts',
   'src/core/config-schema.ts',
   'src/core/connection-capability.ts',
   'src/core/connection-reachability.ts',

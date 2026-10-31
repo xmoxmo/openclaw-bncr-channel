@@ -1,5 +1,6 @@
 import type { OpenClawPluginServiceContext } from 'openclaw/plugin-sdk/core';
 import { BNCR_DEFAULT_ACCOUNT_ID } from '../core/accounts.ts';
+import { describeMissingPublicAgent } from '../core/agent-surface.ts';
 import type { BncrChannelPolicyConfig } from '../core/policy.ts';
 import { resolveBncrConfigWarnings } from '../core/policy.ts';
 import type { BncrChannelConfigRoot } from './channel-runtime-types.ts';
@@ -77,6 +78,10 @@ export function startBncrBridgeService(
         for (const warning of resolveBncrConfigWarnings(runtime.getChannelConfigRoot(cfg))) {
           runtime.logWarn('config', warning);
         }
+        // Logged once per start: the fallback keeps messages flowing, but the
+        // operator should know public (the intended landing spot) is missing.
+        const missingPublic = describeMissingPublicAgent(cfg);
+        if (missingPublic) runtime.logWarn('config', missingPublic);
       } catch {
         // ignore startup canonical agent initialization errors
       }

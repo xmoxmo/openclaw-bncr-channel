@@ -90,7 +90,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
   };
   getOutboundBridge: () => BncrOutboundBridge;
   getMessagingBridge: () => {
-    resolveOutboundAgentId: (route: BncrRoute) => string;
+    resolveOutboundAgentId: (route: BncrRoute, cfg?: BncrChannelConfigRoot) => string;
     resolveRouteBySession: (raw: string, accountId: string) => BncrVerifiedTarget['route'] | null;
   };
   getStatusBridge: () => {

@@ -106,7 +106,7 @@ export function buildBncrInboundSurfaceRuntime(deps: {
     peer?: unknown;
     channelId?: string;
   }) => string;
-  defaultPublicAgentId: () => string;
+  defaultPublicAgentId: (args: { cfg: BncrChannelConfigRoot; fallbackAgentId: string }) => string;
   sceneRegistry: Map<string, BncrSceneRecord>;
   conversationHistories: BncrConversationHistoryMap;
   conversationHistoryVersions?: Map<string, number>;

@@ -453,6 +453,60 @@ test('slash bncr status is handled locally for admin callers without native fall
   assert.equal(enqueueCalls[0].payload.replyToId, 'slash-status-admin');
 });
 
+const runStatusWithConfig = async (cfg) => {
+  const { api, calls } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'bncr-client-long-id',
+    bridgeId: 'bncr-client-long-id',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr status',
+    mimeType: 'text/plain',
+    msgId: 'slash-status-config',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg,
+    parsed,
+    canonicalAgentId: 'main',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  return enqueueCalls[0].payload.text;
+};
+
+test('slash bncr status warns when the host does not declare public', async () => {
+  const text = await runStatusWithConfig({ agents: { entries: { main: {} } } });
+  assert.match(text, /Warn: agent public is not configured on this host/);
+  assert.match(text, /oc autoconfig/);
+});
+
+test('slash bncr status stays quiet when public is declared', async () => {
+  const text = await runStatusWithConfig({ agents: { entries: { main: {}, public: {} } } });
+  assert.doesNotMatch(text, /Warn:/);
+});
+
+test('slash bncr status stays quiet when the agent list cannot be read', async () => {
+  const text = await runStatusWithConfig({});
+  assert.doesNotMatch(text, /Warn:/);
+});
+
 test('bare new command is handled via elevated native session reset for non-admin direct callers', async () => {
   const { api, calls } = createInboundApiStub();
   const parsed = parseBncrInboundParams({
