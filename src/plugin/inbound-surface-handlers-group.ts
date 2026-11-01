@@ -1,6 +1,7 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
 import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
+import type { BncrClientSceneStateList } from '../messaging/inbound/stale-scenes-command.ts';
 import {
   createBncrFileInboundHandlersComponent,
   createBncrInboundHandlersComponent,
@@ -119,6 +120,17 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     agentId: string;
     sessionKey: string | null;
   }) => Promise<void> | void;
+  /** Ask the Bncr client to drop its own per-scene state for these scenes. */
+  clearClientSceneState?: (args: {
+    sceneKeys: string[];
+    accountId: string;
+  }) => Promise<
+    { ok?: boolean; cleared?: number; unsupported?: boolean; error?: string } | undefined | null
+  >;
+  /** Read the Bncr client's own scene gate table (orphan listing). */
+  listClientSceneState?: (args: {
+    accountId: string;
+  }) => Promise<BncrClientSceneStateList | undefined | null>;
   fileRecvTransfers: Parameters<
     typeof createBncrFileInboundHandlersComponent
   >[0]['fileRecvTransfers'];
@@ -175,6 +187,8 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     setInboundActivity: runtime.setInboundActivity,
     scheduleSave: runtime.scheduleSave,
     purgeSceneSession: runtime.purgeSceneSession,
+    clearClientSceneState: runtime.clearClientSceneState,
+    listClientSceneState: runtime.listClientSceneState,
   });
 
   return {

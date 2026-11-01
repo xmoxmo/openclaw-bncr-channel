@@ -48,6 +48,7 @@ import {
 } from './outbound-replay-cache.ts';
 import { parseBncrInboundParams } from './parse.ts';
 import { runBncrInboundReplyDispatch } from './reply-dispatch.ts';
+import type { BncrClientSceneStateList } from './stale-scenes-command.ts';
 import { buildBncrInboundTurnContext } from './turn-context.ts';
 
 export {
@@ -87,6 +88,17 @@ export async function dispatchBncrInbound(params: {
     agentId: string;
     sessionKey: string | null;
   }) => Promise<void> | void;
+  /** Ask the Bncr client to drop its own per-scene state for these scenes. */
+  clearClientSceneState?: (args: {
+    sceneKeys: string[];
+    accountId: string;
+  }) => Promise<
+    { ok?: boolean; cleared?: number; unsupported?: boolean; error?: string } | undefined | null
+  >;
+  /** Read the Bncr client's own scene gate table (orphan listing). */
+  listClientSceneState?: (args: {
+    accountId: string;
+  }) => Promise<BncrClientSceneStateList | undefined | null>;
   logger?: BncrInboundLogger;
 }) {
   const {
@@ -113,6 +125,8 @@ export async function dispatchBncrInbound(params: {
     setInboundActivity,
     scheduleSave,
     purgeSceneSession,
+    clearClientSceneState,
+    listClientSceneState,
     logger,
   } = params;
   const historyShardQueue = params.historyShardQueue;
@@ -133,6 +147,9 @@ export async function dispatchBncrInbound(params: {
     rememberSessionRoute,
     enqueueFromReply,
     purgeSceneSession,
+    scheduleSave,
+    clearClientSceneState,
+    listClientSceneState,
     logger,
   });
   if (nativeCommand.handled && !nativeCommand.fallbackToAgent) {

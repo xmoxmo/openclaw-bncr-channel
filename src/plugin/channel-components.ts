@@ -8,6 +8,7 @@ import type { BncrConversationHistoryMap } from '../messaging/inbound/conversati
 import { dispatchBncrInbound } from '../messaging/inbound/dispatch.ts';
 import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
+import type { BncrClientSceneStateList } from '../messaging/inbound/stale-scenes-command.ts';
 import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from '../messaging/outbound/reasons.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import { getOpenClawRuntimeConfig } from '../openclaw/config-runtime.ts';
@@ -239,6 +240,17 @@ export function createBncrInboundHandlersComponent(runtime: {
     agentId: string;
     sessionKey: string | null;
   }) => Promise<void> | void;
+  /** Ask the Bncr client to drop its own per-scene state for these scenes. */
+  clearClientSceneState?: (args: {
+    sceneKeys: string[];
+    accountId: string;
+  }) => Promise<
+    { ok?: boolean; cleared?: number; unsupported?: boolean; error?: string } | undefined | null
+  >;
+  /** Read the Bncr client's own scene gate table (orphan listing). */
+  listClientSceneState?: (args: {
+    accountId: string;
+  }) => Promise<BncrClientSceneStateList | undefined | null>;
 }) {
   return createBncrInboundHandlers({
     channelId: runtime.channelId,
@@ -316,6 +328,8 @@ export function createBncrInboundHandlersComponent(runtime: {
         setInboundActivity: runtime.setInboundActivity,
         scheduleSave: runtime.scheduleSave,
         purgeSceneSession: runtime.purgeSceneSession,
+        clearClientSceneState: runtime.clearClientSceneState,
+        listClientSceneState: runtime.listClientSceneState,
         logger: {
           warn: (msg: string) => emitBncrLogLine('warn', msg),
           error: (msg: string) => emitBncrLogLine('error', msg),

@@ -15,50 +15,46 @@ import {
 
 const TARGET_FORMAT_LINES = [
   'Format:',
-  '  • <agentId> — one agent watching the scene; omit it to change every agent',
-  '  • <SceneId> — 平台:群id or 平台:用户id; defaults to this chat',
+  '  • <agentId> — 只改盯这个场景的某个 agent；省略就是该场景下所有 agent',
+  '  • <SceneId> — 平台:群id 或 平台:用户id；省略就是当前会话',
 ];
 
 export const NAME_HELP_TEXT = [
   '🏷 Session name',
   '',
-  'Shows or overrides the sidebar name of a scene.',
-  'The plugin rewrites the label on every inbound message, so a rename made in the web UI only',
-  'lasts until the next message. This command is the durable way to change it.',
+  'About:',
+  '  • 改这个聊天在侧边栏显示的名字；网页端改的下一条消息就会被覆盖。',
+  '  • 指定别的 agent 或别的场景需要管理员。',
   '',
   'Commands:',
   '  • /bncr name [<agentId>] [<SceneId>]',
-  '    Show the effective name and whether it is custom or automatic',
+  '    查看当前生效的名字，以及它是自定义还是自动生成',
   '  • /bncr name set <text> [<agentId>] [<SceneId>]',
-  '    Override the name; the id suffix is dropped for custom names',
+  '    设置自定义名字',
   '  • /bncr name clear [<agentId>] [<SceneId>]',
-  '    Drop the override and fall back to 平台 · 名称 · id (平台 · id when the name is empty)',
+  '    清掉自定义名字，回到「平台 · 名称 · id」；名字为空时回到「平台 · id」',
   '',
   ...TARGET_FORMAT_LINES,
-  '  • <text> — 1-' +
-    BNCR_SESSION_NAME_MAX_CHARS +
-    ' chars; "·" becomes "-"; longer text is truncated',
-  '  • Targeting another agent or another scene requires admin',
+  '  • <text> — 1-' + BNCR_SESSION_NAME_MAX_CHARS + ' 字；"·" 会变成 "-"；超长截断',
 ].join('\n');
 
 export const GROUP_HELP_TEXT = [
   '📁 Session group',
   '',
-  'Shows or overrides the sidebar group a scene is filed under.',
-  'Direct chats are filed under 私聊 by default and always fall back there after clear.',
-  'Group chats keep the host default until a group is set here.',
+  'About:',
+  '  • 改这个聊天在侧边栏里归到哪个分组。',
+  '  • 指定别的 agent 或别的场景需要管理员。',
   '',
   'Commands:',
   '  • /bncr group [<agentId>] [<SceneId>]',
-  '    Show the effective group and whether it is custom or default',
+  '    查看当前生效的分组，以及它是自定义还是默认',
   '  • /bncr group set <name> [<agentId>] [<SceneId>]',
-  '    File the scene under <name>; the host creates the group on the next message',
+  '    归到 <name> 分组',
   '  • /bncr group clear [<agentId>] [<SceneId>]',
-  '    Drop the override: 私聊 for direct chats, host default for groups',
+  '    清掉自定义分组：私聊回「私聊」，群聊回宿主默认',
   '',
   ...TARGET_FORMAT_LINES,
-  `  • <name> — 1-${BNCR_SESSION_NAME_MAX_CHARS} chars; "·" becomes "-"`,
-  '  • Targeting another agent or another scene requires admin',
+  `  • <name> — 1-${BNCR_SESSION_NAME_MAX_CHARS} 字；"·" 会变成 "-"`,
 ].join('\n');
 
 export type BncrSessionIdentityAction = 'get' | 'set' | 'clear' | 'help';
@@ -91,10 +87,10 @@ function usageText(target: 'name' | 'group'): string {
   const value = target === 'name' ? '<text>' : '<name>';
   return [
     'Usage:',
+    `  /bncr ${target} help`,
     `  /bncr ${target} [<agentId>] [<SceneId>]`,
     `  /bncr ${target} set ${value} [<agentId>] [<SceneId>]`,
     `  /bncr ${target} clear [<agentId>] [<SceneId>]`,
-    `  /bncr ${target} help`,
   ].join('\n');
 }
 

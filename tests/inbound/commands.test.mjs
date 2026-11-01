@@ -15,8 +15,15 @@ import {
 import {
   executeSceneAdminCommand,
   HISTORY_HELP_TEXT,
+  MODE_HELP_TEXT,
   parseSceneAdminCommand,
 } from '../../src/messaging/inbound/scene-admin.ts';
+import { SESSION_CLEANUP_HELP_TEXT } from '../../src/messaging/inbound/session-cleanup-command.ts';
+import {
+  GROUP_HELP_TEXT,
+  NAME_HELP_TEXT,
+} from '../../src/messaging/inbound/session-identity-command.ts';
+import { STALE_SCENES_HELP_TEXT } from '../../src/messaging/inbound/stale-scenes-command.ts';
 import { resolveSceneRecord, setSceneRecord } from '../../src/plugin/scene-registry.ts';
 
 test('parseBncrNativeCommand only recognizes bncr builtin /bncr subcommands, with help remapped only', () => {
@@ -769,7 +776,11 @@ test('parseSceneAdminCommand parses history-limit and history-force commands', (
   assert.deepEqual(parseSceneAdminCommand(parseBncrNativeCommand('/bncr history-limit x y z')), {
     matched: true,
     valid: false,
-    text: 'Usage: /bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]',
+    text: [
+      'Usage:',
+      '  /bncr history-help',
+      '  /bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]',
+    ].join('\n'),
   });
 
   // history-force with 0 args → get
@@ -846,7 +857,7 @@ test('executeSceneAdminCommand handles history commands', () => {
     { ok: true, text: HISTORY_HELP_TEXT },
   );
   assert.match(HISTORY_HELP_TEXT, /\/bncr history-limit \[<number>\|clear\]/);
-  assert.match(HISTORY_HELP_TEXT, /\/bncr history-force on\|off\|clear/);
+  assert.match(HISTORY_HELP_TEXT, /\/bncr history-force \[on\|off\|clear\]/);
 
   // history-limit-get returns current value
   assert.deepEqual(
@@ -1439,8 +1450,26 @@ test('history help documents the shared agent tail', () => {
   );
   assert.match(
     HISTORY_HELP_TEXT,
-    /\/bncr history-force on\|off\|clear \[<agentId>\] \[<SceneId>\]/,
+    /\/bncr history-force \[on\|off\|clear\] \[<agentId>\] \[<SceneId>\]/,
   );
+});
+
+test('no help text lists its own help command', () => {
+  const helps = [
+    ['name', NAME_HELP_TEXT],
+    ['group', GROUP_HELP_TEXT],
+    ['mode', MODE_HELP_TEXT],
+    ['history', HISTORY_HELP_TEXT],
+    ['stale', STALE_SCENES_HELP_TEXT],
+    ['sessions', SESSION_CLEANUP_HELP_TEXT],
+  ];
+  for (const [command, text] of helps) {
+    assert.doesNotMatch(
+      text,
+      new RegExp('• /bncr ' + command + ' help'),
+      command + ' help lists itself',
+    );
+  }
 });
 
 test('list filters on the status the operator sees', () => {

@@ -61,6 +61,7 @@ import {
 import type { BncrOutboundReplayCache } from './messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from './messaging/inbound/parse.ts';
 import { runBncrInboundReplyDispatch } from './messaging/inbound/reply-dispatch.ts';
+import type { BncrClientSceneStateList } from './messaging/inbound/stale-scenes-command.ts';
 import { buildEnqueueFromReplyDebugInfo } from './messaging/outbound/diagnostics.ts';
 import { buildBncrMediaOutboundFrame } from './messaging/outbound/media.ts';
 import {
@@ -230,6 +231,46 @@ type BncrRuntimeStatusInput = Parameters<BncrBridgeRuntime['buildIntegratedDiagn
 let BNCR_DEBUG_VERBOSE = false; // 全局调试日志开关（默认关闭）
 
 type BncrStatusWorkerContext = Parameters<typeof startBncrStatusWorker>[1];
+
+/**
+ * 客户端 RPC 的应答统一是 `{ result }`。这里只认这一层信封，别的形状一律当空结果：
+ * 传输层细节不在业务分支里重复解释。
+ */
+export function unwrapClientRpcResult(response: unknown): Record<string, unknown> {
+  const value = response as { result?: unknown } | null | undefined;
+  return value && typeof value === 'object' && value.result && typeof value.result === 'object'
+    ? (value.result as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * 把 `bncr.state.list` 的结果收敛成维护视图读的那份形状：坏条目丢掉、字段类型对齐、
+ * 空场景键的条目丢弃。客户端版本旧时回 `unsupported`，这里照传。
+ */
+export function normalizeClientSceneStateList(
+  result: Record<string, unknown>,
+): BncrClientSceneStateList {
+  const entries = (Array.isArray(result.entries) ? result.entries : [])
+    .map((entry) =>
+      entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null,
+    )
+    .filter((entry): entry is Record<string, unknown> => entry !== null)
+    .map((entry) => ({
+      sceneKey: asString(entry.sceneKey).trim(),
+      ...(typeof entry.scope === 'string' ? { scope: entry.scope } : {}),
+      enabled: entry.enabled === true,
+      ...(typeof entry.mode === 'string' ? { mode: entry.mode } : {}),
+      ...(typeof entry.rev === 'number' ? { rev: entry.rev } : {}),
+    }))
+    .filter((entry) => entry.sceneKey);
+  return {
+    ok: result.ok !== false,
+    entries,
+    ...(typeof result.invalid === 'number' ? { invalid: result.invalid } : {}),
+    ...(result.unsupported === true ? { unsupported: true } : {}),
+    ...(typeof result.error === 'string' ? { error: result.error } : {}),
+  };
+}
 
 class BncrBridgeRuntime {
   // Identity / lifecycle ----------------------------------------------------
@@ -2658,6 +2699,45 @@ class BncrBridgeRuntime {
     this.scheduleSave();
   }
 
+  /**
+   * Ask the connected Bncr client to drop its own per-scene state.
+   *
+   * A single `/bncr prune <SceneId>` is parsed by the client from the command
+   * text; a batch sweep has no such text, so the host names the scenes and the
+   * client deletes the rows it owns. Failure is reported, never rolled back.
+   */
+  private async clearClientSceneState(args: {
+    sceneKeys: string[];
+    accountId: string;
+  }): Promise<{ ok: boolean; cleared?: number; unsupported?: boolean; error?: string }> {
+    const sceneKeys = Array.from(
+      new Set(args.sceneKeys.map((key) => asString(key).trim()).filter(Boolean)),
+    );
+    if (sceneKeys.length === 0) return { ok: true, cleared: 0 };
+    const response = await this.callClientRpc('bncr.state.clear', { sceneKeys }, args.accountId);
+    const result = unwrapClientRpcResult(response);
+    return {
+      ok: result.ok !== false,
+      ...(typeof result.cleared === 'number' ? { cleared: result.cleared } : {}),
+      ...(result.unsupported === true ? { unsupported: true } : {}),
+      ...(typeof result.error === 'string' ? { error: result.error } : {}),
+    };
+  }
+
+  /**
+   * Read the client's own per-scene gate state (oc/occ + mode).
+   *
+   * Cleanup only ever pushes deletions; this is the read side. The scene
+   * registry is the host's view of which chats exist, so comparing the two
+   * surfaces the client rows whose scene row is gone.
+   */
+  private async listClientSceneStates(args: {
+    accountId: string;
+  }): Promise<BncrClientSceneStateList> {
+    const response = await this.callClientRpc('bncr.state.list', {}, args.accountId);
+    return normalizeClientSceneStateList(unwrapClientRpcResult(response));
+  }
+
   resolveRouteBySession(sessionKey: string, accountId: string): BncrRoute | null {
     return this.targetRuntime.resolveRouteBySession(sessionKey, accountId);
   }
@@ -3236,6 +3316,8 @@ class BncrBridgeRuntime {
         this.enqueueFromReply(args),
       scheduleSave: () => this.scheduleSave(),
       purgeSceneSession: (args) => this.purgeSceneSessionState(args),
+      clearClientSceneState: (args) => this.clearClientSceneState(args),
+      listClientSceneState: (args) => this.listClientSceneStates(args),
       buildCanonicalSessionKey: (route: BncrRoute) =>
         buildCanonicalBncrSessionKey(route, this.servingAgentId()),
       fileRecvTransfers: this.fileRecvTransfers,

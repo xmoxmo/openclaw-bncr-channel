@@ -53,6 +53,7 @@ import {
 } from './native-command-runtime.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
+import type { BncrSessionActivity } from './session-cleanup-command.ts';
 import { resolveBncrSceneIdentity, resolveBncrSessionCategory } from './session-identity.ts';
 import {
   buildBncrInboundSessionIdentityPatch,
@@ -60,6 +61,7 @@ import {
   wrapBncrInboundRecordSessionLabelCorrection,
 } from './session-label.ts';
 import { createBncrSessionMetaTaskBarrier } from './session-meta-task.ts';
+import type { BncrClientSceneStateList } from './stale-scenes-command.ts';
 
 function buildBncrNativeCommandResolvedRoute(args: {
   api: BncrInboundApi;
@@ -89,6 +91,31 @@ function buildBncrNativeCommandResolvedRoute(args: {
 
 export { parseBncrNativeCommand } from './native-command.ts';
 
+/**
+ * Reduce a host session entry to the two timestamps session cleanup needs.
+ * Anything unreadable stays null so a bad row can never look freshly active.
+ */
+function toBncrSessionActivity(
+  sessionKey: string,
+  entry: unknown,
+): BncrSessionActivity | undefined {
+  const key = String(sessionKey ?? '').trim();
+  if (!key || !entry || typeof entry !== 'object') return undefined;
+  const record = entry as Record<string, unknown>;
+  const pick = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const interactionAt = pick(record.lastInteractionAt);
+  const storeWriteAt = pick(record.updatedAt);
+  return {
+    sessionKey: key,
+    lastActivityAt: interactionAt ?? storeWriteAt,
+    // Tell the caller when this age is a store write instead of a message: the
+    // two are not the same thing and the listing must not pretend they are.
+    hasInteractionAt: interactionAt != null,
+    archivedAt: pick(record.archivedAt),
+  };
+}
+
 export async function handleBncrNativeCommand(params: {
   api: BncrInboundApi;
   channelId: string;
@@ -108,6 +135,19 @@ export async function handleBncrNativeCommand(params: {
     agentId: string;
     sessionKey: string | null;
   }) => Promise<void> | void;
+  /** Debounced state save; maintenance commands call it after removing rows. */
+  scheduleSave?: () => void;
+  /** Ask the Bncr client to drop its own per-scene state for these scenes. */
+  clearClientSceneState?: (args: {
+    sceneKeys: string[];
+    accountId: string;
+  }) => Promise<
+    { ok?: boolean; cleared?: number; unsupported?: boolean; error?: string } | undefined | null
+  >;
+  /** Read the Bncr client's own scene gate table (orphan listing). */
+  listClientSceneState?: (args: {
+    accountId: string;
+  }) => Promise<BncrClientSceneStateList | undefined | null>;
   logger?: BncrInboundLogger;
 }): Promise<
   | { handled: false }
@@ -127,6 +167,9 @@ export async function handleBncrNativeCommand(params: {
     rememberSessionRoute,
     enqueueFromReply,
     purgeSceneSession,
+    scheduleSave,
+    clearClientSceneState,
+    listClientSceneState,
   } = params;
   const { accountId, route, peer, clientId, extracted, msgId } = parsed;
 
@@ -419,6 +462,7 @@ export async function handleBncrNativeCommand(params: {
       rememberSessionRoute,
       enqueueFromReply,
       purgeSceneSession,
+      persistScenes: scheduleSave,
       readSessionUpdatedAt: async ({ agentId, sessionKey: targetSessionKey }) => {
         const targetStorePath = resolveBncrInboundSessionStorePath({
           storeConfig: cfg?.session?.store,
@@ -475,6 +519,47 @@ export async function handleBncrNativeCommand(params: {
           archiveTranscript: true,
         });
       },
+      // /bncr sessions works on the host session store directly, so it can see
+      // conversations whose scene row is already gone.
+      listSessions: async (agentId: string) => {
+        const targetStorePath = resolveBncrInboundSessionStorePath({
+          storeConfig: cfg?.session?.store,
+          agentId,
+        });
+        let entries: ReturnType<typeof listBncrSessionEntries>;
+        try {
+          entries = listBncrSessionEntries({
+            agentId,
+            readOnly: true,
+            storePath: targetStorePath,
+          });
+        } catch {
+          return undefined;
+        }
+        if (!entries) return undefined;
+        const rows: BncrSessionActivity[] = [];
+        for (const item of entries) {
+          const activity = toBncrSessionActivity(item.sessionKey, item.entry);
+          if (activity) rows.push(activity);
+        }
+        return rows;
+      },
+      readSessionActivity: async ({ agentId, sessionKey: targetSessionKey }) => {
+        const targetStorePath = resolveBncrInboundSessionStorePath({
+          storeConfig: cfg?.session?.store,
+          agentId,
+        });
+        const entry = await readBncrSessionEntry({
+          storePath: targetStorePath,
+          sessionKey: targetSessionKey,
+        });
+        if (!entry) return undefined;
+        return toBncrSessionActivity(targetSessionKey, entry);
+      },
+      clearClientState: clearClientSceneState
+        ? (sceneKeys: string[]) => clearClientSceneState({ sceneKeys, accountId })
+        : undefined,
+      listClientState: listClientSceneState ? () => listClientSceneState({ accountId }) : undefined,
       nativeCommandDebugEnabled,
     });
     if (localResult) return localResult;

@@ -254,7 +254,7 @@ openclaw config get channels.bncr.mediaMaxMb
 ```text
 /bncr history-help
 /bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]
-/bncr history-force on|off|clear [<agentId>] [<SceneId>]
+/bncr history-force [on|off|clear] [<agentId>] [<SceneId>]
 ```
 
 会话历史统一累计用户消息和 Bot 回复，默认窗口为 50 条。达到上限后会在后续消息到达时整理并发送历史上下文。
@@ -272,14 +272,30 @@ openclaw config get channels.bncr.mediaMaxMb
 ### 场景清理
 
 ```text
+/bncr stale
 /bncr stale [all|swapped|solo|missing|archived]
 /bncr stale help
+/bncr stale orphans
 /bncr prune <SceneId> [<agentId>] [force]
+/bncr prune state <SceneId> [force]
 ```
 
-`stale` 只读，列出两种清理候选。一是静默：场景行的最后活动时间超过 72 小时（入站，或管理员改配置时刷新该行），并且该行对应 sessionKey 的宿主会话活动时间也超过 72 小时。只满足一条的不列——例如 cron 直接投递的会话，场景行很久没更新，但会话还在动。二是会话异常：用宿主 SDK 只读列出该 agent 的会话项（`listSessionEntries`，不建库、不迁移），再按 sessionKey 查；查不到就是 `missing`（被 UI 删除或从未建过），`archivedAt` 有值就是 `archived`（被 UI 归档）；这两种不看场景行时钟，直接列出。列表读不出来时回退到时间戳判定：只按上面那条 72 小时双静默规则列，状态标 `unreadable (unknown)`，不会判 `missing` / `archived`；列表和时间戳都读不出来才整行跳过，不当成死行。
+批量清理：
 
-每条给出侧边栏 label、agent、两个时间和各自静默时长，会话异常时改为标 `missing (no session row)` 或 `archived`。第三个维度是兄弟场景：同一个 `group_id`、不同平台的另一行在 24 小时内有活动（取行入站与会话活动里较新的那个；只有确认仍然存活的会话才算活动，missing / archived / 读不出来的兄弟只按行入站算，避免归档动作或读不到的时间冒充活动），说明这个群已经换到那个平台。`swapped` 只列这一类，`solo` 只列既没有兄弟活动、也没有会话异常的行（就是单纯静默），`missing` / `archived` 只列对应异常，默认 `all`。私聊不参与兄弟匹配。
+```text
+/bncr stale <days>
+/bncr prune stale [<days>] [force]
+```
+
+不带参数的 `stale` 是清理视图：180 天时钟，只看静默。会话异常本身不会把一行拉进这个视图；时钟也已经静默的行照常列出，不管它的会话是 missing 还是 archived。带过滤词（含 `all`）是诊断视图：72 小时时钟，并把 `missing` / `archived` 的会话异常一并列出。`stale <days>` 是清理视图换窗口，只改这一次的判定窗口，候选规则不变。`prune stale` 批量清理场景行，默认 180 天，单次最多 50 行，最久远的先删；每一行走与单条 `prune` 完全相同的步骤（归档 transcript、清桥接侧状态、删行），会话读不出来的行默认跳过，加 `force` 才删。
+
+批量还要清 BNCR 侧 openclawclient 的 `state:<hex>`（模式 / occ）。这份状态是**场景级**的，键只有 `平台:群:用户`，没有 agent 维度；所以清理前先做一次场景归一：只有这条场景已经没有任何 agent 行才下发 RPC `bncr.state.clear`，同场景还有别的 agent 行在用就整条留着，只删过期的场景行，回复里标 `Client state kept for N scene(s) with another agent row still in use`。单条 `prune` 走同一套判定：客户端只透传命令，删完行由宿主判断这条场景是否已经空了再决定清不清，客户端本地不再自己删状态。客户端版本旧、没有这个方法时，回复里会标 `too old to expose bncr.state.clear`，场景行照常删除，不回滚。
+
+`stale orphans` 是反向核对：经 RPC `bncr.state.list` 只读读一遍客户端的 `state:<hex>` 表（不建行、不改 rev、不归一脏值），按 `平台:群` / `平台:用户` 还原成场景键，列出「客户端有门控状态、场景表里没有对应行」的场景。多出来的只有两种来历：超级门控（oc/occ）已经打开但消息还没进场景表；或者场景行已经清掉、客户端那份留在原地。每行标 `gate on|off`、开启时间（`rev`）和 `mode`，只做展示，删不删由管理员判断；这些场景没有场景行，`/bncr prune` 也就没有目标行，要用 `/bncr prune state <SceneId>` 只清客户端那份门控：不归档 transcript、不动会话、不碰场景表；门控在 72 小时内开过要加 `force`（那也可能是还没来消息的超级门控），下发 RPC 前会再查一次场景表，期间冒出场景行就放弃并提示重跑；场景表还有行时这条路直接拒绝，提示改用 `/bncr prune <SceneId>`。客户端太旧时提示 `too old to expose bncr.state.list`。
+
+`stale` 只读，列出两种清理候选。一是静默：场景行的最后活动时间超过判定窗口（入站，或管理员改配置时刷新该行），并且该行对应 sessionKey 的宿主会话活动时间也超过同一窗口（清理视图 180 天，诊断视图 72 小时）。只满足一条的不列——例如 cron 直接投递的会话，场景行很久没更新，但会话还在动。二是会话异常：用宿主 SDK 只读列出该 agent 的会话项（`listSessionEntries`，不建库、不迁移），再按 sessionKey 查；查不到就是 `missing`（被 UI 删除或从未建过），`archivedAt` 有值就是 `archived`（被 UI 归档）；这两种不看场景行时钟，直接列出。列表读不出来时回退到时间戳判定：只按上面那条 72 小时双静默规则列，状态标 `unreadable (unknown)`，不会判 `missing` / `archived`；列表和时间戳都读不出来才整行跳过，不当成死行。
+
+每条给出侧边栏 label、agent、两个时间和各自静默时长，会话异常时改为标 `missing (no session row)` 或 `archived`。第三个维度是兄弟场景：同一个 `group_id`、不同平台的另一行在 24 小时内有活动（取行入站与会话活动里较新的那个；只有确认仍然存活的会话才算活动，missing / archived / 读不出来的兄弟只按行入站算，避免归档动作或读不到的时间冒充活动），说明这个群已经换到那个平台。`swapped` 只列这一类，`solo` 只列既没有兄弟活动、也没有会话异常的行（就是单纯静默），`missing` / `archived` 只列对应异常，`all` 是全部候选（诊断视图）。私聊不参与兄弟匹配。
 
 `prune` 必须显式写 `<SceneId>`，不提供当前会话快捷方式；`<SceneId>` 和 `<agentId>` 顺序不限，末位的 `force` 是保留字（agent 名字真叫 force 时写两遍）。执行顺序：归档宿主 transcript → 清掉桥接侧会话状态（路由、历史分片、发件队列）→ 删除场景行。目标 72 小时内还有活动会拒绝，确认要删再加 `force`；会话状态读不出来（unknown）同样拒绝，因为读不到不等于没在动；会话说 `missing` / `archived` 的行本身已是清理候选，不需要 `force`。删除前会再核对一次行的 `lastSeenAt`，期间来了新消息就跳过并回报。内部配置行（`__global__` 全局媒体默认值）不会被列出，也不能删除。
 
@@ -288,6 +304,22 @@ openclaw config get channels.bncr.mediaMaxMb
 删除会带走该场景的模式、名字和分组设置，群再进来会新建默认行；如果定时任务仍按旧 sessionKey 投递，宿主会重新建一个空会话。
 
 列表带各场景的名称和 id（含私聊），和 `/bncr list scenes` 一样，管理员在群里执行会展示给群成员；这类操作建议私聊里跑。
+
+### 会话清理
+
+```text
+/bncr sessions [<days>]
+/bncr sessions prune [<days>]
+/bncr sessions help
+```
+
+只清理宿主会话条目，不动场景行。默认 30 天，列出或删除超过 N 天没有活动的 bncr 会话（取 `lastInteractionAt`，没有则退回 `updatedAt`，并在行尾标 `(store write, no message)` 说明这个时间只是写库、不是消息），按天从久到近排列，单次最多 50 条。
+
+一条会话对应一个 agent。同一个群换了绑定的 agent 后，旧 agent 的会话会留下来，所以列表按 (agent, 会话) 统计而不是按群统计；同一场景下别的 agent 还在用时，这一行会带 `other=<agent> <天数> (active chat)`，表示群本身是活的，只是这条会话已经没用了。
+
+数据源是宿主 session store，所以场景行已经不在的孤儿会话也列得出（标 `scene=missing (orphan)`），这些是 `/bncr stale` 看不到的。场景行还在的标 `scene=kept`：删掉会话后准入、模式、名字、分组都保留，下条消息自动重建会话。标签优先取场景名，孤儿会话用 sessionKey 的 hex 反解成 `平台:id`，都读不出来时标 `(no label)`。
+
+删除只删会话条目并归档 transcript，其他渠道的会话一律不碰。删前会再读一次时间，期间来了消息就跳过并列出。插件侧的会话历史窗口不受影响：下条消息仍会带上最近 50 条历史；要连历史、路由和模式一起清，用 `/bncr prune`。30 天这个默认值安全的前提是宿主 72 小时不活动就会重置会话：真正还在用的对话早重建过，能命中的都是没人再打开的老条目。列表带完整场景 id，管理员在群里执行会展示给群成员，这类清理建议私聊里跑。
 
 ## 权限规则
 

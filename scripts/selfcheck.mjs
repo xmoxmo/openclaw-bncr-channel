@@ -89,6 +89,7 @@ const requiredSourceFiles = [
   'src/messaging/inbound/reply-dispatch.ts',
   'src/messaging/inbound/runtime-compat.ts',
   'src/messaging/inbound/scene-admin.ts',
+  'src/messaging/inbound/session-cleanup-command.ts',
   'src/messaging/inbound/session-label.ts',
   'src/messaging/inbound/session-identity.ts',
   'src/messaging/inbound/session-identity-command.ts',

@@ -30,11 +30,18 @@ import {
   parseSceneAdminCommand,
 } from './scene-admin.ts';
 import {
+  type BncrSessionActivity,
+  executeSessionCleanupCommand,
+  parseSessionCleanupCommand,
+  type SessionCleanupCommand,
+} from './session-cleanup-command.ts';
+import {
   type BncrSessionIdentityCommand,
   executeSessionIdentityCommand,
   parseSessionIdentityCommand,
 } from './session-identity-command.ts';
 import { recordAndPatchBncrInboundSessionEntry } from './session-label.ts';
+import type { BncrClientSceneStateList } from './stale-scenes-command.ts';
 import {
   executeStaleScenesCommand,
   parseStaleScenesCommand,
@@ -94,6 +101,23 @@ export type LocalCommandContext = {
     sessionKey: string;
     archiveTranscript?: boolean;
   }) => Promise<boolean>;
+  /** Every bncr session activity row for one agent; undefined means unreadable. */
+  listSessions?: (agentId: string) => Promise<readonly BncrSessionActivity[] | undefined>;
+  /** Fresh read of one entry, used before a session delete. */
+  readSessionActivity?: (args: {
+    agentId: string;
+    sessionKey: string;
+  }) => Promise<BncrSessionActivity | undefined>;
+  /** Persist the scene registry after maintenance removed rows. */
+  persistScenes?: () => void;
+  /** Ask the Bncr client to drop its own per-scene state for these scenes. */
+  clearClientState?: (
+    sceneKeys: string[],
+  ) => Promise<
+    { ok?: boolean; cleared?: number; unsupported?: boolean; error?: string } | undefined | null
+  >;
+  /** Read the Bncr client's own scene gate table (orphan listing). */
+  listClientState?: () => Promise<BncrClientSceneStateList | undefined | null>;
   nativeCommandDebugEnabled: boolean;
 };
 
@@ -445,8 +469,62 @@ const LOCAL_COMMAND_HANDLERS: LocalCommandHandler[] = [
         readSessionNode: ctx.readSessionNode,
         deleteSession: ctx.deleteSession,
         purgeSessionState: ctx.purgeSceneSession,
+        onSceneChange: ctx.persistScenes,
+        clearClientState: ctx.clearClientState,
+        listClientState: ctx.listClientState,
       });
       await reply(ctx, { text: outcome.text, kind: 'maintenance' });
+      return handled(ctx);
+    },
+  },
+  {
+    id: 'sessions',
+    logKind: () => 'maintenance',
+    gate: (ctx) =>
+      ctx.effectiveIsAdmin ? { action: 'allow' } : { action: 'reject', mode: 'reply' },
+    parse: (ctx) => {
+      const sessions = parseSessionCleanupCommand(ctx.command);
+      if (!sessions.matched) return { matched: false };
+      if (!sessions.valid) return { matched: true, valid: false, text: sessions.text };
+      return { matched: true, valid: true, data: sessions.command };
+    },
+    run: async (ctx, parsed) => {
+      if (!parsed.valid) {
+        await reply(ctx, { text: parsed.text, kind: 'maintenance', result: 'rejected' });
+        return handled(ctx);
+      }
+      const command = (parsed as { data: SessionCleanupCommand }).data;
+      if (!ctx.listSessions) {
+        await reply(ctx, {
+          text: 'Session cleanup is unavailable: the session store is not wired.',
+          kind: 'maintenance',
+          result: 'rejected',
+        });
+        return handled(ctx);
+      }
+      // Sessions can belong to agents with no scene row left, so the sweep
+      // reads every agent this host knows about, not just the bound ones.
+      const agentIds = Array.from(
+        new Set(
+          [...ctx.configuredAgentIds, ...ctx.knownAgentIds, ctx.routeAgentId]
+            .map((id) => String(id ?? '').trim())
+            .filter(Boolean),
+        ),
+      ).sort();
+      const outcome = await executeSessionCleanupCommand({
+        command,
+        now: ctx.now,
+        agentIds,
+        listSessions: ctx.listSessions,
+        readSession: ctx.readSessionActivity,
+        sceneRegistry: ctx.sceneRegistry,
+        deleteSession: ctx.deleteSession,
+      });
+      await reply(ctx, {
+        text: outcome.text,
+        kind: 'maintenance',
+        result: outcome.ok ? 'handled' : 'rejected',
+      });
       return handled(ctx);
     },
   },

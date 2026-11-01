@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { normalizeClientSceneStateList, unwrapClientRpcResult } from '../../src/channel.ts';
 import { buildCanonicalBncrSessionKey } from '../../src/core/targets.ts';
 import {
   buildStaleSceneSessionKey,
@@ -77,10 +78,11 @@ function buildDeps(args) {
 }
 
 test('parse: /bncr stale lists, help is recognised, extra args are a usage error', () => {
+  // Bare stale is the cleanup view: half a year, clock only.
   assert.deepEqual(parseStaleScenesCommand(command('stale')), {
     matched: true,
     valid: true,
-    command: { action: 'list', filter: 'all' },
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
   });
   assert.deepEqual(parseStaleScenesCommand(command('stale', 'help')), {
     matched: true,
@@ -96,10 +98,11 @@ test('parse: /bncr stale lists, help is recognised, extra args are a usage error
 test('parse: stale accepts every filter, including the session anomalies', () => {
   assert.deepEqual([...STALE_SCENES_FILTERS], ['all', 'swapped', 'solo', 'missing', 'archived']);
   for (const filter of STALE_SCENES_FILTERS) {
+    // Every filter word is the diagnostic view: 72h, session anomalies included.
     assert.deepEqual(parseStaleScenesCommand(command('stale', filter)), {
       matched: true,
       valid: true,
-      command: { action: 'list', filter },
+      command: { action: 'list', filter, includeAnomalies: true },
     });
   }
 });
@@ -648,6 +651,100 @@ test('list: the missing filter surfaces a fresh row whose host session is gone',
   assert.match(all.text, /GewePlus:51720530884/);
 });
 
+test('list: bare stale stays clock only, the filter views add the anomalies', async () => {
+  // A fresh row whose session was deleted from the UI is an anomaly, not a
+  // quiet chat: the 180d cleanup view must not list it, the 72h diagnostic
+  // views must.
+  const row = groupRow({ lastSeenAt: NOW - 60 * 1000 });
+  const { deps } = buildDeps({
+    rows: [row],
+    nodes: {
+      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+        exists: false,
+        archivedAt: null,
+        updatedAt: null,
+      },
+    },
+  });
+
+  const cleanup = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.equal(cleanup.ok, true);
+  assert.doesNotMatch(cleanup.text, /51720530884/);
+  assert.match(cleanup.text, /No stale scenes/);
+  // The row is not lost silently: the view names the diagnostic command.
+  assert.match(cleanup.text, /1 session anomaly row\(s\) not in this view: \/bncr stale all/);
+
+  for (const filter of ['all', 'missing']) {
+    const diagnostic = await executeStaleScenesCommand({
+      command: { action: 'list', filter, includeAnomalies: true },
+      ...deps,
+    });
+    assert.match(diagnostic.text, /51720530884/, filter);
+  }
+});
+
+test('list: the clock view keeps a long-dead row whose session is gone too', async () => {
+  // An anomaly is an extra reason to be a candidate, not a reason to hide the
+  // row from the 180d cleanup view: this chat is quiet on both clocks.
+  const row = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const { deps } = buildDeps({
+    rows: [row],
+    nodes: {
+      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+        exists: false,
+        archivedAt: null,
+        updatedAt: null,
+      },
+    },
+  });
+
+  const cleanup = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.equal(cleanup.ok, true);
+  assert.match(cleanup.text, /51720530884/);
+  assert.match(cleanup.text, /session=missing \(no session row\)/);
+});
+
+test('list: a clock-view listing still counts the anomalies it left out', async () => {
+  const quiet = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const fresh = directRow({ lastSeenAt: NOW - 60 * 1000 });
+  const { deps } = buildDeps({
+    rows: [quiet, fresh],
+    nodes: {
+      ['public|' + buildStaleSceneSessionKey(quiet, 'public')]: {
+        exists: true,
+        archivedAt: null,
+        updatedAt: NOW - 200 * DAY,
+      },
+      ['orion|' + buildStaleSceneSessionKey(fresh, 'orion')]: {
+        exists: false,
+        archivedAt: null,
+        updatedAt: null,
+      },
+    },
+  });
+
+  const cleanup = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.match(cleanup.text, /51720530884/);
+  assert.doesNotMatch(cleanup.text, /2705342113/);
+  assert.match(cleanup.text, /1 session anomaly row\(s\) not in this view/);
+
+  const diagnostic = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', includeAnomalies: true },
+    ...deps,
+  });
+  assert.match(diagnostic.text, /2705342113/);
+  assert.doesNotMatch(diagnostic.text, /not in this view/);
+});
+
 test('list: the archived filter surfaces a session archived from the UI', async () => {
   const row = groupRow({ lastSeenAt: NOW - 60 * 1000 });
   const archivedAt = NOW - 5 * DAY;
@@ -889,4 +986,656 @@ test('list: an empty registry says there are no scene rows yet', async () => {
     ...onlyInternal.deps,
   });
   assert.match(result.text, /No scene rows yet/);
+});
+
+test('parse: batch prune takes a day window, defaults to 180 and accepts force', async () => {
+  const { BNCR_STALE_SCENE_BATCH_DAYS } = await import(
+    '../../src/messaging/inbound/stale-scenes-command.ts'
+  );
+  assert.equal(BNCR_STALE_SCENE_BATCH_DAYS, 180);
+  assert.deepEqual(parseStaleScenesCommand(command('prune', 'stale')), {
+    matched: true,
+    valid: true,
+    command: { action: 'prune-batch', days: 180, force: false },
+  });
+  assert.deepEqual(parseStaleScenesCommand(command('prune', 'stale 90')), {
+    matched: true,
+    valid: true,
+    command: { action: 'prune-batch', days: 90, force: false },
+  });
+  assert.deepEqual(parseStaleScenesCommand(command('prune', 'stale 90 force')), {
+    matched: true,
+    valid: true,
+    command: { action: 'prune-batch', days: 90, force: true },
+  });
+  for (const bad of ['stale 0', 'stale abc', 'stale 90 extra']) {
+    const parsed = parseStaleScenesCommand(command('prune', bad));
+    assert.equal(parsed.valid, false, bad);
+  }
+  // A bare day count on stale is the cleanup listing with that window, not a prune.
+  assert.deepEqual(parseStaleScenesCommand(command('stale', '180')), {
+    matched: true,
+    valid: true,
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+  });
+});
+
+test('the 180d listing is exactly what the 180d batch would delete', async () => {
+  const quietAlive = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const quietGone = groupRow({
+    sceneKey: 'tgBot:-1001414451955',
+    platform: 'tgBot',
+    groupId: '-1001414451955',
+    agentId: 'orion',
+    lastSeenAt: NOW - 210 * DAY,
+  });
+  const freshAnomaly = directRow({ lastSeenAt: NOW - 60 * 1000 });
+  const nodes = {
+    ['public|' + buildStaleSceneSessionKey(quietAlive, 'public')]: {
+      exists: true,
+      archivedAt: null,
+      updatedAt: NOW - 200 * DAY,
+    },
+    ['orion|' + buildStaleSceneSessionKey(quietGone, 'orion')]: {
+      exists: false,
+      archivedAt: null,
+      updatedAt: null,
+    },
+    ['orion|' + buildStaleSceneSessionKey(freshAnomaly, 'orion')]: {
+      exists: false,
+      archivedAt: null,
+      updatedAt: null,
+    },
+  };
+  const { deps, deleted } = buildDeps({
+    rows: [quietAlive, quietGone, freshAnomaly],
+    nodes,
+  });
+
+  const listed = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.match(listed.text, /51720530884/);
+  assert.match(listed.text, /-1001414451955/);
+  assert.doesNotMatch(listed.text, /2705342113/);
+
+  const pruned = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+    clearClientState: async () => ({ ok: true, cleared: 2 }),
+  });
+  assert.match(pruned.text, /Deleted 2 scene row\(s\)/);
+  // One delete per scene row, and the live-but-anomalous chat is untouched.
+  assert.equal(deleted.length, 2);
+  assert.deepEqual(
+    deleted.map((item) => item.sessionKey).sort(),
+    [
+      buildStaleSceneSessionKey(quietAlive, 'public'),
+      buildStaleSceneSessionKey(quietGone, 'orion'),
+    ].sort(),
+  );
+});
+
+test('batch prune: deletes quiet rows, hands their scene keys to the client once', async () => {
+  const old = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const older = groupRow({
+    sceneKey: 'tgBot:-1001414451955',
+    platform: 'tgBot',
+    groupId: '-1001414451955',
+    groupName: 'BncrJS',
+    agentId: 'orion',
+    lastSeenAt: NOW - 300 * DAY,
+  });
+  const fresh = groupRow({
+    sceneKey: 'qq:2705342113',
+    platform: 'qq',
+    groupId: '0',
+    agentId: 'public',
+    lastSeenAt: NOW - 10 * DAY,
+  });
+  const { deps, deleted, registry } = buildDeps({
+    rows: [old, older, fresh],
+    sessions: {
+      ['public|' + buildStaleSceneSessionKey(old, 'public')]: NOW - 200 * DAY,
+      ['orion|' + buildStaleSceneSessionKey(older, 'orion')]: NOW - 310 * DAY,
+      ['public|' + buildStaleSceneSessionKey(fresh, 'public')]: NOW - 10 * DAY,
+    },
+  });
+  const clearCalls = [];
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+    clearClientState: async (sceneKeys) => {
+      clearCalls.push(sceneKeys);
+      return { ok: true, cleared: sceneKeys.length };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(deleted.length, 2, 'only the two quiet rows are deleted');
+  for (const entry of deleted) assert.equal(entry.archiveTranscript, true);
+  assert.equal(clearCalls.length, 1, 'one RPC for the whole batch');
+  assert.deepEqual(clearCalls[0].sort(), ['GewePlus:51720530884', 'tgBot:-1001414451955']);
+  assert.equal(registry.size, 1, 'the fresh row survives');
+  assert.match(result.text, /Deleted 2 scene row\(s\)/);
+  assert.match(result.text, /Client state cleared: 2 key\(s\)/);
+});
+
+test('batch prune: an unreadable session is skipped unless force is set', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
+  const { deps, deleted } = buildDeps({ rows: [row] });
+  deps.readSessionNode = async () => undefined;
+  deps.readSessionUpdatedAt = async () => undefined;
+
+  const guarded = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+  assert.equal(deleted.length, 0);
+  assert.match(guarded.text, /skipped: session unreadable/);
+
+  const forced = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: true },
+    ...deps,
+    clearClientState: async () => ({ ok: true, cleared: 0 }),
+  });
+  assert.equal(deleted.length, 1);
+  assert.match(forced.text, /Deleted 1 scene row/);
+  void row;
+});
+
+test('batch prune: a scene another agent still uses keeps its client gate state', async () => {
+  // 客户端 super gate 是场景级（state:<平台:群:用户>），没有 agent 维度。
+  // 删掉 A 的行不能把 B 还在用的 mode/occ 一起清掉。
+  const staleRow = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const siblingRow = groupRow({
+    agentId: 'orion',
+    sceneKey: 'GewePlus:51720530884',
+    lastSeenAt: NOW - 30 * 60 * 1000,
+  });
+  const calls = [];
+  const { deps, registry } = buildDeps({
+    rows: [staleRow, siblingRow],
+    sessions: {
+      ['public|' + buildStaleSceneSessionKey(staleRow, 'public')]: NOW - 200 * DAY,
+      ['orion|' + buildStaleSceneSessionKey(siblingRow, 'orion')]: NOW - 30 * 60 * 1000,
+    },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+    clearClientState: async (keys) => {
+      calls.push(keys);
+      return { ok: true, cleared: keys.length };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Deleted 1 scene row\(s\)/);
+  assert.deepEqual(calls, [], 'no RPC: the scene still has an agent row');
+  assert.match(result.text, /Client state kept for 1 scene\(s\)/);
+  assert.ok(registry.size > 0, 'the other agent row survives');
+});
+
+test('batch prune: clearing happens once the last agent row goes', async () => {
+  const left = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const right = groupRow({ agentId: 'orion', lastSeenAt: NOW - 210 * DAY });
+  const calls = [];
+  const { deps } = buildDeps({
+    rows: [left, right],
+    sessions: {
+      ['public|' + buildStaleSceneSessionKey(left, 'public')]: NOW - 200 * DAY,
+      ['orion|' + buildStaleSceneSessionKey(right, 'orion')]: NOW - 210 * DAY,
+    },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+    clearClientState: async (keys) => {
+      calls.push(keys);
+      return { ok: true, cleared: keys.length };
+    },
+  });
+  assert.deepEqual(calls, [['GewePlus:51720530884']]);
+  assert.match(result.text, /Client state cleared: 1 key\(s\)/);
+  assert.doesNotMatch(result.text, /Client state kept/);
+});
+
+test('prune: a single row on a shared scene leaves the client gate state alone', async () => {
+  const target = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const sibling = groupRow({ agentId: 'orion', lastSeenAt: NOW - 5 * 60 * 1000 });
+  const calls = [];
+  const { deps } = buildDeps({
+    rows: [target, sibling],
+    sessions: { ['public|' + buildStaleSceneSessionKey(target, 'public')]: NOW - 200 * DAY },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: 'GewePlus:51720530884', agentId: 'public', force: false },
+    ...deps,
+    clearClientState: async (keys) => {
+      calls.push(keys);
+      return { ok: true, cleared: keys.length };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, []);
+  assert.match(
+    result.text,
+    /Client state kept for 1 scene\(s\) with another agent row still in use/,
+  );
+});
+
+test('prune: the last row of a scene clears the client gate state', async () => {
+  const target = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const calls = [];
+  const { deps } = buildDeps({
+    rows: [target],
+    sessions: { ['public|' + buildStaleSceneSessionKey(target, 'public')]: NOW - 200 * DAY },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: 'GewePlus:51720530884', force: false },
+    ...deps,
+    clearClientState: async (keys) => {
+      calls.push(keys);
+      return { ok: true, cleared: 3 };
+    },
+  });
+  assert.deepEqual(calls, [['GewePlus:51720530884']]);
+  assert.match(result.text, /Client state cleared: 3 key\(s\)/);
+});
+
+test('batch prune: an older client without the RPC is reported, not fatal', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
+  const { deps } = buildDeps({
+    rows: [row],
+    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 400 * DAY },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+    clearClientState: async () => ({ ok: false, unsupported: true }),
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /too old to expose bncr.state.clear/);
+});
+
+test('list with a day window keeps the 72h default wording out of the header', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const { deps } = buildDeps({
+    rows: [row],
+    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 200 * DAY },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.match(result.text, /quiet 180d\+/);
+  assert.doesNotMatch(result.text, /quiet 72h/);
+  // The day views are clock only, and the header has to say so.
+  assert.match(result.text, /clock only/);
+  assert.doesNotMatch(result.text, /session missing\/archived/);
+});
+
+test('batch prune: an unknown RPC method on an old client reads as a version gap', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
+  const { deps } = buildDeps({
+    rows: [row],
+    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 400 * DAY },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+    clearClientState: async () => {
+      throw new Error('bncr client RPC method not found: bncr.state.clear');
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /too old to expose bncr.state.clear/);
+  assert.match(result.text, /Deleted 1 scene row\(s\)/);
+});
+
+test('batch prune: an archived session on a chat still in use is not swept', async () => {
+  // The single prune treats the anomaly as a candidate on its own; the sweep
+  // must not, or an operator who archived a session yesterday and kept talking
+  // would lose the scene row.
+  const row = groupRow({ lastSeenAt: NOW - 2 * DAY });
+  const { deps, deleted } = buildDeps({
+    rows: [row],
+    nodes: {
+      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+        exists: true,
+        archivedAt: NOW - DAY,
+        updatedAt: NOW - DAY,
+      },
+    },
+  });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+  assert.equal(deleted.length, 0);
+  assert.match(result.text, /No scene row is quiet 180d\+/);
+});
+
+test('prune persists the registry once, even when the purge step throws', async () => {
+  const rows = [
+    groupRow({ lastSeenAt: NOW - 400 * DAY }),
+    groupRow({
+      sceneKey: 'tgBot:-1001414451955',
+      platform: 'tgBot',
+      groupId: '-1001414451955',
+      groupName: 'BncrJS',
+      agentId: 'orion',
+      lastSeenAt: NOW - 500 * DAY,
+    }),
+  ];
+  const { deps } = buildDeps({
+    rows,
+    sessions: {
+      ['public|' + buildStaleSceneSessionKey(rows[0], 'public')]: NOW - 400 * DAY,
+      ['orion|' + buildStaleSceneSessionKey(rows[1], 'orion')]: NOW - 500 * DAY,
+    },
+  });
+  let saves = 0;
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+    purgeSessionState: () => {
+      throw new Error('purge exploded');
+    },
+    onSceneChange: () => {
+      saves += 1;
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Deleted 2 scene row\(s\)/);
+  assert.equal(saves, 1, 'one save per sweep, not one per row');
+
+  let singleSaves = 0;
+  const single = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: 'GewePlus:51720530884', force: true },
+    ...buildDeps({ rows: [groupRow({ lastSeenAt: NOW - 400 * DAY })] }).deps,
+    purgeSessionState: () => {
+      throw new Error('purge exploded');
+    },
+    onSceneChange: () => {
+      singleSaves += 1;
+    },
+  });
+  assert.equal(single.ok, true);
+  assert.equal(singleSaves, 1);
+});
+
+test('parse: /bncr stale orphans is its own view, not a row filter', () => {
+  assert.deepEqual(parseStaleScenesCommand(command('stale', 'orphans')), {
+    matched: true,
+    valid: true,
+    command: { action: 'orphans' },
+  });
+  // 过滤器列表不受影响：orphans 比对的是客户端表，不是场景行。
+  assert.equal(STALE_SCENES_FILTERS.includes('orphans'), false);
+  assert.match(STALE_SCENES_HELP_TEXT, /\/bncr stale orphans/);
+});
+
+test('orphans: lists client gate rows whose scene row is gone, and nothing else', async () => {
+  const { deps, registry, deleted, purged } = buildDeps({
+    rows: [groupRow({ lastSeenAt: NOW - DAY })],
+  });
+  const before = registry.size;
+  const result = await executeStaleScenesCommand({
+    command: { action: 'orphans' },
+    ...deps,
+    listClientState: async () => ({
+      ok: true,
+      entries: [
+        {
+          sceneKey: 'GewePlus:51720530884',
+          scope: 'group-scope',
+          enabled: true,
+          mode: 'admin',
+          rev: NOW - 2 * DAY,
+        },
+        {
+          sceneKey: 'qq:2705342113',
+          scope: 'direct-scope',
+          enabled: true,
+          mode: 'all',
+          rev: NOW - 3 * DAY,
+        },
+        { sceneKey: '__media', scope: 'internal', enabled: true, mode: 'all', rev: NOW },
+      ],
+      invalid: 2,
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Orphan client state — client has, scene table has none/);
+  assert.match(result.text, /1 of 3 state entries/);
+  assert.match(result.text, /2 unreadable state key\(s\) skipped\./);
+  // 有场景行的那个不算孤儿，内部配置行也不算。
+  assert.equal(result.text.includes('GewePlus:51720530884'), false);
+  assert.equal(result.text.includes('__media'), false);
+  assert.match(result.text, /qq:2705342113/);
+  assert.match(result.text, /gate on · opened .* \(\d+d\) · mode all/);
+  // 只读：不删会话、不删行、不动场景表。
+  assert.deepEqual(deleted, []);
+  assert.deepEqual(purged, []);
+  assert.equal(registry.size, before);
+});
+
+test('orphans: platform case differences never fake an orphan', async () => {
+  const { deps } = buildDeps({ rows: [groupRow({ lastSeenAt: NOW - DAY })] });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'orphans' },
+    ...deps,
+    listClientState: async () => ({
+      ok: true,
+      entries: [{ sceneKey: 'geweplus:51720530884', enabled: false, rev: 0 }],
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /None: every client scene gate state has a scene row/);
+});
+
+test('orphans: an empty client table says so instead of inventing rows', async () => {
+  const { deps } = buildDeps({ rows: [groupRow()] });
+  const result = await executeStaleScenesCommand({
+    command: { action: 'orphans' },
+    ...deps,
+    listClientState: async () => ({ ok: true, entries: [] }),
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /None: the client holds no scene gate state at all./);
+});
+
+test('orphans: an old client or a failed read is reported, not swallowed', async () => {
+  const { deps } = buildDeps({ rows: [] });
+  const tooOld = await executeStaleScenesCommand({
+    command: { action: 'orphans' },
+    ...deps,
+    listClientState: async () => {
+      throw new Error('bncr client RPC failed: method not found');
+    },
+  });
+  assert.equal(tooOld.ok, false);
+  assert.match(tooOld.text, /too old to expose bncr.state.list/);
+
+  const unsupported = await executeStaleScenesCommand({
+    command: { action: 'orphans' },
+    ...deps,
+    listClientState: async () => ({ ok: false, unsupported: true }),
+  });
+  assert.equal(unsupported.ok, false);
+  assert.match(unsupported.text, /too old to expose bncr.state.list/);
+
+  const noRpc = await executeStaleScenesCommand({ command: { action: 'orphans' }, ...deps });
+  assert.equal(noRpc.ok, false);
+  assert.match(noRpc.text, /No Bncr client RPC available/);
+
+  const failed = await executeStaleScenesCommand({
+    command: { action: 'orphans' },
+    ...deps,
+    listClientState: async () => ({ ok: false, error: 'store locked' }),
+  });
+  assert.equal(failed.ok, false);
+  assert.match(failed.text, /Client gate read failed: store locked/);
+});
+
+test('client RPC envelope:只认 { result } 这一层，其余形状当空结果', () => {
+  assert.deepEqual(unwrapClientRpcResult({ result: { ok: true, entries: [] } }), {
+    ok: true,
+    entries: [],
+  });
+  assert.deepEqual(unwrapClientRpcResult({ result: null }), {});
+  assert.deepEqual(unwrapClientRpcResult({ result: 'nope' }), {});
+  assert.deepEqual(unwrapClientRpcResult(null), {});
+  assert.deepEqual(unwrapClientRpcResult(undefined), {});
+});
+
+test('client RPC envelope:bncr.state.list 的结果收敛成维护视图读的形状', () => {
+  const list = normalizeClientSceneStateList({
+    ok: true,
+    invalid: 2,
+    entries: [
+      { sceneKey: '  GewePlus:123  ', scope: 'aa', enabled: true, mode: 'admin', rev: 170 },
+      // 空场景键、非对象条目直接丢掉，不能让下游拿 undefined 去比场景表
+      { sceneKey: '   ', enabled: true },
+      { sceneKey: 'qq:9', enabled: 'yes', mode: 5, rev: '170' },
+      null,
+      'nope',
+    ],
+  });
+  assert.equal(list.ok, true);
+  assert.equal(list.invalid, 2);
+  assert.deepEqual(
+    list.entries.map((entry) => entry.sceneKey),
+    ['GewePlus:123', 'qq:9'],
+  );
+  assert.equal(list.entries[0].mode, 'admin');
+  assert.equal(list.entries[0].rev, 170);
+  // 类型不对的字段不硬转：enabled 只有 true 才算开，mode/rev 非字符串非数字就不带
+  assert.equal(list.entries[1].enabled, false);
+  assert.equal('mode' in list.entries[1], false);
+  assert.equal('rev' in list.entries[1], false);
+  // ok:false / unsupported / error 照传，让命令层给出对应文案
+  const failed = normalizeClientSceneStateList({ ok: false, error: 'boom' });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error, 'boom');
+  assert.deepEqual(failed.entries, []);
+  assert.equal(normalizeClientSceneStateList({ unsupported: true }).unsupported, true);
+});
+
+test('parse: /bncr prune state takes a bare SceneId and an optional force', () => {
+  assert.deepEqual(parseStaleScenesCommand(command('prune', 'state HumanTG:8561283152')), {
+    matched: true,
+    valid: true,
+    command: { action: 'prune-state', sceneKey: 'HumanTG:8561283152', force: false },
+  });
+  assert.deepEqual(parseStaleScenesCommand(command('prune', 'state HumanTG:8561283152 force')), {
+    matched: true,
+    valid: true,
+    command: { action: 'prune-state', sceneKey: 'HumanTG:8561283152', force: true },
+  });
+  // 客户端门控是场景级：带 agent 会连坐兄弟 agent，按用法错误处理
+  assert.equal(
+    parseStaleScenesCommand(command('prune', 'state HumanTG:8561283152 public')).valid,
+    false,
+  );
+  assert.equal(parseStaleScenesCommand(command('prune', 'state')).valid, false);
+});
+
+function orphanDeps(args = {}) {
+  const built = buildDeps({ rows: args.rows ?? [] });
+  const cleared = [];
+  built.deps.listClientState = async () => {
+    if (args.onList) args.onList(built.registry);
+    return (
+      args.listed ?? {
+        ok: true,
+        entries: [
+          { sceneKey: 'HumanTG:8561283152', enabled: true, mode: 'admin', rev: NOW - 3 * DAY },
+        ],
+      }
+    );
+  };
+  built.deps.clearClientState = async (sceneKeys) => {
+    cleared.push(...sceneKeys);
+    if (args.onClear) args.onClear(built.registry);
+    return args.clearResult ?? { ok: true, cleared: sceneKeys.length };
+  };
+  return { ...built, cleared };
+}
+
+const runPruneState = (deps, spec) =>
+  executeStaleScenesCommand({ command: { action: 'prune-state', ...spec }, ...deps });
+
+test('execute: prune state clears only the client gate for an orphan scene', async () => {
+  const { deps, cleared, deleted, purged, registry } = orphanDeps();
+  const result = await runPruneState(deps, { sceneKey: 'HumanTG:8561283152', force: false });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Cleared 1 client gate key/);
+  assert.deepEqual(cleared, ['HumanTG:8561283152']);
+  assert.deepEqual(deleted, []);
+  assert.deepEqual(purged, []);
+  assert.equal(registry.size, 0);
+});
+
+test('execute: prune state refuses while the scene table still has a row', async () => {
+  const { deps, cleared } = orphanDeps({ rows: [groupRow({ sceneKey: 'HumanTG:8561283152' })] });
+  const result = await runPruneState(deps, { sceneKey: 'HumanTG:8561283152', force: false });
+  assert.equal(result.ok, false);
+  assert.match(result.text, /Scene table still has 1 row/);
+  assert.match(result.text, /\/bncr prune HumanTG:8561283152/);
+  assert.deepEqual(cleared, []);
+});
+
+test('execute: a gate opened inside 72h needs force, and force clears it', async () => {
+  const fresh = {
+    ok: true,
+    entries: [{ sceneKey: 'HumanTG:8561283152', enabled: true, mode: 'admin', rev: NOW - DAY }],
+  };
+  const refused = orphanDeps({ listed: fresh });
+  const blocked = await runPruneState(refused.deps, {
+    sceneKey: 'HumanTG:8561283152',
+    force: false,
+  });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.text, /needs force/);
+  assert.deepEqual(refused.cleared, []);
+
+  const forced = orphanDeps({ listed: fresh });
+  const clearedResult = await runPruneState(forced.deps, {
+    sceneKey: 'HumanTG:8561283152',
+    force: true,
+  });
+  assert.equal(clearedResult.ok, true);
+  assert.deepEqual(forced.cleared, ['HumanTG:8561283152']);
+});
+
+test('execute: prune state reports a missing entry, a race, and an old client', async () => {
+  const missing = orphanDeps({ listed: { ok: true, entries: [] } });
+  const missingResult = await runPruneState(missing.deps, {
+    sceneKey: 'HumanTG:8561283152',
+    force: true,
+  });
+  assert.equal(missingResult.ok, false);
+  assert.match(missingResult.text, /No client gate state/);
+
+  // 读门控时场景行被建出来：不是孤儿，什么都不清
+  const raced = orphanDeps({
+    onList: (registry) => setSceneRecord(registry, groupRow({ sceneKey: 'HumanTG:8561283152' })),
+  });
+  const racedResult = await runPruneState(raced.deps, {
+    sceneKey: 'HumanTG:8561283152',
+    force: true,
+  });
+  assert.equal(racedResult.ok, false);
+  assert.match(racedResult.text, /A scene row appeared/);
+  assert.deepEqual(raced.cleared, []);
+
+  const old = orphanDeps({ listed: { unsupported: true } });
+  const oldResult = await runPruneState(old.deps, {
+    sceneKey: 'HumanTG:8561283152',
+    force: true,
+  });
+  assert.equal(oldResult.ok, false);
+  assert.match(oldResult.text, /too old/);
 });

@@ -3,6 +3,7 @@ import type { BncrRoute, OutboxEntry } from '../core/types.ts';
 import type { BncrConversationHistoryMap } from '../messaging/inbound/conversation-history.ts';
 import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from '../messaging/inbound/parse.ts';
+import type { BncrClientSceneStateList } from '../messaging/inbound/stale-scenes-command.ts';
 import type { ReplyPayloadInput } from '../messaging/outbound/reply-enqueue.ts';
 import type { OutboundReplyTargetPolicy } from '../messaging/outbound/reply-target-policy.ts';
 import type { createBncrInboundHandlersComponent } from './channel-components.ts';
@@ -161,6 +162,17 @@ export function buildBncrInboundSurfaceRuntime(deps: {
     agentId: string;
     sessionKey: string | null;
   }) => Promise<void> | void;
+  /** Ask the Bncr client to drop its own per-scene state for these scenes. */
+  clearClientSceneState?: (args: {
+    sceneKeys: string[];
+    accountId: string;
+  }) => Promise<
+    { ok?: boolean; cleared?: number; unsupported?: boolean; error?: string } | undefined | null
+  >;
+  /** Read the Bncr client's own scene gate table (orphan listing). */
+  listClientSceneState?: (args: {
+    accountId: string;
+  }) => Promise<BncrClientSceneStateList | undefined | null>;
   buildCanonicalSessionKey: (route: BncrRoute) => string;
   fileRecvTransfers: Parameters<typeof createBncrFileInboundHandlers>[0]['fileRecvTransfers'];
   resolveInboundFileTransferMaxBytes: (accountId: string) => number;

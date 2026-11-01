@@ -46,21 +46,31 @@ export type BncrSceneAdminCommand =
 
 const GROUP_REPLY_MODES = new Set<BncrGroupReplyMode>(['admin', 'mention', 'hybrid', 'all']);
 
-const MODE_USAGE_TEXT =
-  'Usage: /bncr mode [<agentId>] [<SceneId>] | /bncr mode <admin|mention|hybrid|all|clear> [<agentId>] [<SceneId>]';
+const MODE_USAGE_TEXT = [
+  'Usage:',
+  '  /bncr mode help',
+  '  /bncr mode [<agentId>] [<SceneId>]',
+  '  /bncr mode <admin|mention|hybrid|all|clear> [<agentId>] [<SceneId>]',
+].join('\n');
 
-const HISTORY_LIMIT_USAGE_TEXT =
-  'Usage: /bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]';
+const HISTORY_LIMIT_USAGE_TEXT = [
+  'Usage:',
+  '  /bncr history-help',
+  '  /bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]',
+].join('\n');
 
-const HISTORY_FORCE_USAGE_TEXT =
-  'Usage: /bncr history-force [on|off|clear] [<agentId>] [<SceneId>]';
+const HISTORY_FORCE_USAGE_TEXT = [
+  'Usage:',
+  '  /bncr history-help',
+  '  /bncr history-force [on|off|clear] [<agentId>] [<SceneId>]',
+].join('\n');
 
 const DOWNLOAD_MEDIA_USAGE_TEXT =
   'Usage: /bncr download-media [on|off|clear] [<agentId>] [<SceneId>]';
 
 const GLOBAL_SCENE_KEY = '__global__';
 
-const MODE_HELP_TEXT = [
+export const MODE_HELP_TEXT = [
   '💬 Bncr Group Reply Mode Configuration',
   '',
   'Modes:',
@@ -71,26 +81,37 @@ const MODE_HELP_TEXT = [
   '  • all: 全员|消息上送并逐条回复',
   '',
   'Specified messages include:',
-  '  • @bot',
-  '  • reply to bot',
-  '  • platform-marked should-respond messages',
+  '  • @bot 提及',
+  '  • 引用了 bot 的消息',
+  '  • 平台标记为需要回复的消息',
   '',
-  'Usage:',
+  'Commands:',
   '  • /bncr mode [<agentId>] [<SceneId>]',
-  '    Show the mode; every agent row is listed when they differ',
+  '    查看当前模式；各 agent 不一致时按 agent 逐行列出',
   '  • /bncr mode <admin|mention|hybrid|all|clear> [<agentId>] [<SceneId>]',
-  '    Without <agentId> the change applies to every agent watching the scene',
+  '    省略 <agentId> 时，该场景下的所有 agent 一起改',
+  '',
+  'Format:',
+  '  • <agentId> — 只改盯这个场景的某个 agent；省略就是该场景下所有 agent',
+  '  • <SceneId> — 平台:群id 或 平台:用户id；省略就是当前会话',
 ].join('\n');
 
 export const HISTORY_HELP_TEXT = [
   '📋 Bncr Conversation History Configuration',
   '',
+  'About:',
+  '  • 控制这个场景在会话里带多少条历史消息。',
+  '  • 指定别的 agent 或别的场景需要管理员。',
+  '',
   'Commands:',
   '  • /bncr history-limit [<number>|clear] [<agentId>] [<SceneId>]',
-  '    Set history limit (default: 50, minimum: 2)',
-  '  • /bncr history-force on|off|clear [<agentId>] [<SceneId>]',
-  '    When on, overflow triggers auto context at limit (default: on)',
-  '    When off, oldest messages trim silently without context',
+  '    设置历史上限；缺省 50，最小 2',
+  '  • /bncr history-force [on|off|clear] [<agentId>] [<SceneId>]',
+  '    溢出时是否自动整理上下文；缺省 on，off 则直接丢掉最早的消息',
+  '',
+  'Format:',
+  '  • <agentId> — 只改盯这个场景的某个 agent；省略就是该场景下所有 agent',
+  '  • <SceneId> — 平台:群id 或 平台:用户id；省略就是当前会话',
 ].join('\n');
 
 export type ParsedSceneAdminCommand =
