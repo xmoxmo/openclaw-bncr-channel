@@ -131,6 +131,8 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
   listClientSceneState?: (args: {
     accountId: string;
   }) => Promise<BncrClientSceneStateList | undefined | null>;
+  /** 维护命令读库：把其他 agent 实例写入的场景行并进本实例视图。 */
+  refreshSceneRegistryFromStore?: () => void | Promise<void>;
   fileRecvTransfers: Parameters<
     typeof createBncrFileInboundHandlersComponent
   >[0]['fileRecvTransfers'];
@@ -189,6 +191,7 @@ export function createBncrInboundSurfaceHandlersGroup(runtime: {
     purgeSceneSession: runtime.purgeSceneSession,
     clearClientSceneState: runtime.clearClientSceneState,
     listClientSceneState: runtime.listClientSceneState,
+    refreshSceneRegistryFromStore: runtime.refreshSceneRegistryFromStore,
   });
 
   return {

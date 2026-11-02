@@ -8,7 +8,11 @@ import test from 'node:test';
 
 import { normalizePersistedOutboxEntry } from '../../src/core/persisted-outbox-entry.ts';
 import { removeBncrConversationHistoryMessageIds } from '../../src/messaging/inbound/conversation-history.ts';
-import { deleteSceneRecord, resolveSceneRecord } from '../../src/plugin/scene-registry.ts';
+import {
+  deleteSceneRecord,
+  resolveSceneRecord,
+  setSceneRecord,
+} from '../../src/plugin/scene-registry.ts';
 import { createBncrSqliteStateDatabase } from '../../src/plugin/sqlite-state.ts';
 import { createBncrStateStore } from '../../src/plugin/state-store.ts';
 
@@ -2398,5 +2402,91 @@ test('createBncrStateStore keeps a scene row another process re-created after lo
   assert.equal(publicRow?.lastSeenAt, 500, 'the newer re-created row survives the stale delete');
   reloaded.close();
   await store.closeSqliteLifecycle();
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('mergeSceneRegistryFromSqlite exposes rows another agent instance wrote later', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-scene-merge-'));
+  const statePath = join(dir, 'state.json');
+  const dbPath = join(dir, 'state.sqlite3');
+  const initial = {
+    outbox: [],
+    deadLetter: [],
+    sessionRoutes: [],
+    sceneRegistry: [
+      {
+        sceneKey: 'tgBot:-2002',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-2002',
+        groupName: 'wind_share-orion',
+        agentId: 'orion',
+        lastSeenAt: 100,
+      },
+    ],
+    lastSessionByAccount: [],
+    lastActivityByAccount: [],
+    lastInboundByAccount: [],
+    lastOutboundByAccount: [],
+    lastDriftSnapshot: null,
+  };
+  await writeFile(statePath, JSON.stringify(initial), 'utf8');
+
+  const orion = createStore();
+  orion.runtime.getStatePath = () => statePath;
+  orion.runtime.createSqliteState = () => createBncrSqliteStateDatabase(dbPath);
+  await orion.store.loadState();
+
+  // 第二个 agent 实例：同一个 state 目录，后写入 public 行
+  const publicAgent = createStore();
+  publicAgent.runtime.getStatePath = () => statePath;
+  publicAgent.runtime.createSqliteState = () => createBncrSqliteStateDatabase(dbPath);
+  await publicAgent.store.loadState();
+  setSceneRecord(publicAgent.runtime.sceneRegistry, {
+    sceneKey: 'tgBot:-2002',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-2002',
+    groupName: 'wind_share-orion',
+    agentId: 'public',
+    lastSeenAt: 200,
+  });
+  await publicAgent.store.flushState();
+
+  // 复现手工现场：orion 实例的内存视图里没有 public 行
+  assert.equal(
+    resolveSceneRecord(orion.runtime.sceneRegistry, 'tgBot:-2002', 'public'),
+    undefined,
+    'the later row from another agent instance must be invisible before the merge',
+  );
+
+  const merged = await orion.store.mergeSceneRegistryFromSqlite();
+  assert.ok(merged >= 1, 'merge must report the rows it pulled from the store');
+  assert.equal(
+    resolveSceneRecord(orion.runtime.sceneRegistry, 'tgBot:-2002', 'public')?.agentId,
+    'public',
+    'after the merge the other agent row must be a valid maintenance target',
+  );
+
+  // 只让更新的行覆盖：本实例内存里的行比库里新时保持原样
+  setSceneRecord(orion.runtime.sceneRegistry, {
+    sceneKey: 'tgBot:-2002',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-2002',
+    groupName: 'wind_share-orion',
+    agentId: 'orion',
+    lastSeenAt: 999,
+  });
+  await orion.store.mergeSceneRegistryFromSqlite();
+  assert.equal(
+    resolveSceneRecord(orion.runtime.sceneRegistry, 'tgBot:-2002', 'orion')?.lastSeenAt,
+    999,
+    'a newer in-memory row must not be overwritten by the store copy',
+  );
+
   await rm(dir, { recursive: true, force: true });
 });

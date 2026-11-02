@@ -2738,6 +2738,18 @@ class BncrBridgeRuntime {
     return normalizeClientSceneStateList(unwrapClientRpcResult(response));
   }
 
+  /**
+   * Maintenance commands read the store before they judge.
+   *
+   * Every agent instance keeps its own in-memory scene registry, so a row that
+   * another instance wrote after this one started would stay invisible and
+   * prune/stale would report "no scene row". Merge the SQLite control state in
+   * first; a store failure falls back to the in-memory view.
+   */
+  private async refreshSceneRegistryFromStore(): Promise<void> {
+    await this.stateStore.mergeSceneRegistryFromSqlite();
+  }
+
   resolveRouteBySession(sessionKey: string, accountId: string): BncrRoute | null {
     return this.targetRuntime.resolveRouteBySession(sessionKey, accountId);
   }
@@ -3318,6 +3330,7 @@ class BncrBridgeRuntime {
       purgeSceneSession: (args) => this.purgeSceneSessionState(args),
       clearClientSceneState: (args) => this.clearClientSceneState(args),
       listClientSceneState: (args) => this.listClientSceneStates(args),
+      refreshSceneRegistryFromStore: () => this.refreshSceneRegistryFromStore(),
       buildCanonicalSessionKey: (route: BncrRoute) =>
         buildCanonicalBncrSessionKey(route, this.servingAgentId()),
       fileRecvTransfers: this.fileRecvTransfers,

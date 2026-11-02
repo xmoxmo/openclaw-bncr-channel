@@ -251,6 +251,8 @@ export function createBncrInboundHandlersComponent(runtime: {
   listClientSceneState?: (args: {
     accountId: string;
   }) => Promise<BncrClientSceneStateList | undefined | null>;
+  /** 维护命令读库：把其他 agent 实例写入的场景行并进本实例视图。 */
+  refreshSceneRegistryFromStore?: () => void | Promise<void>;
 }) {
   return createBncrInboundHandlers({
     channelId: runtime.channelId,
@@ -330,6 +332,7 @@ export function createBncrInboundHandlersComponent(runtime: {
         purgeSceneSession: runtime.purgeSceneSession,
         clearClientSceneState: runtime.clearClientSceneState,
         listClientSceneState: runtime.listClientSceneState,
+        refreshSceneRegistryFromStore: runtime.refreshSceneRegistryFromStore,
         logger: {
           warn: (msg: string) => emitBncrLogLine('warn', msg),
           error: (msg: string) => emitBncrLogLine('error', msg),

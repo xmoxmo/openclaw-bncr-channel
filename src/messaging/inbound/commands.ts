@@ -148,6 +148,11 @@ export async function handleBncrNativeCommand(params: {
   listClientSceneState?: (args: {
     accountId: string;
   }) => Promise<BncrClientSceneStateList | undefined | null>;
+  /**
+   * 维护命令读库：把库里其他 agent 写入的场景行并进本实例视图。
+   * 每个 agent 实例各持一份内存 registry，跨 agent 的查询必须先合并再判定。
+   */
+  refreshSceneRegistryFromStore?: () => void | Promise<void>;
   logger?: BncrInboundLogger;
 }): Promise<
   | { handled: false }
@@ -170,6 +175,8 @@ export async function handleBncrNativeCommand(params: {
     scheduleSave,
     clearClientSceneState,
     listClientSceneState,
+    refreshSceneRegistryFromStore,
+    logger,
   } = params;
   const { accountId, route, peer, clientId, extracted, msgId } = parsed;
 
@@ -418,6 +425,19 @@ export async function handleBncrNativeCommand(params: {
         | 'full'
         | undefined)
     : undefined;
+  // 维护命令读库：每个 agent 实例只持有自己那份内存快照，跨 agent 的查询
+  // 与清理必须先并入库里其他实例写入的场景行，读库失败就沿用内存视图。
+  if (refreshSceneRegistryFromStore) {
+    try {
+      await refreshSceneRegistryFromStore();
+    } catch (error) {
+      logger?.warn?.(
+        `bncr scene registry refresh failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const knownAgentIds = new Set(
     Array.from(sceneRegistry.values())
       .map((row) => String(row.agentId ?? '').trim())

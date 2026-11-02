@@ -80,6 +80,18 @@ test('group labels read 平台 · 群名 · 群id and fall back to the id alone'
     formatBncrSceneLabel({ platform: 'tgBot', id: '-1001', name: '-1001' }),
     'tgBot · -1001',
   );
+  assert.equal(
+    formatBncrSceneLabel({ platform: 'wxBot', id: 'o9cq800beblqVFzolmCNUHLP1LeM@im.wechat' }),
+    'wxBot · o9cq800beblqVFzolmCNUHLP1LeM@im.wechat',
+  );
+  assert.equal(
+    formatBncrSceneLabel({
+      platform: 'wxBot',
+      id: 'o9cq800beblqVFzolmCNUHLP1LeM@im.wechat',
+      name: 'o9cq800beblqVFzolmCNUHLP1LeM@im.wechat',
+    }),
+    'wxBot · o9cq800beblqVFzolmCNUHLP1LeM@im.wechat',
+  );
 });
 
 test('a custom name replaces the whole automatic label', () => {

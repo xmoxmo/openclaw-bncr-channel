@@ -99,6 +99,8 @@ export async function dispatchBncrInbound(params: {
   listClientSceneState?: (args: {
     accountId: string;
   }) => Promise<BncrClientSceneStateList | undefined | null>;
+  /** 维护命令读库：把其他 agent 实例写入的场景行并进本实例视图。 */
+  refreshSceneRegistryFromStore?: () => void | Promise<void>;
   logger?: BncrInboundLogger;
 }) {
   const {
@@ -127,6 +129,7 @@ export async function dispatchBncrInbound(params: {
     purgeSceneSession,
     clearClientSceneState,
     listClientSceneState,
+    refreshSceneRegistryFromStore,
     logger,
   } = params;
   const historyShardQueue = params.historyShardQueue;
@@ -150,6 +153,7 @@ export async function dispatchBncrInbound(params: {
     scheduleSave,
     clearClientSceneState,
     listClientSceneState,
+    refreshSceneRegistryFromStore,
     logger,
   });
   if (nativeCommand.handled && !nativeCommand.fallbackToAgent) {

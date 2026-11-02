@@ -83,8 +83,12 @@ export function formatBncrSceneLabel(args: {
   if (custom) return `${platform}${join}${custom}`;
 
   const id = String(args.id ?? '').trim();
+  // 平台没给昵称时会把 id 原样当 name 下发。先按原始值比较再截断，
+  // 否则超长 id 被截成 32 字后判定失效，同一串会在 label 里出现两次。
+  const rawName = String(args.name ?? '').trim();
+  if (rawName && id && rawName === id) return `${platform}${join}${id}`;
   const name = sanitizeBncrDisplayName(args.name, maxChars);
-  if (name && id && name === id) return `${platform}${join}${name}`;
+  if (name && id && name === id) return `${platform}${join}${id}`;
   if (name && id) return `${platform}${join}${name}${join}${id}`;
   if (name) return `${platform}${join}${name}`;
   if (id) return `${platform}${join}${id}`;

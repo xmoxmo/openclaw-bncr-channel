@@ -41,7 +41,11 @@ import type {
   PersistedState as BncrPersistedState,
   BncrSceneRecord,
 } from './channel-runtime-types.ts';
-import { resolveSceneRecord, setSceneRecord } from './scene-registry.ts';
+import {
+  buildAgentSceneRegistryKey,
+  resolveSceneRecord,
+  setSceneRecord,
+} from './scene-registry.ts';
 import type {
   BncrHistoryShardCreateInput,
   BncrHistoryShardCreateResult,
@@ -390,6 +394,56 @@ export function createBncrStateStore(runtime: {
         },
       ]),
     );
+  }
+
+  /**
+   * 维护命令读库：把 SQLite 控制态里其他 agent 写入的场景行并进本实例视图。
+   * 逐行合并、只让更新的行覆盖，避免冲掉本实例尚未落盘的改动。
+   * 返回并入的行数；SQLite 控制态不可用时返回 0，调用方沿用内存视图。
+   */
+  async function mergeSceneRegistryFromSqlite(): Promise<number> {
+    const statePath = runtime.getStatePath();
+    if (!statePath) return 0;
+    let sqlite: BncrSqliteStateDatabase | undefined;
+    try {
+      sqlite = await resolveSqliteState(statePath);
+    } catch {
+      return 0;
+    }
+    if (!sqlite) return 0;
+    const storeMode = sqlite.getStoreMode();
+    if (storeMode !== 'dual' && storeMode !== 'sqlite') return 0;
+    if (typeof sqlite.isControlStateImported === 'function' && !sqlite.isControlStateImported()) {
+      return 0;
+    }
+    let control: BncrSqliteControlState;
+    try {
+      control = sqlite.loadControlState();
+    } catch {
+      return 0;
+    }
+    let merged = 0;
+    for (const row of control.sceneRegistry) {
+      const key = buildAgentSceneRegistryKey(row.sceneKey, row.agentId ?? '');
+      const existing = runtime.sceneRegistry.get(key);
+      if (existing && (existing.lastSeenAt ?? 0) >= (row.lastSeenAt ?? 0)) continue;
+      setSceneRecord(runtime.sceneRegistry, row);
+      merged += 1;
+    }
+    if (merged === 0) return 0;
+    loadedSceneIndex = new Map(
+      Array.from(runtime.sceneRegistry.entries()).map(([key, record]) => [
+        key,
+        {
+          sceneKey: record.sceneKey,
+          ...(runtime.asString(record.agentId || '').trim()
+            ? { agentId: runtime.asString(record.agentId || '').trim() }
+            : {}),
+          lastSeenAt: record.lastSeenAt,
+        },
+      ]),
+    );
+    return merged;
   }
 
   function collectRemovedSceneRecords(): Array<{
@@ -1387,6 +1441,7 @@ export function createBncrStateStore(runtime: {
     dumpPersistedSessionRoutes,
     loadPersistedSceneRegistry,
     dumpPersistedSceneRegistry,
+    mergeSceneRegistryFromSqlite,
     collectRemovedSceneRecords,
     loadPersistedConversationHistories,
     dumpPersistedConversationHistories,

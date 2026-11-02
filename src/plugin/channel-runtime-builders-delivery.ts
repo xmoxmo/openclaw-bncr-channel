@@ -173,6 +173,8 @@ export function buildBncrInboundSurfaceRuntime(deps: {
   listClientSceneState?: (args: {
     accountId: string;
   }) => Promise<BncrClientSceneStateList | undefined | null>;
+  /** 维护命令读库：把其他 agent 实例写入的场景行并进本实例视图。 */
+  refreshSceneRegistryFromStore?: () => void | Promise<void>;
   buildCanonicalSessionKey: (route: BncrRoute) => string;
   fileRecvTransfers: Parameters<typeof createBncrFileInboundHandlers>[0]['fileRecvTransfers'];
   resolveInboundFileTransferMaxBytes: (accountId: string) => number;

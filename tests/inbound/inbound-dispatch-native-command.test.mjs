@@ -3756,3 +3756,66 @@ test('admin /bncr prune reports an unknown scene instead of deleting', async () 
   assert.equal(enqueueCalls.length, 1);
   assert.match(enqueueCalls[0].payload.text, /Scene not found: tgBot:-1001/);
 });
+
+test('maintenance prune merges rows another agent wrote before judging', async () => {
+  const { api } = createInboundApiStub();
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-4',
+    platform: 'tgBot',
+    groupId: '-2002',
+    userId: '10001',
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr prune tgBot:-2002 public force',
+    mimeType: 'text/plain',
+    msgId: 'slash-prune-merge-1',
+  });
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-2002',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-2002',
+    agentId: 'orion',
+    lastSeenAt: Date.now(),
+  });
+  const enqueueCalls = [];
+  let refreshed = 0;
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    sceneRegistry,
+    now: () => Date.now(),
+    refreshSceneRegistryFromStore: () => {
+      refreshed += 1;
+      // 另一个 agent 实例在本次启动之后写入的行，只能在读库时看到。
+      setSceneRecord(sceneRegistry, {
+        sceneKey: 'tgBot:-2002',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-2002',
+        agentId: 'public',
+        lastSeenAt: Date.now() - 1000,
+      });
+    },
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+  assert.equal(refreshed, 1, 'maintenance commands must refresh the scene view once');
+  assert.equal(enqueueCalls.length, 1);
+  assert.doesNotMatch(
+    enqueueCalls[0].payload.text,
+    /has no scene row/,
+    'the refreshed public row must be a valid prune target',
+  );
+});
