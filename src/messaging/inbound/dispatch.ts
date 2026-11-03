@@ -135,6 +135,7 @@ export async function dispatchBncrInbound(params: {
   const historyShardQueue = params.historyShardQueue;
   const { accountId, clientId, msgId, extracted, mimeType, peer } = parsed;
   let shouldDispatch = initialShouldDispatch || forceSilentHistoryFlush;
+  const currentTurn = initialShouldDispatch === true && forceSilentHistoryFlush !== true;
 
   const nativeCommand = await handleBncrNativeCommand({
     api,
@@ -175,6 +176,7 @@ export async function dispatchBncrInbound(params: {
     parsed,
     canonicalAgentId,
     resolvedAgentId,
+    currentTurn,
     rememberSessionRoute,
   });
   const {

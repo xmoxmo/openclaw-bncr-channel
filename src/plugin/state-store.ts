@@ -462,6 +462,55 @@ export function createBncrStateStore(runtime: {
     return Array.from(runtime.sceneRegistry.values()).sort((a, b) => a.lastSeenAt - b.lastSeenAt);
   }
 
+  function normalizePersistedHistoryMediaEntry(
+    item: Partial<BncrPersistedConversationHistoryMediaEntry>,
+  ): BncrPersistedConversationHistoryMediaEntry | null {
+    const path = runtime.asString(item.path || '').trim();
+    const url = runtime.asString(item.url || '').trim();
+    const sourceRef = runtime.asString(item.sourceRef || '').trim();
+    const storedPath = runtime.asString(item.storedPath || '').trim();
+    if (!path && !url && !sourceRef && !storedPath) return null;
+    const contentType = runtime.asString(item.contentType || '').trim();
+    const fileName = runtime.asString(item.fileName || '').trim();
+    const kind = runtime.asString(item.kind || '').trim();
+    const messageId = runtime.asString(item.messageId || '').trim();
+    const mediaId = runtime.asString(item.mediaId || '').trim();
+    const originAgentId = runtime.asString(item.originAgentId || '').trim();
+    const sourceKind =
+      item.sourceKind === 'local' || item.sourceKind === 'url' || item.sourceKind === 'buffer'
+        ? item.sourceKind
+        : undefined;
+    const attachmentScope =
+      item.attachmentScope === 'current' || item.attachmentScope === 'historical'
+        ? item.attachmentScope
+        : 'historical';
+    const status =
+      item.status === 'ready' ||
+      item.status === 'deferred' ||
+      item.status === 'fetch_failed' ||
+      item.status === 'oversize' ||
+      item.status === 'unavailable'
+        ? item.status
+        : undefined;
+    const sizeBytes = runtime.finiteNumberOr(item.sizeBytes, 0);
+    return {
+      ...(path ? { path } : {}),
+      ...(url ? { url } : {}),
+      ...(contentType ? { contentType } : {}),
+      ...(fileName ? { fileName } : {}),
+      ...(kind ? { kind: kind as BncrPersistedConversationHistoryMediaEntry['kind'] } : {}),
+      ...(messageId ? { messageId } : {}),
+      ...(mediaId ? { mediaId } : {}),
+      ...(originAgentId ? { originAgentId } : {}),
+      ...(sourceKind ? { sourceKind } : {}),
+      ...(sourceRef ? { sourceRef } : {}),
+      ...(storedPath ? { storedPath } : {}),
+      attachmentScope,
+      ...(status ? { status } : {}),
+      ...(sizeBytes > 0 ? { sizeBytes } : {}),
+    };
+  }
+
   function loadPersistedHistoryBuckets(
     persisted: unknown,
     target: Map<string, BncrPersistedConversationHistoryEntry[]>,
@@ -495,19 +544,9 @@ export function createBncrStateStore(runtime: {
           ? (entry.media as Partial<BncrPersistedConversationHistoryMediaEntry>[])
           : [];
         for (const item of rawMedia) {
-          const path = runtime.asString(item?.path || '').trim();
-          if (!path) continue;
-          const contentType = runtime.asString(item?.contentType || '').trim();
-          const kind = runtime.asString(item?.kind || '').trim();
-          const mediaMessageId = runtime.asString(item?.messageId || '').trim();
-          const normalizedMedia: BncrPersistedConversationHistoryMediaEntry = {
-            path,
-            ...(contentType ? { contentType } : {}),
-            ...(kind ? { kind: kind as BncrPersistedConversationHistoryMediaEntry['kind'] } : {}),
-            // Legacy entries without platform ids are back-filled with a stable
-            // synthetic id so snapshot cleanup can still remove them exactly.
-            ...(mediaMessageId || messageId ? { messageId: mediaMessageId || messageId } : {}),
-          };
+          const normalizedMedia = normalizePersistedHistoryMediaEntry(item);
+          if (!normalizedMedia) continue;
+          if (!normalizedMedia.messageId && messageId) normalizedMedia.messageId = messageId;
           media.push(normalizedMedia);
         }
 
@@ -735,17 +774,8 @@ export function createBncrStateStore(runtime: {
           ? (entry.media as Partial<BncrPersistedConversationHistoryMediaEntry>[])
           : [];
         for (const item of rawMedia) {
-          const path = runtime.asString(item?.path || '').trim();
-          if (!path) continue;
-          const contentType = runtime.asString(item?.contentType || '').trim();
-          const kind = runtime.asString(item?.kind || '').trim();
-          const mediaMessageId = runtime.asString(item?.messageId || '').trim();
-          media.push({
-            path,
-            ...(contentType ? { contentType } : {}),
-            ...(kind ? { kind: kind as BncrPersistedConversationHistoryMediaEntry['kind'] } : {}),
-            ...(mediaMessageId ? { messageId: mediaMessageId } : {}),
-          });
+          const normalizedMedia = normalizePersistedHistoryMediaEntry(item);
+          if (normalizedMedia) media.push(normalizedMedia);
         }
         const resolvedMessageId =
           messageId ||

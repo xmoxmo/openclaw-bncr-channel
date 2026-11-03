@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { resolveCommandAuthorization } from 'openclaw/plugin-sdk/command-auth-native';
 import {
@@ -16,10 +17,22 @@ import { prepareBncrInboundSessionContext } from '../../src/messaging/inbound/di
 import { recordBncrOutboundReplay } from '../../src/messaging/inbound/outbound-replay-cache.ts';
 import { parseBncrInboundParams, resolveChatType } from '../../src/messaging/inbound/parse.ts';
 import { resetBncrReplyDispatchSerialForTest } from '../../src/messaging/inbound/reply-dispatch-serial.ts';
+import { installBncrTestMediaStorage } from '../helpers/bncr-media-storage.mjs';
 import {
   createInboundApiStub,
   withInboundSessionRuntimeStub,
 } from '../helpers/inbound-runtime.mjs';
+
+let mediaStorage;
+
+test.beforeEach(async () => {
+  mediaStorage = await installBncrTestMediaStorage();
+});
+
+test.afterEach(async () => {
+  await mediaStorage?.restore();
+  mediaStorage = undefined;
+});
 
 function createDeferred() {
   let resolve;
@@ -549,7 +562,8 @@ test('dispatchBncrInbound keeps assistant media in context while current user me
   assert.ok(ctx);
   assert.equal(ctx.media.length, 1);
   assert.equal(ctx.media[0].kind, 'image');
-  assert.equal(ctx.media[0].path, '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin');
+  assert.match(ctx.media[0].path, /\/history\/public\/.+\.png$/);
+  assert.equal((await readFile(ctx.media[0].path)).toString(), 'current-image');
   assert.equal(ctx.media[0].messageId, 'direct-current-media-1');
 
   const historyFacts = ctx.extra?.BncrStructuredContextFacts?.conversationContext;

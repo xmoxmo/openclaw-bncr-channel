@@ -35,7 +35,7 @@ export const NAME_HELP_TEXT = [
   '    清掉自定义名字，回到「平台 · 名称 · id」；名字为空时回到「平台 · id」',
   '',
   ...TARGET_FORMAT_LINES,
-  '  • <text> — 1-' + BNCR_SESSION_NAME_MAX_CHARS + ' 字；"·" 会变成 "-"；超长截断',
+  `  • <text> — 1-${BNCR_SESSION_NAME_MAX_CHARS} 字；"·" 会变成 "-"；超长截断`,
 ].join('\n');
 
 export const GROUP_HELP_TEXT = [

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import test from 'node:test';
 
@@ -13,7 +14,17 @@ import { assertFetchableMediaUrl } from '../../src/messaging/inbound/media-url-p
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
 import { loadInboundRemoteMedia } from '../../src/messaging/inbound/remote-media.ts';
 import { fallbackBncrMediaMaxBytes } from '../../src/openclaw/media-limit-runtime.ts';
+import { installBncrTestMediaStorage } from '../helpers/bncr-media-storage.mjs';
 import { createInboundApiStub } from '../helpers/inbound-runtime.mjs';
+
+let mediaStorage;
+test.beforeEach(async () => {
+  mediaStorage = await installBncrTestMediaStorage();
+});
+test.afterEach(async () => {
+  await mediaStorage?.restore();
+  mediaStorage = undefined;
+});
 
 test('estimateBase64DecodedBytes accounts for padding and whitespace before inbound media guard', () => {
   assert.equal(estimateBase64DecodedBytes('TWFu'), 3);
@@ -71,86 +82,31 @@ test('dispatchBncrInbound saves normal inline base64 media after preflight size 
     scheduleSave() {},
   });
 
-  assert.equal(calls.savedMediaBuffers.length, 1);
-  assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'ok');
-  assert.equal(calls.savedMediaBuffers[0].mimeType, 'image/png');
   assert.equal(calls.builtContexts[0].Body, 'ENV:image inbound');
   assert.equal(calls.builtContexts[0].BodyForAgent, 'ENV:image inbound');
   assert.equal(calls.builtContexts[0].RawBody, 'image inbound');
   assert.equal(calls.builtContexts[0].CommandBody, 'image inbound');
   assert.equal(calls.builtContexts[0].BodyForCommands, 'image inbound');
-  assert.equal(
-    calls.builtContexts[0].MediaPath,
-    '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-  );
+  assert.match(calls.builtContexts[0].MediaPath, /\/history\/orion\/.+\.png$/);
+  assert.equal((await readFile(calls.builtContexts[0].MediaPath)).toString(), 'ok');
   assert.equal(calls.builtContexts[0].MediaType, 'image/png');
   assert.deepEqual(
     calls.builtContexts[0].BncrStructuredContextFacts,
     calls.builtContexts[0].StructuredContextFacts,
   );
-  assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-      contentType: 'image/png',
-      kind: 'image',
-      messageId: 'inbound-media-small',
-    },
-  ]);
-  assert.deepEqual(calls.builtContextArgs[0].supplemental.untrustedContext, [
-    {
-      label: 'Bncr inbound context',
-      source: 'bncr',
-      type: 'bncr.inbound_context',
-      payload: {
-        platform: 'bncr/tgBot',
-        conversation_context: [
-          {
-            messageId: 'inbound-media-small',
-            timestamp:
-              calls.builtContexts[0].StructuredContextFacts.conversationContext[0].timestamp,
-            role: 'user',
-            sender: 'Bncr:tgBot:-1001:0',
-            senderId: '10001',
-            content: 'image inbound',
-          },
-          {
-            messageId: 'inbound-media-small',
-            timestamp:
-              calls.builtContexts[0].StructuredContextFacts.conversationContext[0].timestamp,
-            role: 'user',
-            sender: 'Bncr:tgBot:-1001:0',
-            senderId: '10001',
-            media_type: 'image',
-            path: 'media://inbound/bncr-inbound-media-1.bin',
-            contentType: 'image/png',
-          },
-        ],
-        participants: {
-          10001: {
-            name: 'Bncr:tgBot:-1001:0',
-            isBot: false,
-            role: 'user',
-            displayName: 'Bncr:tgBot:-1001:0',
-          },
-        },
-        is_group_chat: true,
-        account_id: 'Primary',
-        reply: {
-          to: 'Bncr:tgBot:-1001:0',
-          originatingTo: 'Bncr:tgBot:-1001:0',
-          rawTo: 'Bncr:tgBot:-1001:10001',
-        },
-        media: [
-          {
-            path: 'media://inbound/bncr-inbound-media-1.bin',
-            contentType: 'image/png',
-            kind: 'image',
-            messageId: 'inbound-media-small',
-          },
-        ],
-      },
-    },
-  ]);
+  const currentMedia = calls.builtContexts[0].StructuredContextFacts.media[0];
+  assert.equal(currentMedia.contentType, 'image/png');
+  assert.equal(currentMedia.kind, 'image');
+  assert.equal(currentMedia.messageId, 'inbound-media-small');
+  const promptPayload = calls.builtContextArgs[0].supplemental.untrustedContext[0].payload;
+  assert.equal(promptPayload.platform, 'bncr/tgBot');
+  assert.equal(promptPayload.conversation_context.length, 2);
+  assert.equal(promptPayload.conversation_context[0].content, 'image inbound');
+  assert.equal(promptPayload.conversation_context[1].path, undefined);
+  assert.match(promptPayload.conversation_context[1].source, /\/history\/orion\//);
+  assert.equal(promptPayload.media[0].source, undefined);
+  assert.match(promptPayload.media[0].mediaRef, /^bncr-media:/);
+  assert.equal(promptPayload.media[0].originAgentId, 'orion');
 });
 
 test('dispatchBncrInbound prefers runtime remote media reader for http media path', async () => {
@@ -158,7 +114,11 @@ test('dispatchBncrInbound prefers runtime remote media reader for http media pat
   const { api, calls } = createInboundApiStub({
     async readRemoteMediaBuffer(options) {
       remoteCalls.push(options);
-      return { buffer: Buffer.from('runtime-jpg'), contentType: 'image/jpeg' };
+      return {
+        buffer: Buffer.from('runtime-jpg'),
+        contentType: 'image/jpeg',
+        fileName: 'server-name.jpg',
+      };
     },
   });
   const parsed = parseBncrInboundParams({
@@ -172,7 +132,6 @@ test('dispatchBncrInbound prefers runtime remote media reader for http media pat
     path: 'https://example.test/photos/file_6.jpg',
     base64: '',
     mimeType: 'image',
-    fileName: '1781167496030',
     msgId: 'inbound-media-runtime-url',
   });
 
@@ -195,12 +154,67 @@ test('dispatchBncrInbound prefers runtime remote media reader for http media pat
       ssrfPolicy: { allowPrivateNetwork: true },
     },
   ]);
-  assert.equal(calls.savedMediaBuffers.length, 1);
-  assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'runtime-jpg');
-  assert.equal(calls.savedMediaBuffers[0].mimeType, 'image/jpeg');
-  assert.equal(calls.savedMediaBuffers[0].direction, 'inbound');
-  assert.equal(calls.savedMediaBuffers[0].maxBytes, fallbackBncrMediaMaxBytes());
   assert.equal(calls.builtContexts[0].MediaType, 'image/jpeg');
+  assert.equal((await readFile(calls.builtContexts[0].MediaPath)).toString(), 'runtime-jpg');
+  const promptMedia = calls.builtContextArgs[0].supplemental.untrustedContext[0].payload.media[0];
+  assert.equal(promptMedia.path, 'https://example.test/photos/file_6.jpg');
+  assert.equal(promptMedia.fileName, 'server-name.jpg');
+  assert.equal(calls.builtContexts[0].StructuredContextFacts.media[0].fileName, 'server-name.jpg');
+});
+
+test('silent history flush never downloads the historical URL', async () => {
+  const remoteCalls = [];
+  const { api, calls } = createInboundApiStub({
+    async readRemoteMediaBuffer(options) {
+      remoteCalls.push(options);
+      return { buffer: Buffer.from('unexpected'), contentType: 'image/png' };
+    },
+  });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    type: 'image',
+    msg: 'old image',
+    path: 'https://example.test/old.png',
+    mimeType: 'image/png',
+    msgId: 'flush-history-url',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    shouldDispatch: false,
+    shouldAccumulate: false,
+    forceSilentHistoryFlush: true,
+    conversationHistories: new Map([
+      [
+        'Primary:tgBot:-1001',
+        [
+          {
+            sender: 'alice',
+            senderId: '10002',
+            role: 'user',
+            body: 'history text',
+            timestamp: 1,
+            messageId: 'history-text-1',
+          },
+        ],
+      ],
+    ]),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(remoteCalls.length, 0);
+  assert.deepEqual(calls.builtContextArgs[0].media, []);
 });
 
 test('loadInboundRemoteMedia falls back to internal downloader when runtime reader fails', async () => {
@@ -241,6 +255,28 @@ test('loadInboundRemoteMedia falls back to internal downloader when runtime read
       server.close((err) => (err ? reject(err) : resolve()));
     });
   }
+});
+
+test('loadInboundRemoteMedia rejects oversized buffers returned by the runtime reader', async () => {
+  await assert.rejects(
+    () =>
+      loadInboundRemoteMedia(
+        {
+          runtime: {
+            channel: {
+              media: {
+                async readRemoteMediaBuffer() {
+                  return { buffer: Buffer.alloc(17), contentType: 'image/png' };
+                },
+              },
+            },
+          },
+        },
+        'https://example.test/oversized.png',
+        16,
+      ),
+    /too large: 17 > 16/,
+  );
 });
 
 test('loadInboundRemoteMedia falls back to a raw fetch of a trusted loopback URL when the host reader rejects it', async () => {
@@ -382,25 +418,11 @@ test('dispatchBncrInbound downloads http media path before building inbound cont
       scheduleSave() {},
     });
 
-    assert.equal(calls.savedMediaBuffers.length, 1);
-    assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'jpgdata');
-    assert.equal(calls.savedMediaBuffers[0].mimeType, 'image/jpeg');
-    assert.equal(calls.savedMediaBuffers[0].direction, 'inbound');
-    assert.equal(calls.savedMediaBuffers[0].maxBytes, fallbackBncrMediaMaxBytes());
-    assert.equal(calls.savedMediaBuffers[0].fileName, '1781167496030');
-    assert.equal(
-      calls.builtContexts[0].MediaPath,
-      '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-    );
+    assert.match(calls.builtContexts[0].MediaPath, /\/history\/orion\/.+$/);
+    assert.equal((await readFile(calls.builtContexts[0].MediaPath)).toString(), 'jpgdata');
     assert.equal(calls.builtContexts[0].MediaType, 'image/jpeg');
-    assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
-      {
-        path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-        contentType: 'image/jpeg',
-        kind: 'image',
-        messageId: 'inbound-media-url',
-      },
-    ]);
+    assert.equal(calls.builtContexts[0].StructuredContextFacts.media.length, 1);
+    assert.equal(calls.builtContexts[0].StructuredContextFacts.media[0].contentType, 'image/jpeg');
   } finally {
     await new Promise((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -447,44 +469,16 @@ test('dispatchBncrInbound accepts mediaList and exposes multiple media entries i
     scheduleSave() {},
   });
 
-  assert.equal(calls.savedMediaBuffers.length, 2);
-  assert.equal(calls.savedMediaBuffers[0].buffer.toString(), 'img-1');
-  assert.equal(calls.savedMediaBuffers[1].buffer.toString(), 'img-2');
   assert.equal(calls.builtContexts[0].Body, 'ENV:<media:image> (2 images)');
   assert.equal(calls.builtContexts[0].BodyForAgent, 'ENV:<media:image> (2 images)');
-  assert.equal(
-    calls.builtContexts[0].MediaPath,
-    '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-  );
+  assert.match(calls.builtContexts[0].MediaPath, /\/history\/orion\/.+\.png$/);
   assert.equal(calls.builtContexts[0].MediaType, 'image/png');
-  assert.deepEqual(calls.builtContextArgs[0].media, [
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-      contentType: 'image/png',
-      kind: 'image',
-      messageId: 'inbound-media-list-1',
-    },
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
-      contentType: 'image/jpeg',
-      kind: 'image',
-      messageId: 'inbound-media-list-1',
-    },
-  ]);
-  assert.deepEqual(calls.builtContexts[0].StructuredContextFacts.media, [
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-1.bin',
-      contentType: 'image/png',
-      kind: 'image',
-      messageId: 'inbound-media-list-1',
-    },
-    {
-      path: '/home/test/.openclaw/media/inbound/bncr-inbound-media-2.bin',
-      contentType: 'image/jpeg',
-      kind: 'image',
-      messageId: 'inbound-media-list-1',
-    },
-  ]);
+  assert.equal(calls.builtContextArgs[0].media.length, 2);
+  assert.equal((await readFile(calls.builtContextArgs[0].media[0].path)).toString(), 'img-1');
+  assert.equal((await readFile(calls.builtContextArgs[0].media[1].path)).toString(), 'img-2');
+  assert.equal(calls.builtContextArgs[0].media[0].contentType, 'image/png');
+  assert.equal(calls.builtContextArgs[0].media[1].contentType, 'image/jpeg');
+  assert.equal(calls.builtContexts[0].StructuredContextFacts.media.length, 2);
 });
 
 test('downloadInboundMediaUrl rejects streamed bodies once they exceed maxBytes without content-length', async () => {

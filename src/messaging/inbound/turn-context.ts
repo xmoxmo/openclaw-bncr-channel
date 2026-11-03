@@ -1,4 +1,3 @@
-import type { HistoryMediaEntry } from 'openclaw/plugin-sdk/reply-history';
 import { readBncrSessionUpdatedAt } from '../../openclaw/inbound-session-runtime.ts';
 import {
   formatOpenClawAgentEnvelope,
@@ -9,7 +8,11 @@ import {
   buildBncrStructuredContextFactsFromInboundParts,
 } from './context-facts.ts';
 import type { BncrInboundApi, BncrInboundConfig, BncrInboundContextPayload } from './contracts.ts';
-import type { BncrConversationHistoryMap, BncrHistoryEntry } from './conversation-history.ts';
+import type {
+  BncrConversationHistoryMap,
+  BncrHistoryEntry,
+  BncrHistoryMediaEntry,
+} from './conversation-history.ts';
 import type {
   BncrInboundConversationResolution,
   BncrPreparedInboundSessionContext,
@@ -17,11 +20,11 @@ import type {
 } from './dispatch-prep.ts';
 import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 
-function dedupeBncrTurnMedia(entries: readonly HistoryMediaEntry[]): HistoryMediaEntry[] {
+function dedupeBncrTurnMedia(entries: readonly BncrHistoryMediaEntry[]): BncrHistoryMediaEntry[] {
   const seen = new Set<string>();
-  const result: HistoryMediaEntry[] = [];
+  const result: BncrHistoryMediaEntry[] = [];
   for (const item of entries) {
-    const key = `${item.path ?? ''}:${item.messageId ?? ''}`;
+    const key = `${item.path ?? item.url ?? ''}:${item.messageId ?? ''}`;
     if (key && seen.has(key)) continue;
     seen.add(key);
     result.push(item);
@@ -197,11 +200,21 @@ export async function buildBncrInboundTurnContext(args: {
         sender: entry.sender,
         senderId: entry.senderId,
         content: entry.body,
-        media: (entry.media || []).map((item: HistoryMediaEntry) => ({
+        media: (entry.media || []).map((item: BncrHistoryMediaEntry) => ({
           type: item.kind || 'document',
-          path: item.path,
-          contentType: item.contentType,
-          messageId: item.messageId,
+          ...(item.path ? { path: item.path } : {}),
+          ...(item.url ? { url: item.url } : {}),
+          ...(item.contentType ? { contentType: item.contentType } : {}),
+          ...(item.fileName ? { fileName: item.fileName } : {}),
+          ...(item.messageId ? { messageId: item.messageId } : {}),
+          ...(item.mediaId ? { mediaId: item.mediaId } : {}),
+          ...(item.originAgentId ? { originAgentId: item.originAgentId } : {}),
+          ...(item.sourceKind ? { sourceKind: item.sourceKind } : {}),
+          ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
+          ...(item.storedPath ? { storedPath: item.storedPath } : {}),
+          attachmentScope: item.attachmentScope || ('historical' as const),
+          ...(item.status ? { status: item.status } : {}),
+          ...(item.sizeBytes !== undefined ? { sizeBytes: item.sizeBytes } : {}),
         })),
       }))
     : [];
@@ -258,12 +271,19 @@ export async function buildBncrInboundTurnContext(args: {
   const wasMentioned = parsed.isBotMentioned === true || platformWantsReply;
   const isAuthorizedTextCommand = Boolean(ownerAllowFrom?.length);
   const bodyForAgent = typeof effectiveBody === 'string' ? effectiveBody : prepared.body;
-  const currentTurnMedia = (silentHistoryFlush ? [] : prepared.mediaItems).map((item) => ({
-    path: item.path,
-    contentType: item.contentType,
-    kind: item.kind,
-    messageId: msgId ?? undefined,
-  }));
+  const currentTurnMedia = (silentHistoryFlush ? [] : prepared.mediaItems).flatMap((item) =>
+    item.attachmentScope === 'current' && item.path
+      ? [
+          {
+            path: item.path,
+            url: item.url,
+            contentType: item.contentType,
+            kind: item.kind,
+            messageId: msgId ?? undefined,
+          },
+        ]
+      : [],
+  );
   const media = dedupeBncrTurnMedia(currentTurnMedia);
 
   return Promise.resolve(

@@ -566,6 +566,49 @@ test('sqlite history state round trips json buckets', async () => {
   }
 });
 
+test('sqlite history state preserves URL-only media provenance', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-history-media-'));
+  try {
+    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
+    const historyBuckets = [
+      {
+        key: 'Primary:tgBot:-1001',
+        entries: [
+          {
+            sender: 'alice',
+            senderId: '10001',
+            role: 'user',
+            body: '<media:image>',
+            timestamp: 10,
+            messageId: 'sqlite-media-m1',
+            media: [
+              {
+                url: 'https://example.test/sqlite.png',
+                contentType: 'image/png',
+                kind: 'image',
+                messageId: 'sqlite-media-m1',
+                mediaId: 'bncr-media:sqlite-1',
+                originAgentId: 'orion',
+                sourceKind: 'url',
+                sourceRef: 'https://example.test/sqlite.png',
+                attachmentScope: 'historical',
+                status: 'deferred',
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    db.importHistoryState(historyBuckets, []);
+
+    assert.deepEqual(db.loadHistoryState().historyBuckets, historyBuckets);
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('sqlite history import normalizes legacy scene-only bucket keys', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-legacy-key-'));
   try {
@@ -2483,7 +2526,8 @@ test('failed history revision save does not mark history as imported', async () 
 test('rotateSqliteSnapshot publishes an exclusive retained snapshot and prunes only old ones', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-snap-'));
   const dbPath = join(dir, 'bncr.sqlite3');
-  const db = createBncrSqliteStateDatabase(dbPath);
+  const fixedNow = 1767225609000;
+  const db = createBncrSqliteStateDatabase(dbPath, { now: () => fixedNow });
   db.setStoreMode('sqlite');
   db.saveControlState(buildControlState());
   const first = db.rotateSnapshot();
@@ -2510,7 +2554,11 @@ test('rotateSqliteSnapshot publishes an exclusive retained snapshot and prunes o
     }
     await writeFile(join(backupDir, 'bncr-state.json'), '{"x":1}');
 
-    const second = rotateSqliteSnapshot({ db: new DatabaseSync(dbPath), dbPath });
+    const second = rotateSqliteSnapshot({
+      db: new DatabaseSync(dbPath),
+      dbPath,
+      now: () => fixedNow,
+    });
     assert.equal(second, `${first}-1`, 'same-second publish gets an incrementing suffix');
     const names = await readdir(backupDir);
     assert.ok(

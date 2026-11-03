@@ -108,7 +108,11 @@ export type BncrChannelSendRuntime = {
   asString: (value: unknown, fallback?: string) => string;
   syncDebugFlag: () => Promise<void>;
   logInfo: (scope: string, message: string, options?: Record<string, unknown>) => void;
-  resolveVerifiedTarget: (to: string, accountId: string) => BncrVerifiedTarget;
+  resolveVerifiedTarget: (
+    to: string,
+    accountId: string,
+    preferredAgentId?: string,
+  ) => BncrVerifiedTarget;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) => void;
   enqueueFromReply: (args: {
     accountId: string;
@@ -129,7 +133,7 @@ async function enqueueChannelMessageHandoff(
 ) {
   const accountId = normalizeAccountId(ctx.accountId);
   const to = runtime.asString(ctx.to || '').trim();
-  const verified = runtime.resolveVerifiedTarget(to, accountId);
+  const verified = runtime.resolveVerifiedTarget(to, accountId, ctx.agentId || undefined);
   runtime.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
   const before = new Set(runtime.listOutboxEntries().map((entry) => entry.messageId));
   await runtime.enqueueFromReply({
@@ -284,7 +288,7 @@ export function createBncrChannelSendRuntime(runtime: BncrChannelSendRuntime) {
       { debugOnly: true },
     );
 
-    const verified = runtime.resolveVerifiedTarget(to, accountId);
+    const verified = runtime.resolveVerifiedTarget(to, accountId, ctx.agentId || undefined);
     runtime.rememberSessionRoute(verified.sessionKey, accountId, verified.route);
 
     const hasMedia = Boolean(mediaUrl || (Array.isArray(mediaUrls) && mediaUrls.length));
@@ -360,7 +364,7 @@ export function createBncrChannelSendRuntime(runtime: BncrChannelSendRuntime) {
     if (shouldDropNoReplySend({ text, extra, hasMedia })) {
       const accountId = normalizeAccountId(ctx.accountId);
       const to = runtime.asString(ctx.to || '').trim();
-      const verified = runtime.resolveVerifiedTarget(to, accountId);
+      const verified = runtime.resolveVerifiedTarget(to, accountId, ctx.agentId || undefined);
       runtime.logInfo(
         'outbound',
         buildBncrDebugJsonMessage('no-reply-suppressed', {

@@ -14,12 +14,14 @@ import {
 import { BncrConfigSchema } from './src/core/config-schema.ts';
 import { emitBncrLogLine } from './src/core/logging.ts';
 import { getOpenClawRuntimeConfig } from './src/openclaw/config-runtime.ts';
+import { createBncrHistoryMediaToolFactory } from './src/plugin/history-media-tool.ts';
 
 type ChannelPlugin = ReturnType<ChannelModule['createBncrChannelPlugin']>;
 
 const pluginVersion = runtimePluginVersion;
 
 const registerRuntime = createBncrRegisterRuntime();
+const registeredToolRegistryByApi = new WeakMap<object, string>();
 
 type BridgeSingletonWithOwner = NonNullable<
   ReturnType<typeof registerRuntime.getExistingBridgeSingleton>
@@ -90,6 +92,19 @@ const plugin = {
     const sameRegistryAsPrevious = previousRegistryFingerprint === registryFingerprint;
     const apiSeenRecently = globalTrace.seenApiInstanceIds.has(apiInstanceId);
     const registrySeenRecently = globalTrace.seenRegistryFingerprints.has(registryFingerprint);
+
+    // Tool registration has its own host lifecycle. It must not be coupled to
+    // channel declaration: on reload the channel is already declared, while a
+    // fresh registry still needs the tool it exposes to agents.
+    const toolRegistryKey = `${apiInstanceId}:${registryFingerprint}`;
+    if (registeredToolRegistryByApi.get(api) !== toolRegistryKey) {
+      api.registerTool(
+        createBncrHistoryMediaToolFactory({
+          getBridge: getCurrentBridge,
+        }),
+      );
+      registeredToolRegistryByApi.set(api, toolRegistryKey);
+    }
 
     let ownerDecision: ReturnType<typeof planLifecycle> | undefined;
 

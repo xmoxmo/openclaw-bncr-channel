@@ -294,7 +294,7 @@ const BNCR_HELP_SECTIONS = [
     commands: [
       { label: '/bncr stale help', scopes: ['admin'] },
       { label: '/bncr stale', scopes: ['admin'] },
-      { label: '/bncr stale [' + STALE_SCENES_FILTERS.join('|') + ']', scopes: ['admin'] },
+      { label: `/bncr stale [${STALE_SCENES_FILTERS.join('|')}]`, scopes: ['admin'] },
       { label: '/bncr stale <days>', scopes: ['admin'] },
       { label: '/bncr stale orphans', scopes: ['admin'] },
       { label: '/bncr sessions help', scopes: ['admin'] },

@@ -184,7 +184,7 @@ test('resolveBncrNativeHelpCommand returns full help for admin callers', () => {
   assert.match(helpText, /\/bncr download-media on\|off\|clear\|default on\|off/);
   assert.match(
     helpText,
-    new RegExp('/bncr stale \\[' + STALE_SCENES_FILTERS.join('\\|') + '\\]'),
+    new RegExp(`/bncr stale \\[${STALE_SCENES_FILTERS.join('\\|')}\\]`),
     'the help label must list every stale filter',
   );
   assert.match(helpText, /📋 Conversation history/);
@@ -1466,8 +1466,8 @@ test('no help text lists its own help command', () => {
   for (const [command, text] of helps) {
     assert.doesNotMatch(
       text,
-      new RegExp('• /bncr ' + command + ' help'),
-      command + ' help lists itself',
+      new RegExp(`• /bncr ${command} help`),
+      `${command} help lists itself`,
     );
   }
 });

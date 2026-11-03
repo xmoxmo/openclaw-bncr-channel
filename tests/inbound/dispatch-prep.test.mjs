@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
@@ -7,6 +10,7 @@ import {
   resolveBncrInboundConversation,
 } from '../../src/messaging/inbound/dispatch-prep.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
+import { installBncrTestMediaStorage } from '../helpers/bncr-media-storage.mjs';
 import { withInboundSessionRuntimeStub } from '../helpers/inbound-runtime.mjs';
 
 function createParsed(overrides = {}) {
@@ -168,6 +172,7 @@ test('prepareBncrInboundSessionContext resolves storePath from resolved agentId'
 });
 
 test('prepareBncrInboundSessionContext saves multiple inbound media items and builds aggregated placeholder', async () => {
+  const mediaStorage = await installBncrTestMediaStorage();
   const { restore } = withInboundSessionRuntimeStub({
     resolveStorePath(storeConfig, options) {
       return `/tmp/${String(storeConfig || 'store')}-${options?.agentId || 'unknown'}.json`;
@@ -208,27 +213,297 @@ test('prepareBncrInboundSessionContext saves multiple inbound media items and bu
         ],
       }),
       resolution,
+      currentTurn: true,
       rememberSessionRoute() {},
     });
 
     assert.equal(prepared.rawBody, '<media:image> (2 images)');
     assert.equal(prepared.mediaItems.length, 2);
-    assert.deepEqual(prepared.mediaItems, [
-      {
-        path: '/tmp/inbound.bin',
-        contentType: 'image/png',
-        fileName: 'a.png',
-        kind: 'image',
-      },
-      {
-        path: '/tmp/inbound.bin',
-        contentType: 'image/jpeg',
-        fileName: 'b.jpg',
-        kind: 'image',
-      },
-    ]);
+    assert.equal(prepared.mediaItems.length, 2);
+    assert.match(prepared.mediaItems[0].mediaId, /^bncr-media:/);
+    assert.match(prepared.mediaItems[1].mediaId, /^bncr-media:/);
+    assert.equal(prepared.mediaItems[0].originAgentId, 'orion-worker');
+    assert.equal(prepared.mediaItems[0].attachmentScope, 'current');
+    assert.equal(prepared.mediaItems[0].sourceKind, 'buffer');
+    assert.match(prepared.mediaItems[0].storedPath, /\/history\/orion-worker\/.+\.png$/);
+    assert.equal(prepared.mediaItems[0].path, prepared.mediaItems[0].storedPath);
+    assert.match(prepared.mediaItems[0].path, /\/history\/orion-worker\/.+\.png$/);
+    assert.ok(prepared.mediaItems[0].path.startsWith(mediaStorage.root));
+    assert.equal((await readFile(prepared.mediaItems[0].path)).toString(), 'a');
+    assert.equal((await readFile(prepared.mediaItems[1].path)).toString(), 'b');
   } finally {
+    await mediaStorage.restore();
     restore();
+  }
+});
+
+test('historical URL stays deferred until an explicit download request', async () => {
+  let downloads = 0;
+  const api = createApi(
+    { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' },
+    {
+      runtime: {
+        channel: {
+          routing: {
+            resolveAgentRoute() {
+              return { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' };
+            },
+          },
+          reply: {
+            resolveEnvelopeFormatOptions() {
+              return { style: 'test' };
+            },
+            formatAgentEnvelope({ body }) {
+              return `ENV:${body}`;
+            },
+          },
+          session: {
+            readSessionUpdatedAt() {
+              return 0;
+            },
+          },
+          media: {
+            async readRemoteMediaBuffer() {
+              downloads += 1;
+              return { buffer: Buffer.from('should-not-download'), contentType: 'image/jpeg' };
+            },
+          },
+        },
+      },
+    },
+  );
+  const parsed = createParsed({
+    msgType: 'image',
+    extracted: { text: 'old image' },
+    mediaItems: [{ path: 'https://example.test/old.jpg', mimeType: 'image/jpeg', type: 'image' }],
+    msgId: 'historical-url-1',
+  });
+  const resolution = resolveBncrInboundConversation({
+    api,
+    cfg: {},
+    channelId: 'bncr',
+    parsed,
+    canonicalAgentId: 'orion',
+  });
+  const prepared = await prepareBncrInboundSessionContext({
+    api,
+    cfg: {},
+    parsed,
+    resolution,
+    currentTurn: false,
+    rememberSessionRoute() {},
+  });
+
+  assert.equal(downloads, 0);
+  assert.equal(prepared.mediaItems[0].url, 'https://example.test/old.jpg');
+  assert.equal(prepared.mediaItems[0].status, 'deferred');
+  assert.equal(prepared.mediaItems[0].path, undefined);
+  assert.equal(prepared.mediaItems[0].attachmentScope, 'historical');
+});
+
+test('current URL downloads once and retains the original URL beside the local path', async () => {
+  const mediaStorage = await installBncrTestMediaStorage();
+  let downloads = 0;
+  const api = createApi(
+    { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' },
+    {
+      runtime: {
+        channel: {
+          routing: {
+            resolveAgentRoute() {
+              return { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' };
+            },
+          },
+          reply: {
+            resolveEnvelopeFormatOptions() {
+              return { style: 'test' };
+            },
+            formatAgentEnvelope({ body }) {
+              return `ENV:${body}`;
+            },
+          },
+          session: {
+            readSessionUpdatedAt() {
+              return 0;
+            },
+          },
+          media: {
+            async readRemoteMediaBuffer() {
+              downloads += 1;
+              return { buffer: Buffer.from('current'), contentType: 'image/png' };
+            },
+          },
+        },
+      },
+    },
+  );
+  try {
+    const parsed = createParsed({
+      msgType: 'image',
+      extracted: { text: 'current image' },
+      mediaItems: [{ path: 'https://example.test/current.png', type: 'image' }],
+      msgId: 'current-url-1',
+    });
+    const resolution = resolveBncrInboundConversation({
+      api,
+      cfg: {},
+      channelId: 'bncr',
+      parsed,
+      canonicalAgentId: 'orion',
+    });
+    const prepared = await prepareBncrInboundSessionContext({
+      api,
+      cfg: {},
+      parsed,
+      resolution,
+      currentTurn: true,
+      rememberSessionRoute() {},
+    });
+
+    assert.equal(downloads, 1);
+    assert.equal(prepared.mediaItems[0].url, 'https://example.test/current.png');
+    assert.equal(prepared.mediaItems[0].attachmentScope, 'current');
+    assert.equal(prepared.mediaItems[0].status, 'ready');
+    assert.equal(prepared.mediaItems[0].path, prepared.mediaItems[0].storedPath);
+    assert.match(prepared.mediaItems[0].path, /\/history\/orion\/.+$/);
+    assert.ok(prepared.mediaItems[0].path.startsWith(mediaStorage.root));
+    assert.equal((await readFile(prepared.mediaItems[0].path)).toString(), 'current');
+  } finally {
+    await mediaStorage.restore();
+  }
+});
+
+test('current URL failure keeps the message metadata and does not block the turn', async () => {
+  const api = createApi(
+    { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' },
+    {
+      runtime: {
+        channel: {
+          routing: {
+            resolveAgentRoute() {
+              return { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' };
+            },
+          },
+          reply: {
+            resolveEnvelopeFormatOptions() {
+              return { style: 'test' };
+            },
+            formatAgentEnvelope({ body }) {
+              return `ENV:${body}`;
+            },
+          },
+          session: {
+            readSessionUpdatedAt() {
+              return 0;
+            },
+          },
+          media: {
+            async readRemoteMediaBuffer() {
+              throw new Error('offline');
+            },
+          },
+        },
+      },
+    },
+  );
+  const parsed = createParsed({
+    msgType: 'image',
+    extracted: { text: 'failed image' },
+    mediaItems: [{ path: 'http://127.0.0.1:1/offline.png', type: 'image' }],
+    msgId: 'current-url-failed',
+  });
+  const resolution = resolveBncrInboundConversation({
+    api,
+    cfg: {},
+    channelId: 'bncr',
+    parsed,
+    canonicalAgentId: 'orion',
+  });
+  const prepared = await prepareBncrInboundSessionContext({
+    api,
+    cfg: {},
+    parsed,
+    resolution,
+    currentTurn: true,
+    rememberSessionRoute() {},
+  });
+
+  assert.equal(prepared.mediaItems.length, 1);
+  assert.equal(prepared.mediaItems[0].url, 'http://127.0.0.1:1/offline.png');
+  assert.equal(prepared.mediaItems[0].status, 'fetch_failed');
+  assert.equal(prepared.mediaItems[0].path, undefined);
+});
+
+test('historical local media is copied under the origin agent and oversized files stay as metadata', async () => {
+  const mediaStorage = await installBncrTestMediaStorage();
+  const sourceDir = await mkdtemp(path.join(tmpdir(), 'bncr-local-media-'));
+  const sourcePath = path.join(sourceDir, 'old.bin');
+  await writeFile(sourcePath, 'local');
+  const api = createApi({ sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' });
+  try {
+    const normalParsed = createParsed({
+      msgType: 'file',
+      extracted: { text: 'old file' },
+      mediaItems: [{ path: sourcePath, type: 'file' }],
+      msgId: 'historical-local-ready',
+    });
+    const normalResolution = resolveBncrInboundConversation({
+      api,
+      cfg: {},
+      channelId: 'bncr',
+      parsed: normalParsed,
+      canonicalAgentId: 'orion',
+    });
+    const normalPrepared = await prepareBncrInboundSessionContext({
+      api,
+      cfg: {},
+      parsed: normalParsed,
+      resolution: normalResolution,
+      currentTurn: false,
+      rememberSessionRoute() {},
+    });
+
+    assert.equal(normalPrepared.mediaItems[0].status, 'ready');
+    assert.equal(normalPrepared.mediaItems[0].originAgentId, 'orion');
+    assert.match(normalPrepared.mediaItems[0].storedPath, /\/history\/orion\/.+\.bin$/);
+    assert.equal(normalPrepared.mediaItems[0].path, undefined);
+    assert.equal((await readFile(normalPrepared.mediaItems[0].storedPath)).toString(), 'local');
+
+    api.runtime.config = {
+      current() {
+        return { channels: { bncr: { mediaMaxMb: 0.000001 } } };
+      },
+    };
+    const oversizedParsed = createParsed({
+      msgType: 'file',
+      extracted: { text: 'oversized file' },
+      mediaItems: [{ path: sourcePath, type: 'file' }],
+      msgId: 'historical-local-oversize',
+    });
+    const oversizedResolution = resolveBncrInboundConversation({
+      api,
+      cfg: {},
+      channelId: 'bncr',
+      parsed: oversizedParsed,
+      canonicalAgentId: 'orion',
+    });
+    const oversizedPrepared = await prepareBncrInboundSessionContext({
+      api,
+      cfg: {},
+      parsed: oversizedParsed,
+      resolution: oversizedResolution,
+      currentTurn: false,
+      rememberSessionRoute() {},
+    });
+
+    assert.equal(oversizedPrepared.mediaItems.length, 1);
+    assert.equal(oversizedPrepared.mediaItems[0].status, 'oversize');
+    assert.equal(oversizedPrepared.mediaItems[0].originAgentId, 'orion');
+    assert.equal(oversizedPrepared.mediaItems[0].path, undefined);
+    assert.equal(oversizedPrepared.mediaItems[0].sourceRef, sourcePath);
+  } finally {
+    await rm(sourceDir, { recursive: true, force: true });
+    await mediaStorage.restore();
   }
 });
 

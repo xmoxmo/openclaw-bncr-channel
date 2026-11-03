@@ -106,6 +106,7 @@ test('supportsAction accepts send/delete/unsend and extractToolSend normalizes i
   assert.equal(messageActions.supportsAction({ action: 'send' }), true);
   assert.equal(messageActions.supportsAction({ action: 'delete' }), true);
   assert.equal(messageActions.supportsAction({ action: 'unsend' }), true);
+  assert.equal(messageActions.supportsAction({ action: 'download-file' }), false);
   assert.equal(messageActions.supportsAction({ action: 'edit' }), false);
   assert.equal(messageActions.extractToolSend({ args: null }), null);
   assert.deepEqual(
@@ -157,9 +158,13 @@ test('handleAction forwards structured extra/type/downloadMedia into outbound br
   const result = await messageActions.handleAction({
     action: 'send',
     accountId: 'Primary',
+    agentId: 'orion',
+    sessionKey: 'agent:orion:bncr:direct:route',
     params: {
       to: 'Bncr:tgBot:0:10001',
       message: 'hello',
+      agentId: 'model-controlled-agent',
+      sessionKey: 'agent:model-controlled-agent:bncr:direct:route',
       extra: { customBadge: 'VIP' },
       type: 'appmsg',
       downloadMedia: true,
@@ -172,6 +177,8 @@ test('handleAction forwards structured extra/type/downloadMedia into outbound br
   assert.deepEqual(calls[0].extra, { customBadge: 'VIP' });
   assert.equal(calls[0].type, 'appmsg');
   assert.equal(calls[0].downloadMedia, true);
+  assert.equal(calls[0].agentId, 'orion');
+  assert.equal(calls[0].sessionKey, 'agent:orion:bncr:direct:route');
 });
 
 test('handleAction saves a preserved data-uri buffer and forwards its real path', async () => {
@@ -575,8 +582,8 @@ test('handleAction delete calls generic adapter bridge with delMsg', async () =>
   const { messageActions } = createBncrChannelPluginSurfaceGroup(
     createRuntime({
       getToolActionBridge: () => ({
-        resolveVerifiedTarget(to, accountId) {
-          calls.push(['resolveVerifiedTarget', to, accountId]);
+        resolveVerifiedTarget(to, accountId, preferredAgentId) {
+          calls.push(['resolveVerifiedTarget', to, accountId, preferredAgentId]);
           return {
             route: { platform: 'GewePlus', groupId: '-1001', userId: '0' },
           };
@@ -600,6 +607,7 @@ test('handleAction delete calls generic adapter bridge with delMsg', async () =>
       messageId: 'openclaw-message-1',
     },
     accountId: 'Primary',
+    agentId: 'orion',
   });
 
   assert.deepEqual(result, {
@@ -607,7 +615,12 @@ test('handleAction delete calls generic adapter bridge with delMsg', async () =>
     method: 'bncr.client.adapters.call',
     result: { deleted: true },
   });
-  assert.deepEqual(calls[0], ['resolveVerifiedTarget', 'Bncr:GewePlus:-1001:0', 'Primary']);
+  assert.deepEqual(calls[0], [
+    'resolveVerifiedTarget',
+    'Bncr:GewePlus:-1001:0',
+    'Primary',
+    'orion',
+  ]);
   assert.deepEqual(calls[1], [
     'bridge',
     'bncr.client.adapters.call',

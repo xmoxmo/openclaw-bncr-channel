@@ -21,7 +21,7 @@ function groupKey(agentId, groupId, platform = 'tgBot') {
   return buildCanonicalBncrSessionKey({ platform, groupId, userId: '0' }, agentId);
 }
 
-function directKey(agentId, userId, platform = 'qq') {
+function _directKey(agentId, userId, platform = 'qq') {
   return buildCanonicalBncrSessionKey({ platform, groupId: '0', userId }, agentId);
 }
 
@@ -240,7 +240,7 @@ test('help text names the defaults and the delete semantics', () => {
 
 test('execute: task-scoped sessions are swept with their chat key intact', async () => {
   const base = groupKey('orion', '-1001');
-  const taskKey = base + ':task:research';
+  const taskKey = `${base}:task:research`;
   const { deps, deleted } = buildDeps({
     sessions: [{ agentId: 'orion', sessionKey: taskKey, lastActivityAt: NOW - 88 * DAY }],
   });

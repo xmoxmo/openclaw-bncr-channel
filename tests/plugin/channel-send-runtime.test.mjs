@@ -5,6 +5,7 @@ import { createBncrChannelSendRuntime } from '../../src/plugin/channel-send.ts';
 
 function createRuntimeHarness() {
   const calls = [];
+  const targetCalls = [];
   const outbox = [];
   const runtime = createBncrChannelSendRuntime({
     channelId: 'bncr',
@@ -12,11 +13,14 @@ function createRuntimeHarness() {
       typeof value === 'string' ? value : value == null ? fallback : String(value),
     syncDebugFlag: async () => {},
     logInfo: () => {},
-    resolveVerifiedTarget: () => ({
-      sessionKey: 'agent:orion:bncr:direct:7467426f743a303a3130303031',
-      route: { platform: 'tgBot', groupId: '0', userId: '10001' },
-      displayScope: 'Bncr:tgBot:0:10001',
-    }),
+    resolveVerifiedTarget: (to, accountId, preferredAgentId) => {
+      targetCalls.push({ to, accountId, preferredAgentId });
+      return {
+        sessionKey: 'agent:orion:bncr:direct:7467426f743a303a3130303031',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        displayScope: 'Bncr:tgBot:0:10001',
+      };
+    },
     rememberSessionRoute: () => {},
     enqueueFromReply: async (args) => {
       calls.push(args);
@@ -34,8 +38,29 @@ function createRuntimeHarness() {
     listOutboxEntries: () => outbox,
   });
 
-  return { runtime, calls };
+  return { runtime, calls, targetCalls };
 }
+
+test('channel send carries the trusted agent id into target resolution', async () => {
+  const { runtime, targetCalls } = createRuntimeHarness();
+
+  await runtime.channelSendText({
+    accountId: 'Primary',
+    to: 'Bncr:tgBot:-1001:0',
+    text: 'hi',
+    agentId: 'orion',
+  });
+
+  assert.ok(targetCalls.length > 0);
+  assert.ok(
+    targetCalls.every(
+      (call) =>
+        call.to === 'Bncr:tgBot:-1001:0' &&
+        call.accountId === 'Primary' &&
+        call.preferredAgentId === 'orion',
+    ),
+  );
+});
 
 test('createBncrChannelSendRuntime preserves supported reply kinds for text and media sends', async () => {
   const { runtime, calls } = createRuntimeHarness();

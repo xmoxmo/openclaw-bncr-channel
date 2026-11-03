@@ -504,6 +504,131 @@ test('createBncrStateStore preserves senderId in persisted conversation historie
   ]);
 });
 
+test('createBncrStateStore round-trips historical media provenance and deferred URL fields', () => {
+  const { runtime, store } = createStore();
+  runtime.sceneRegistry.set('tgBot:-1001', {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    historyLimit: 50,
+    historyForce: true,
+    lastSeenAt: 1,
+  });
+
+  store.loadPersistedConversationHistories([
+    {
+      key: 'Primary:tgBot:-1001',
+      entries: [
+        {
+          sender: 'alice',
+          senderId: '10001',
+          role: 'user',
+          body: '<media:image>',
+          timestamp: 10,
+          messageId: 'm-media-1',
+          media: [
+            {
+              url: 'https://example.test/history.png',
+              contentType: 'image/png',
+              kind: 'image',
+              messageId: 'm-media-1',
+              mediaId: 'bncr-media:round-trip',
+              originAgentId: 'orion',
+              sourceKind: 'url',
+              sourceRef: 'https://example.test/history.png',
+              attachmentScope: 'historical',
+              status: 'deferred',
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:-1001')[0].media, [
+    {
+      url: 'https://example.test/history.png',
+      contentType: 'image/png',
+      kind: 'image',
+      messageId: 'm-media-1',
+      mediaId: 'bncr-media:round-trip',
+      originAgentId: 'orion',
+      sourceKind: 'url',
+      sourceRef: 'https://example.test/history.png',
+      attachmentScope: 'historical',
+      status: 'deferred',
+    },
+  ]);
+  assert.deepEqual(store.dumpPersistedConversationHistories()[0].entries[0].media, [
+    {
+      url: 'https://example.test/history.png',
+      contentType: 'image/png',
+      kind: 'image',
+      messageId: 'm-media-1',
+      mediaId: 'bncr-media:round-trip',
+      originAgentId: 'orion',
+      sourceKind: 'url',
+      sourceRef: 'https://example.test/history.png',
+      attachmentScope: 'historical',
+      status: 'deferred',
+    },
+  ]);
+});
+
+test('createBncrStateStore round-trips local historical media stored under its origin agent', () => {
+  const { runtime, store } = createStore();
+  store.loadPersistedConversationHistories([
+    {
+      key: 'Primary:tgBot:-1001',
+      entries: [
+        {
+          sender: 'alice',
+          senderId: '10001',
+          role: 'user',
+          body: '<media:image>',
+          timestamp: 11,
+          messageId: 'm-local-media',
+          media: [
+            {
+              contentType: 'image/png',
+              kind: 'image',
+              messageId: 'm-local-media',
+              mediaId: 'bncr-media:local-round-trip',
+              originAgentId: 'public',
+              sourceKind: 'local',
+              sourceRef: '/tmp/source.png',
+              storedPath: '/root/.openclaw/media/history/public/source.png',
+              attachmentScope: 'historical',
+              status: 'ready',
+              sizeBytes: 123,
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+
+  const expected = [
+    {
+      contentType: 'image/png',
+      kind: 'image',
+      messageId: 'm-local-media',
+      mediaId: 'bncr-media:local-round-trip',
+      originAgentId: 'public',
+      sourceKind: 'local',
+      sourceRef: '/tmp/source.png',
+      storedPath: '/root/.openclaw/media/history/public/source.png',
+      attachmentScope: 'historical',
+      status: 'ready',
+      sizeBytes: 123,
+    },
+  ];
+  assert.deepEqual(runtime.conversationHistories.get('Primary:tgBot:-1001')[0].media, expected);
+  assert.deepEqual(store.dumpPersistedConversationHistories()[0].entries[0].media, expected);
+});
+
 test('createBncrStateStore clears the injected history version tracker on persisted replacement', () => {
   const { store, conversationHistoryVersions } = createStore();
   conversationHistoryVersions.set('Primary:tgBot:10001', 9);

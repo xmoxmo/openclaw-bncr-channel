@@ -11,6 +11,8 @@ import {
 import type {
   BncrChannelConfigRoot,
   BncrChannelSendContext,
+  BncrHistoryMediaDownload,
+  BncrHistoryMediaDownloadInput,
   BncrStatusRuntimeSnapshot,
   BncrVerifiedTarget,
 } from './channel-runtime-types.ts';
@@ -39,7 +41,12 @@ export type BncrChannelPluginBridge = {
   getChannelSummary: (defaultAccountId: string) => Record<string, unknown>;
   getAccountRuntimeSnapshot: (accountId: string) => BncrStatusRuntimeSnapshot;
   getStatusHeadline: (accountId: string) => string;
-  resolveVerifiedTarget: (to: string, accountId: string) => BncrVerifiedTarget;
+  resolveVerifiedTarget: (
+    to: string,
+    accountId: string,
+    preferredAgentId?: string,
+  ) => BncrVerifiedTarget;
+  downloadHistoryMedia: (args: BncrHistoryMediaDownloadInput) => Promise<BncrHistoryMediaDownload>;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) => void;
   listRecentOutbound: (sessionKey: string) => BncrRecentOutboundEntry[];
   listRecentOutboundByAccount: (accountId: string) => BncrRecentOutboundEntry[];
@@ -112,8 +119,11 @@ export function createBncrChannelPluginBridgeGroup(runtime: {
   const getToolActionBridge = () => {
     const bridge = runtime.getBridge();
     return {
-      resolveVerifiedTarget: (to: string, accountId: string) =>
-        bridge.resolveVerifiedTarget(to, accountId),
+      resolveVerifiedTarget: (to: string, accountId: string, preferredAgentId?: string) =>
+        bridge.resolveVerifiedTarget(to, accountId, preferredAgentId),
+      downloadHistoryMedia: (
+        args: Parameters<BncrChannelPluginBridge['downloadHistoryMedia']>[0],
+      ) => bridge.downloadHistoryMedia(args),
       rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) =>
         bridge.rememberSessionRoute(sessionKey, accountId, route),
       enqueueFromReply: (args: Parameters<BncrChannelPluginBridge['enqueueFromReply']>[0]) =>

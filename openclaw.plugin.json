@@ -2,6 +2,9 @@
   "id": "bncr",
   "name": "Bncr",
   "channels": ["bncr"],
+  "contracts": {
+    "tools": ["bncr_download_media"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": true,

@@ -99,7 +99,11 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
     getStatusHeadline: (accountId?: string) => string;
   };
   getToolActionBridge: () => {
-    resolveVerifiedTarget: (to: string, accountId: string) => BncrVerifiedTarget;
+    resolveVerifiedTarget: (
+      to: string,
+      accountId: string,
+      preferredAgentId?: string,
+    ) => BncrVerifiedTarget;
     rememberSessionRoute: (
       sessionKey: string,
       accountId: string,
@@ -174,7 +178,7 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
         >,
         'sendMessage',
       ) || null,
-    handleAction: async ({ action, params, accountId, mediaLocalRoots }) => {
+    handleAction: async ({ action, params, accountId, agentId, sessionKey, mediaLocalRoots }) => {
       /* -- extract raw params (no normalization) ----------------------- */
       const paramsObj = (params && typeof params === 'object' ? params : {}) as Record<
         string,
@@ -195,7 +199,9 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
           throw new Error(`${action} requires messageId`);
         }
 
-        const verified = runtime.getToolActionBridge().resolveVerifiedTarget(to, resolvedAccountId);
+        const verified = runtime
+          .getToolActionBridge()
+          .resolveVerifiedTarget(to, resolvedAccountId, agentId || undefined);
         const bridgeResult = await runtime.getBridgeCallBridge().call(
           'bncr.client.adapters.call',
           {
@@ -304,6 +310,8 @@ export function createBncrChannelPluginSurfaceGroup(runtime: {
         gifPlayback: paramsObj.gifPlayback === true,
         silent: paramsObj.silent === true,
         mediaLocalRoots,
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
       };
 
       const hasContent = Boolean(text?.trim() || toolMediaUrl || mediaUrls?.length || extra);

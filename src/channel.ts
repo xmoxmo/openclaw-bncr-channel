@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import type {
   GatewayRequestHandlerOptions,
   OpenClawPluginApi,
@@ -58,8 +59,17 @@ import {
   type BncrHistoryShardDispatchPayload,
   processBncrHistoryShardSlot,
 } from './messaging/inbound/history-shard-worker.ts';
+import {
+  assertBncrManagedMediaFile,
+  BncrMediaSourceError,
+  createBncrMediaId,
+  materializeBncrMediaBuffer,
+  readBncrMediaFile,
+} from './messaging/inbound/media-assets.ts';
+import { assertFetchableMediaUrl } from './messaging/inbound/media-url-policy.ts';
 import type { BncrOutboundReplayCache } from './messaging/inbound/outbound-replay-cache.ts';
 import type { parseBncrInboundParams } from './messaging/inbound/parse.ts';
+import { loadInboundRemoteMedia } from './messaging/inbound/remote-media.ts';
 import { runBncrInboundReplyDispatch } from './messaging/inbound/reply-dispatch.ts';
 import type { BncrClientSceneStateList } from './messaging/inbound/stale-scenes-command.ts';
 import { buildEnqueueFromReplyDebugInfo } from './messaging/outbound/diagnostics.ts';
@@ -172,6 +182,8 @@ import type {
   BncrBridgeRuntimePaths,
   BncrChannelConfigRoot,
   BncrChannelSendContext,
+  BncrHistoryMediaDownload,
+  BncrHistoryMediaDownloadInput,
   BncrSceneRecord,
   PersistedState,
 } from './plugin/channel-runtime-types.ts';
@@ -882,8 +894,8 @@ class BncrBridgeRuntime {
 
   private buildChannelSendTargetRuntime() {
     return buildChannelSendTargetRuntime({
-      resolveVerifiedTarget: (to: string, accountId: string) =>
-        this.resolveVerifiedTarget(to, accountId),
+      resolveVerifiedTarget: (to: string, accountId: string, preferredAgentId?: string) =>
+        this.resolveVerifiedTarget(to, accountId, preferredAgentId),
       rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) =>
         this.rememberSessionRoute(sessionKey, accountId, route),
       enqueueFromReply: (args: Parameters<BncrBridgeRuntime['enqueueFromReply']>[0]) =>
@@ -2653,7 +2665,7 @@ class BncrBridgeRuntime {
     if (historyKeys.size === 0) {
       // No live route survived; recover the bucket from the history/replay maps
       // themselves so a pruned scene does not leave orphaned buckets behind.
-      const matchesScene = (key: string) => key === sceneKey || key.endsWith(':' + sceneKey);
+      const matchesScene = (key: string) => key === sceneKey || key.endsWith(`:${sceneKey}`);
       for (const key of this.conversationHistories.keys()) {
         if (matchesScene(key)) {
           historyKeys.add(key);
@@ -2754,6 +2766,106 @@ class BncrBridgeRuntime {
     return this.targetRuntime.resolveRouteBySession(sessionKey, accountId);
   }
 
+  async downloadHistoryMedia(
+    args: BncrHistoryMediaDownloadInput,
+  ): Promise<BncrHistoryMediaDownload> {
+    args.assertCurrent?.();
+    const accountId = normalizeAccountId(args.accountId);
+    const agentId = asString(args.agentId).trim();
+    const sessionKey = asString(args.sessionKey).trim();
+    const source = asString(args.source).trim();
+    const requestedMediaRef = asString(args.mediaRef).trim();
+    if (!agentId) throw new Error('bncr_download_media requires a trusted agent context');
+    if (!sessionKey) throw new Error('bncr_download_media requires a trusted session context');
+    if (!source) throw new BncrMediaSourceError('SOURCE_REQUIRED', 'media source is required');
+    if (args.sourceKind !== 'url' && args.sourceKind !== 'local') {
+      throw new BncrMediaSourceError(
+        'SOURCE_KIND_INVALID',
+        'sourceKind must be either url or local',
+      );
+    }
+
+    const maxBytes = resolveBncrMediaMaxBytes(this.api, accountId);
+    const cfg = getOpenClawRuntimeConfigOrDefault<BncrChannelConfigRoot>(this.api, {});
+    const mediaRef = requestedMediaRef || createBncrMediaId();
+    let contentType = asString(args.contentType).trim() || undefined;
+    let fileName = asString(args.fileName).trim() || undefined;
+    let sizeBytes: number | undefined;
+    let materialized: { mediaUri: string; hostPath: string };
+
+    args.assertCurrent?.();
+    if (args.sourceKind === 'url') {
+      try {
+        await assertFetchableMediaUrl(source);
+      } catch (error) {
+        throw new BncrMediaSourceError('SOURCE_KIND_INVALID', 'media url is invalid', {
+          cause: error,
+        });
+      }
+      let loaded: Awaited<ReturnType<typeof loadInboundRemoteMedia>>;
+      try {
+        loaded = await loadInboundRemoteMedia(this.api, source, maxBytes);
+      } catch (error) {
+        throw new BncrMediaSourceError(
+          error instanceof Error && /too large/i.test(error.message)
+            ? 'SOURCE_TOO_LARGE'
+            : 'SOURCE_FETCH_FAILED',
+          'media url could not be downloaded',
+          { cause: error },
+        );
+      }
+      args.assertCurrent?.();
+      contentType = loaded.contentType || contentType;
+      fileName = loaded.fileName || fileName;
+      sizeBytes = loaded.buffer.byteLength;
+      materialized = await materializeBncrMediaBuffer({
+        cfg,
+        agentId,
+        mediaRef,
+        buffer: loaded.buffer,
+        contentType,
+        fileName,
+        assertCurrent: args.assertCurrent,
+      });
+    } else {
+      const sourcePath = await assertBncrManagedMediaFile(source, maxBytes);
+      let buffer: Buffer;
+      try {
+        buffer = await readBncrMediaFile(sourcePath, maxBytes);
+      } catch (error) {
+        throw new BncrMediaSourceError(
+          error instanceof Error && /too large/i.test(error.message)
+            ? 'SOURCE_TOO_LARGE'
+            : 'SOURCE_NOT_FOUND',
+          'media source is not available',
+          { cause: error },
+        );
+      }
+      args.assertCurrent?.();
+      sizeBytes = buffer.byteLength;
+      fileName = fileName || path.basename(sourcePath);
+      materialized = await materializeBncrMediaBuffer({
+        cfg,
+        agentId,
+        mediaRef,
+        buffer,
+        contentType,
+        fileName,
+        assertCurrent: args.assertCurrent,
+      });
+    }
+
+    args.assertCurrent?.();
+    return {
+      ...(requestedMediaRef ? { mediaRef: requestedMediaRef } : {}),
+      mediaUri: materialized.mediaUri,
+      hostPath: materialized.hostPath,
+      ...(contentType ? { contentType } : {}),
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+      ...(fileName ? { fileName } : {}),
+    };
+  }
+
   // 严谨目标解析：
   // 1) 标准 to 仅认 Bncr:<platform>:0:<userId> / Bncr:<platform>:<groupId>:0
   // 2) 仍接受 strict sessionKey 作为内部兼容输入
@@ -2762,8 +2874,9 @@ class BncrBridgeRuntime {
   resolveVerifiedTarget(
     rawTarget: string,
     accountId: string,
+    preferredAgentId?: string,
   ): { sessionKey: string; route: BncrRoute; displayScope: string } {
-    return this.targetRuntime.resolveVerifiedTarget(rawTarget, accountId);
+    return this.targetRuntime.resolveVerifiedTarget(rawTarget, accountId, preferredAgentId);
   }
 
   private markActivity(accountId: string, at = now()) {

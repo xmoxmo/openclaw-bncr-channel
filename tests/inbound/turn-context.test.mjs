@@ -137,6 +137,10 @@ test('buildBncrInboundTurnContext replays pending group text and image history i
           path: '/tmp/history-image.png',
           contentType: 'image/png',
           messageId: 'msg-history-2',
+          source: '/tmp/history-image.png',
+          sourceKind: 'local',
+          attachmentScope: 'historical',
+          downloadable: true,
         },
       ],
     },
@@ -428,4 +432,94 @@ test('buildBncrInboundTurnContext treats platform shouldRespond as effective men
       effectiveWasMentioned: true,
     },
   });
+});
+
+test('historical URL stays in historical context and never enters current turn media', async () => {
+  const calls = [];
+  const api = createTurnContextApiStub(calls);
+  const historyEntries = [
+    {
+      sender: 'alice',
+      senderId: '10002',
+      body: '<media:image>',
+      timestamp: 1,
+      messageId: 'history-url-message',
+      media: [
+        {
+          mediaId: 'bncr-media:history-url-1',
+          url: 'https://example.test/old.png',
+          contentType: 'image/png',
+          kind: 'image',
+          messageId: 'history-url-message',
+          originAgentId: 'orion',
+          sourceKind: 'url',
+          sourceRef: 'https://example.test/old.png',
+          attachmentScope: 'historical',
+          status: 'deferred',
+        },
+      ],
+    },
+  ];
+
+  await buildBncrInboundTurnContext({
+    api,
+    cfg: {},
+    channelId: 'bncr',
+    parsed: {
+      accountId: 'Primary',
+      platform: 'tgBot',
+      peer: { kind: 'group', id: '-1001' },
+      groupId: '-1001',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: true,
+      shouldRespond: true,
+      triggerKind: 'mention',
+      msgId: 'current-message',
+      msgType: 'text',
+      mimeType: 'text/plain',
+    },
+    msgId: 'current-message',
+    mimeType: 'text/plain',
+    peer: { kind: 'group', id: '-1001' },
+    senderIdForContext: '10001',
+    senderDisplayName: 'xmo',
+    resolution: {
+      accountId: 'Primary',
+      chatType: 'group',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      resolvedRoute: {
+        sessionKey: 'agent:orion:bncr:group:route',
+        agentId: 'orion',
+      },
+      canonicalTo: 'Bncr:tgBot:-1001:0',
+      rawTo: 'Bncr:tgBot:-1001:10001',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+      baseSessionKey: 'agent:orion:bncr:group:route',
+      dispatchSessionKey: 'agent:orion:bncr:group:route',
+    },
+    prepared: {
+      storePath: '/tmp/store.json',
+      rawBody: 'what was that image?',
+      body: 'ENV:what was that image?',
+      mediaItems: [],
+    },
+    conversationHistories: new Map([['Primary:tgBot:-1001', historyEntries]]),
+    pendingHistoryEntries: historyEntries,
+    shouldDispatch: true,
+  });
+
+  assert.deepEqual(calls[0].media, []);
+  const historicalMedia = calls[0].extra.BncrStructuredContextFacts.conversationContext[0].media[0];
+  assert.equal(historicalMedia.url, 'https://example.test/old.png');
+  assert.equal(historicalMedia.mediaId, 'bncr-media:history-url-1');
+  assert.equal(historicalMedia.attachmentScope, 'historical');
+  const promptMedia = calls[0].supplemental.untrustedContext[0].payload.conversation_context[1];
+  assert.equal(promptMedia.path, undefined);
+  assert.equal(promptMedia.source, 'https://example.test/old.png');
+  assert.equal(promptMedia.sourceKind, 'url');
+  assert.equal(promptMedia.mediaRef, 'bncr-media:history-url-1');
+  assert.equal(promptMedia.attachmentScope, 'historical');
+  assert.equal(promptMedia.downloadable, true);
+  assert.equal(promptMedia.status, 'deferred');
 });

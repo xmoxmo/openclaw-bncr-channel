@@ -227,7 +227,11 @@ export async function prepareBncrInboundAcceptance(args: {
     accountId,
     sessionKey,
     inboundText,
-    hasMedia: Boolean(mediaBase64 || mediaPathFromTransfer),
+    hasMedia: Boolean(
+      mediaBase64 ||
+        mediaPathFromTransfer ||
+        (Array.isArray(parsed.mediaItems) && parsed.mediaItems.length > 0),
+    ),
     resolvedAgentId: admission.agentId,
     shouldDispatch,
     shouldAccumulate,

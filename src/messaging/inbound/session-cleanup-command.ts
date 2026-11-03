@@ -46,7 +46,7 @@ export const SESSION_CLEANUP_HELP_TEXT = [
     ' 天）。',
   '  • 场景行已经没了的孤儿会话也在其中，场景命令看不到它们。',
   '  • 只删会话条目，场景行（准入、mode、名字、分组）都保留，下一条消息会重建会话。',
-  '  • 每次最多处理 ' + String(BNCR_SESSION_CLEANUP_MAX_BATCH) + ' 个会话，剩下的再跑一次。',
+  `  • 每次最多处理 ${String(BNCR_SESSION_CLEANUP_MAX_BATCH)} 个会话，剩下的再跑一次。`,
   '  • 列出和删除之间又有消息进来的会话会跳过，并单独报出来。',
   '  • 其它频道的会话一律不碰。',
   '  • 仅管理员可用。',
@@ -267,32 +267,30 @@ async function collectRows(
 }
 
 function formatAge(value: number | null): string {
-  return value == null ? 'unknown' : String(value) + 'd';
+  return value == null ? 'unknown' : `${String(value)}d`;
 }
 
 function describeRow(row: SessionCleanupRow): string {
   const parts = [
     (row.label ?? row.sceneKey) + (row.label ? '' : ' (no label)'),
-    'agent=' + (row.agentId || '(unassigned)'),
+    `agent=${row.agentId || '(unassigned)'}`,
     formatAge(row.ageDays),
     row.scenePresent ? 'scene=kept' : 'scene=missing (orphan)',
   ];
   if (row.archived) parts.push('archived');
-  if (row.task) parts.push('task=' + row.task);
+  if (row.task) parts.push(`task=${row.task}`);
   // Two different ages hide behind one number: a real message and a store write.
   if (row.storeWriteOnly) parts.push('(store write, no message)');
   if (row.sibling) {
-    parts.push(
-      'other=' + row.sibling.agentId + ' ' + formatAge(row.sibling.ageDays) + ' (active chat)',
-    );
+    parts.push(`other=${row.sibling.agentId} ${formatAge(row.sibling.ageDays)} (active chat)`);
   }
-  return '  ' + parts.join('  ');
+  return `  ${parts.join('  ')}`;
 }
 
 /** Bands keep a long list readable: 4x, 2x, and the threshold itself. */
 function bandLabel(days: number, upper: number): string {
   const multiple = Math.round(upper / Math.max(days, 1));
-  return multiple * days + 'd+';
+  return `${multiple * days}d+`;
 }
 
 function formatListText(
@@ -317,7 +315,7 @@ function formatListText(
       'd+ (one row per agent; other= marks another agent still serving that chat)',
   ];
   if (unreadable.length > 0) {
-    lines.push('Skipped: session store unreadable for ' + unreadable.join(', '));
+    lines.push(`Skipped: session store unreadable for ${unreadable.join(', ')}`);
   }
   if (shown.length === 0) {
     lines.push('', 'Nothing to clean up.');
@@ -334,16 +332,16 @@ function formatListText(
   if (second.length > 0) bands.push({ title: bandLabel(days, two), rows: second });
   if (third.length > 0) bands.push({ title: bandLabel(days, days), rows: third });
   for (const band of bands) {
-    lines.push('', band.title + ' · ' + String(band.rows.length));
+    lines.push('', `${band.title} · ${String(band.rows.length)}`);
     for (const row of band.rows) lines.push(describeRow(row));
   }
   if (hidden > 0) {
-    lines.push('', '… ' + String(hidden) + ' more; run it again after this batch.');
+    lines.push('', `… ${String(hidden)} more; run it again after this batch.`);
   }
   lines.push(
     '',
     'Delete: /bncr sessions prune' +
-      (days === BNCR_SESSION_CLEANUP_DEFAULT_DAYS ? '' : ' ' + String(days)),
+      (days === BNCR_SESSION_CLEANUP_DEFAULT_DAYS ? '' : ` ${String(days)}`),
     'Scene rows and mode survive; only the conversation is dropped.',
   );
   return lines.join('\n');
@@ -369,7 +367,7 @@ async function pruneBatch(
           sessionKey: row.sessionKey,
         });
       } catch {
-        revived.push(row.sceneKey + ' (unreadable)');
+        revived.push(`${row.sceneKey} (unreadable)`);
         continue;
       }
       if (!current) {
@@ -378,7 +376,7 @@ async function pruneBatch(
       }
       const currentAge = ageInDays(current.lastActivityAt, now);
       if (currentAge == null || currentAge < days) {
-        revived.push(row.sceneKey + '/' + row.agentId);
+        revived.push(`${row.sceneKey}/${row.agentId}`);
         continue;
       }
     }
@@ -393,7 +391,7 @@ async function pruneBatch(
       deleted.push(row);
     } catch {
       // A failed delete must not abort the batch; the row is reported instead.
-      revived.push(row.sceneKey + ' (delete failed)');
+      revived.push(`${row.sceneKey} (delete failed)`);
     }
   }
   return { deleted, revived, alreadyGone };
@@ -430,7 +428,7 @@ export async function executeSessionCleanupCommand(
         '🧹 Nothing to delete: no bncr session is quiet ' +
         String(command.days) +
         'd+' +
-        (unreadable.length > 0 ? ' (' + unreadable.join(', ') + ' unreadable)' : '') +
+        (unreadable.length > 0 ? ` (${unreadable.join(', ')} unreadable)` : '') +
         '.',
     };
   }
@@ -441,19 +439,19 @@ export async function executeSessionCleanupCommand(
     'Deleted ' +
       String(deleted.length) +
       ' session(s)' +
-      (alreadyGone > 0 ? ' · ' + String(alreadyGone) + ' already gone' : '') +
-      (revived.length > 0 ? ' · ' + String(revived.length) + ' skipped' : ''),
+      (alreadyGone > 0 ? ` · ${String(alreadyGone)} already gone` : '') +
+      (revived.length > 0 ? ` · ${String(revived.length)} skipped` : ''),
   );
   if (deleted.length > 0) {
     for (const row of deleted) lines.push(describeRow(row));
     lines.push('', 'Scene rows kept: approval, mode, name and group are unchanged.');
   }
   if (revived.length > 0) {
-    lines.push('', 'Skipped (active again or unreadable): ' + revived.join(', '));
+    lines.push('', `Skipped (active again or unreadable): ${revived.join(', ')}`);
   }
   const remaining = rows.length - deleted.length - alreadyGone - revived.length;
   if (remaining > 0) {
-    lines.push('', '… ' + String(remaining) + ' more in this batch; run it again.');
+    lines.push('', `… ${String(remaining)} more in this batch; run it again.`);
   }
   return { ok: true, text: lines.join('\n') };
 }

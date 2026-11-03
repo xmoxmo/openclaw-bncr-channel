@@ -10,9 +10,22 @@ import { formatOpenClawAgentEnvelope } from '../../openclaw/reply-runtime.ts';
 import type { BncrInboundApi } from './contracts.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 
-export type BncrHistoryEntry = HistoryEntry & {
+export type BncrHistoryMediaEntry = HistoryMediaEntry & {
+  fileName?: string;
+  mediaId?: string;
+  originAgentId?: string;
+  sourceKind?: 'local' | 'url' | 'buffer';
+  sourceRef?: string;
+  storedPath?: string;
+  attachmentScope?: 'historical';
+  status?: 'ready' | 'deferred' | 'fetch_failed' | 'oversize' | 'unavailable';
+  sizeBytes?: number;
+};
+
+export type BncrHistoryEntry = Omit<HistoryEntry, 'media'> & {
   senderId?: string;
   role?: 'user' | 'assistant' | 'system';
+  media?: BncrHistoryMediaEntry[];
 };
 
 export type BncrConversationHistoryMap = Map<string, BncrHistoryEntry[]>;
@@ -225,9 +238,18 @@ export function recordBncrPendingConversationMedia(args: {
   senderId: string;
   bodyText: string;
   mediaItems?: Array<{
-    path: string;
+    mediaId?: string;
+    path?: string;
+    url?: string;
     contentType?: string;
+    fileName?: string;
     kind?: BncrHistoryMediaKind;
+    originAgentId: string;
+    sourceKind?: 'local' | 'url' | 'buffer';
+    sourceRef?: string;
+    storedPath?: string;
+    status?: 'ready' | 'deferred' | 'fetch_failed' | 'oversize' | 'unavailable';
+    sizeBytes?: number;
   }>;
   mediaContentType?: string;
   historyLimit?: number;
@@ -291,11 +313,21 @@ export function recordBncrPendingConversationMedia(args: {
       media: normalizedMediaItems.map(
         (item) =>
           ({
-            path: item.path,
+            ...(item.mediaId ? { mediaId: item.mediaId } : {}),
+            ...(item.path ? { path: item.path } : {}),
+            ...(item.url ? { url: item.url } : {}),
             contentType: item.contentType || args.mediaContentType,
+            ...(item.fileName ? { fileName: item.fileName } : {}),
             kind: item.kind || kind,
             messageId,
-          }) satisfies HistoryMediaEntry,
+            originAgentId: item.originAgentId,
+            ...(item.sourceKind ? { sourceKind: item.sourceKind } : {}),
+            ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
+            ...(item.storedPath ? { storedPath: item.storedPath } : {}),
+            attachmentScope: 'historical' as const,
+            ...(item.status ? { status: item.status } : {}),
+            ...(item.sizeBytes !== undefined ? { sizeBytes: item.sizeBytes } : {}),
+          }) satisfies BncrHistoryMediaEntry,
       ),
     },
   });
@@ -311,7 +343,7 @@ export function recordBncrBotReply(args: {
   body: string;
   timestamp?: number;
   messageId?: string;
-  media?: HistoryMediaEntry[];
+  media?: BncrHistoryMediaEntry[];
   historyLimit?: number;
 }): boolean {
   const limit = resolveBncrHistoryLimit(args.historyLimit);
@@ -342,9 +374,19 @@ export function recordBncrBotReply(args: {
         ? {
             media: args.media.map((item) => ({
               ...(item?.path ? { path: item.path } : {}),
+              ...(item?.url ? { url: item.url } : {}),
               ...(item?.contentType ? { contentType: item.contentType } : {}),
+              ...(item?.fileName ? { fileName: item.fileName } : {}),
               ...(item?.kind ? { kind: item.kind } : {}),
               messageId: item?.messageId || msgId,
+              ...(item?.mediaId ? { mediaId: item.mediaId } : {}),
+              ...(item?.originAgentId ? { originAgentId: item.originAgentId } : {}),
+              ...(item?.sourceKind ? { sourceKind: item.sourceKind } : {}),
+              ...(item?.sourceRef ? { sourceRef: item.sourceRef } : {}),
+              ...(item?.storedPath ? { storedPath: item.storedPath } : {}),
+              attachmentScope: 'historical' as const,
+              ...(item?.status ? { status: item.status } : {}),
+              ...(item?.sizeBytes !== undefined ? { sizeBytes: item.sizeBytes } : {}),
             })),
           }
         : {}),
@@ -366,9 +408,19 @@ function cloneBncrHistoryEntry(entry: BncrHistoryEntry): BncrHistoryEntry {
       ? {
           media: entry.media.map((item) => ({
             ...(item?.path ? { path: item.path } : {}),
+            ...(item?.url ? { url: item.url } : {}),
             ...(item?.contentType ? { contentType: item.contentType } : {}),
+            ...(item?.fileName ? { fileName: item.fileName } : {}),
             ...(item?.kind ? { kind: item.kind } : {}),
             ...(item?.messageId ? { messageId: item.messageId } : {}),
+            ...(item?.mediaId ? { mediaId: item.mediaId } : {}),
+            ...(item?.originAgentId ? { originAgentId: item.originAgentId } : {}),
+            ...(item?.sourceKind ? { sourceKind: item.sourceKind } : {}),
+            ...(item?.sourceRef ? { sourceRef: item.sourceRef } : {}),
+            ...(item?.storedPath ? { storedPath: item.storedPath } : {}),
+            ...(item?.attachmentScope ? { attachmentScope: item.attachmentScope } : {}),
+            ...(item?.status ? { status: item.status } : {}),
+            ...(item?.sizeBytes !== undefined ? { sizeBytes: item.sizeBytes } : {}),
           })),
         }
       : {}),

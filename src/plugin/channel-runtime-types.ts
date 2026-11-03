@@ -100,9 +100,19 @@ export type BncrPersistedConversationHistoryEntry = {
 
 export type BncrPersistedConversationHistoryMediaEntry = {
   path?: string;
+  url?: string;
   contentType?: string;
+  fileName?: string;
   kind?: 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'unknown';
   messageId?: string;
+  mediaId?: string;
+  originAgentId?: string;
+  sourceKind?: 'local' | 'url' | 'buffer';
+  sourceRef?: string;
+  storedPath?: string;
+  attachmentScope?: 'current' | 'historical';
+  status?: 'ready' | 'deferred' | 'fetch_failed' | 'oversize' | 'unavailable';
+  sizeBytes?: number;
 };
 
 export type BncrPersistedConversationHistoryBucket = {
@@ -146,6 +156,30 @@ export type BncrVerifiedTarget = {
   displayScope: string;
 };
 
+export type BncrHistoryMediaSourceKind = 'url' | 'local';
+
+export type BncrHistoryMediaDownloadInput = {
+  accountId: string;
+  agentId: string;
+  sessionKey: string;
+  source: string;
+  sourceKind: BncrHistoryMediaSourceKind;
+  mediaRef?: string;
+  contentType?: string;
+  fileName?: string;
+  assertCurrent?: () => void;
+};
+
+export type BncrHistoryMediaDownload = {
+  mediaRef?: string;
+  mediaUri: string;
+  hostPath: string;
+  contentType?: string;
+  kind?: 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'unknown';
+  fileName?: string;
+  sizeBytes?: number;
+};
+
 export type BncrChannelSendContext = {
   accountId?: string | null;
   to?: string;
@@ -161,6 +195,7 @@ export type BncrChannelSendContext = {
   mediaLocalRoots?: readonly string[];
   payload?: Record<string, unknown>;
   sessionKey?: string;
+  agentId?: string;
   mirror?: { sessionKey?: string };
   threadId?: string | number | null;
   /** Pass-through fields from host - bncr plugin does NOT consume these. */
@@ -193,6 +228,8 @@ export type ChannelMessageActionAdapter = {
     action: string;
     params: unknown;
     accountId?: string | null;
+    agentId?: string | null;
+    sessionKey?: string | null;
     mediaLocalRoots?: readonly string[];
   }) => Promise<OpenClawJsonResultPayload>;
 };

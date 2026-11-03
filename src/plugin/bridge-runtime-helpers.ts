@@ -218,7 +218,11 @@ export function buildInboundSurfaceConnectionRuntime(args: {
 }
 
 export function buildChannelSendTargetRuntime(args: {
-  resolveVerifiedTarget: (to: string, accountId: string) => BncrVerifiedTarget;
+  resolveVerifiedTarget: (
+    to: string,
+    accountId: string,
+    preferredAgentId?: string,
+  ) => BncrVerifiedTarget;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) => void;
   enqueueFromReply: (args: {
     accountId: string;
@@ -229,8 +233,8 @@ export function buildChannelSendTargetRuntime(args: {
   }) => Promise<void>;
 }) {
   return {
-    resolveVerifiedTarget: (to: string, accountId: string) =>
-      args.resolveVerifiedTarget(to, accountId),
+    resolveVerifiedTarget: (to: string, accountId: string, preferredAgentId?: string) =>
+      args.resolveVerifiedTarget(to, accountId, preferredAgentId),
     rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) =>
       args.rememberSessionRoute(sessionKey, accountId, route),
     enqueueFromReply: (runtimeArgs: Parameters<typeof args.enqueueFromReply>[0]) =>

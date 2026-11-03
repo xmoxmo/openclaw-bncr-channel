@@ -433,8 +433,11 @@ test('buildBncrPromptVisibleContextFacts preserves conversation context with sen
         sender: 'osxmo',
         senderId: '6278285192',
         media_type: 'image',
-        path: 'media://inbound/a.jpg',
         contentType: 'image/jpeg',
+        source: '/home/test/.openclaw/media/inbound/a.jpg',
+        sourceKind: 'local',
+        attachmentScope: 'historical',
+        downloadable: true,
       },
       {
         messageId: 'pending-1',
@@ -443,8 +446,11 @@ test('buildBncrPromptVisibleContextFacts preserves conversation context with sen
         sender: 'osxmo',
         senderId: '6278285192',
         media_type: 'image',
-        path: 'media://inbound/b.png',
         contentType: 'image/png',
+        source: '/home/test/.openclaw/media/inbound/b.png',
+        sourceKind: 'local',
+        attachmentScope: 'historical',
+        downloadable: true,
       },
     ],
     participants: {
@@ -460,6 +466,111 @@ test('buildBncrPromptVisibleContextFacts preserves conversation context with sen
     group_subject: 'wind_system',
     account_id: 'Primary',
   });
+});
+
+test('historical media normalizes legacy URL paths without overriding explicit source kinds', () => {
+  const facts = buildBncrStructuredContextFactsFromInboundParts({
+    channelId: 'bncr',
+    parsed: {
+      accountId: 'Primary',
+      platform: 'tgBot',
+      peer: { kind: 'direct', id: '10001' },
+      isGroup: false,
+      msgId: 'legacy-media-1',
+    },
+    resolution: {
+      chatType: 'direct',
+      canonicalTo: 'Bncr:tgBot:0:10001',
+      rawTo: 'BncrRaw:tgBot:0:10001',
+      originatingTo: 'BncrRaw:tgBot:0:10001',
+      resolvedRoute: { agentId: 'orion', mainSessionKey: 'agent:orion:bncr:direct:10001' },
+      dispatchSessionKey: 'agent:orion:bncr:direct:10001',
+    },
+    prepared: {
+      rawBody: 'historical media',
+      mediaItems: [
+        {
+          path: 'https://legacy.example.test/top-level.png',
+          contentType: 'image/png',
+          mediaId: 'legacy-top-level',
+          attachmentScope: 'historical',
+        },
+      ],
+    },
+    senderIdForContext: '10001',
+    conversationHistoryContext: [
+      {
+        messageId: 'history-1',
+        timestamp: 1700000000000,
+        sender: 'xmo',
+        senderId: '10001',
+        role: 'user',
+        content: 'media',
+        media: [
+          {
+            kind: 'image',
+            path: 'https://legacy.example.test/path.png',
+            contentType: 'image/png',
+            mediaId: 'legacy-path-url',
+          },
+          {
+            kind: 'document',
+            url: 'https://modern.example.test/file.pdf',
+            sourceRef: 'https://modern.example.test/file.pdf',
+            sourceKind: 'url',
+            contentType: 'application/pdf',
+            mediaId: 'modern-url',
+          },
+          {
+            kind: 'image',
+            path: '/root/.openclaw/media/inbound/local.png',
+            contentType: 'image/png',
+            mediaId: 'legacy-local',
+          },
+          {
+            kind: 'image',
+            path: 'https://explicit.example.test/local.png',
+            url: 'https://explicit.example.test/local.png',
+            sourceKind: 'local',
+            contentType: 'image/png',
+            mediaId: 'explicit-local',
+          },
+        ],
+      },
+    ],
+  });
+
+  const prompt = buildBncrPromptVisibleContextFacts(facts);
+  const topLevel = prompt.media?.[0];
+  assert.equal(topLevel?.source, 'https://legacy.example.test/top-level.png');
+  assert.equal(topLevel?.sourceKind, 'url');
+
+  const media = prompt.conversation_context?.filter((item) => item.source !== undefined) || [];
+  assert.deepEqual(
+    media.map(({ mediaRef, source, sourceKind }) => ({ mediaRef, source, sourceKind })),
+    [
+      {
+        mediaRef: 'legacy-path-url',
+        source: 'https://legacy.example.test/path.png',
+        sourceKind: 'url',
+      },
+      {
+        mediaRef: 'modern-url',
+        source: 'https://modern.example.test/file.pdf',
+        sourceKind: 'url',
+      },
+      {
+        mediaRef: 'legacy-local',
+        source: '/root/.openclaw/media/inbound/local.png',
+        sourceKind: 'local',
+      },
+      {
+        mediaRef: 'explicit-local',
+        source: 'https://explicit.example.test/local.png',
+        sourceKind: 'local',
+      },
+    ],
+  );
 });
 
 test('buildBncrPromptVisibleContextFacts returns empty object when official metadata already covers the inbound', () => {

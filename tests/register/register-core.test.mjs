@@ -58,6 +58,7 @@ test('bncr register is idempotent on the same api instance', async () => {
   const methodCountAfterFirstRegister = api.methods.length;
   const channelCountAfterFirstRegister = api.channels.length;
   const serviceCountAfterFirstRegister = api.services.length;
+  const toolCountAfterFirstRegister = api.tools.length;
   mod.default.register(api);
 
   assert.ok(methodCountAfterFirstRegister > 0);
@@ -66,7 +67,25 @@ test('bncr register is idempotent on the same api instance', async () => {
   assert.equal(api.methods.length, methodCountAfterFirstRegister);
   assert.equal(api.channels.length, channelCountAfterFirstRegister);
   assert.equal(api.services.length, serviceCountAfterFirstRegister);
+  assert.equal(api.tools.length, toolCountAfterFirstRegister);
+  assert.equal(api.tools[0]?.tool?.contextVersion, 2);
   assert.equal(api.methods.length, new Set(api.methods.map((item) => item.name)).size);
+});
+
+test('bncr registers the history media tool when reload adopts an existing channel declaration', async () => {
+  resetBncrRegisterGlobals();
+  const mod = await import('../../index.ts');
+  const api1 = createRegisterApiStub();
+  const api2 = createRegisterApiStub();
+
+  mod.default.register(api1);
+  mod.default.register(api2);
+
+  assert.equal(api1.channels.length, 1);
+  assert.equal(api1.tools.length, 1);
+  assert.equal(api2.channels.length, 0);
+  assert.equal(api2.tools.length, 1);
+  assert.equal(api2.tools[0]?.tool?.contextVersion, 2);
 });
 
 test('bncr register observes service and channel activation without waiting for timeout', async () => {
@@ -1227,6 +1246,8 @@ test('bncr registers channel.message as the channel-owned handoff adapter withou
   assert.equal(typeof channel.message?.send?.payload, 'function');
   assert.equal(typeof channel.actions?.supportsAction, 'function');
   assert.equal(typeof channel.actions?.handleAction, 'function');
+  assert.equal(api.tools.length, 1);
+  assert.equal(api.tools[0]?.tool?.contextVersion, 2);
   assert.equal(channel.message?.durableFinal, undefined);
   assert.equal(channel.durableFinal, undefined);
   assert.equal(channel.capabilities?.durableFinal, undefined);

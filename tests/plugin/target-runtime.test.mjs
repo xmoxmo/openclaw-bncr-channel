@@ -93,6 +93,20 @@ test('target runtime resolves verified target and falls back to ensured canonica
   });
 });
 
+test('target runtime prefers the trusted caller agent for canonical session identity', () => {
+  const { runtime, calls } = createRuntime({ canonicalAgentId: 'global-agent' });
+  const targetRuntime = createBncrTargetRuntime(runtime);
+
+  const verified = targetRuntime.resolveVerifiedTarget(
+    'Bncr:tgBot:0:10001',
+    'Primary',
+    'caller-agent',
+  );
+
+  assert.match(verified.sessionKey, /^agent:caller-agent:bncr:direct:/);
+  assert.equal(calls.ensureArgs.length, 0);
+});
+
 test('target runtime rejects invalid target and logs warning', () => {
   const { runtime, calls } = createRuntime();
   const targetRuntime = createBncrTargetRuntime(runtime);

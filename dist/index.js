@@ -1849,9 +1849,183 @@ var BncrConfigSchema = {
   }
 };
 
+// src/plugin/history-media-tool.ts
+import { imageResultFromFile } from "openclaw/plugin-sdk/channel-actions";
+import { Type } from "typebox";
+
+// src/core/value-sanitize.ts
+function asString(value, fallback = "") {
+  if (typeof value === "string") return value;
+  if (value == null) return fallback;
+  return String(value);
+}
+
+// src/core/accounts.ts
+var BNCR_DEFAULT_ACCOUNT_ID = "Primary";
+function normalizeAccountId(accountId) {
+  const v = asString(accountId || "").trim();
+  if (!v) return BNCR_DEFAULT_ACCOUNT_ID;
+  const lower = v.toLowerCase();
+  if (lower === "default" || lower === "primary") return BNCR_DEFAULT_ACCOUNT_ID;
+  return v;
+}
+
+// src/messaging/inbound/media-assets.ts
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { extensionForMime, getMediaDir, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+var BncrMediaSourceError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "BncrMediaSourceError";
+    this.code = code;
+  }
+};
+
+// src/openclaw/sdk-helpers.ts
+import {
+  applyAccountNameToChannelSection as sdkApplyAccountNameToChannelSection,
+  jsonResult as sdkJsonResult,
+  setAccountEnabledInConfigSection as sdkSetAccountEnabledInConfigSection
+} from "openclaw/plugin-sdk/core";
+import {
+  loadJsonFile as sdkLoadJsonFile,
+  writeJsonFileAtomically as sdkWriteJsonFileAtomically
+} from "openclaw/plugin-sdk/json-store";
+import { readStringParam as sdkReadStringParam } from "openclaw/plugin-sdk/param-readers";
+import { createDefaultChannelRuntimeState as sdkCreateDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
+import { extractToolSend as sdkExtractToolSend } from "openclaw/plugin-sdk/tool-send";
+var openClawJsonResult = sdkJsonResult;
+
+// src/plugin/history-media-tool.ts
+var BNCR_HISTORY_MEDIA_TOOL_NAME = "bncr_download_media";
+function createBncrHistoryMediaToolFactory(args) {
+  return {
+    contextVersion: 2,
+    create(ctx) {
+      return [
+        {
+          name: BNCR_HISTORY_MEDIA_TOOL_NAME,
+          label: "BNCR historical media",
+          description: "Download one historical BNCR media attachment into the current agent workspace. Pass source, sourceKind, mediaRef, contentType, and fileName exactly as shown in historical media metadata. Current-turn media is already attached.",
+          parameters: Type.Object(
+            {
+              source: Type.String({
+                description: "The exact URL or absolute local path from historical media metadata.",
+                minLength: 1
+              }),
+              sourceKind: Type.Union([Type.Literal("url"), Type.Literal("local")], {
+                description: "Where the historical media source lives."
+              }),
+              mediaRef: Type.Optional(
+                Type.String({
+                  description: "Historical mediaRef for result correlation.",
+                  minLength: 1
+                })
+              ),
+              contentType: Type.Optional(
+                Type.String({
+                  description: "MIME type from historical media metadata.",
+                  minLength: 1
+                })
+              ),
+              fileName: Type.Optional(
+                Type.String({
+                  description: "Original file name from historical media metadata.",
+                  minLength: 1
+                })
+              )
+            },
+            { additionalProperties: false }
+          ),
+          async execute(_toolCallId, rawParams) {
+            const bridge = args.getBridge();
+            if (!bridge) throw new Error("BNCR runtime is not available");
+            const params = rawParams && typeof rawParams === "object" ? rawParams : {};
+            const source = readOptionalString(params.source).trim();
+            const mediaRef = readOptionalString(params.mediaRef).trim();
+            const sourceKind = readOptionalString(params.sourceKind).trim();
+            const contentType = readOptionalString(params.contentType).trim();
+            const fileName = readOptionalString(params.fileName).trim();
+            const agentId = ctx.agentId?.trim() || "";
+            const sessionKey = ctx.sessionKey?.trim() || "";
+            const accountId = normalizeAccountId(
+              ctx.agentAccountId?.trim() || ctx.deliveryContext?.accountId?.trim() || ""
+            );
+            if (!agentId) throw new Error("bncr_download_media requires a trusted agent context");
+            if (!sessionKey)
+              throw new Error("bncr_download_media requires a trusted session context");
+            if (!source) {
+              return openClawJsonResult({
+                ok: false,
+                code: "SOURCE_REQUIRED",
+                message: "media source is required"
+              });
+            }
+            if (sourceKind !== "url" && sourceKind !== "local") {
+              return openClawJsonResult({
+                ok: false,
+                code: "SOURCE_KIND_INVALID",
+                message: "sourceKind must be either url or local"
+              });
+            }
+            ctx.assertInvocationCurrent();
+            let downloaded;
+            try {
+              downloaded = await bridge.downloadHistoryMedia({
+                accountId,
+                agentId,
+                sessionKey,
+                source,
+                sourceKind,
+                ...mediaRef ? { mediaRef } : {},
+                ...contentType ? { contentType } : {},
+                ...fileName ? { fileName } : {},
+                assertCurrent: ctx.assertInvocationCurrent
+              });
+            } catch (error) {
+              if (error instanceof BncrMediaSourceError) {
+                return openClawJsonResult({
+                  ok: false,
+                  code: error.code,
+                  message: error.message
+                });
+              }
+              throw error;
+            }
+            ctx.assertInvocationCurrent();
+            const details = {
+              ok: true,
+              ...downloaded.mediaRef ? { mediaRef: downloaded.mediaRef } : {},
+              source,
+              sourceKind,
+              path: downloaded.mediaUri,
+              ...downloaded.contentType ? { contentType: downloaded.contentType } : {},
+              ...downloaded.fileName ? { fileName: downloaded.fileName } : {},
+              ...downloaded.sizeBytes !== void 0 ? { sizeBytes: downloaded.sizeBytes } : {}
+            };
+            if (downloaded.contentType?.startsWith("image/")) {
+              return imageResultFromFile({
+                label: downloaded.mediaRef ? `BNCR media ${downloaded.mediaRef}` : "BNCR historical media",
+                path: downloaded.hostPath,
+                details
+              });
+            }
+            return openClawJsonResult(details);
+          }
+        }
+      ];
+    }
+  };
+}
+function readOptionalString(value) {
+  return typeof value === "string" ? value : "";
+}
+
 // index.ts
 var pluginVersion2 = pluginVersion;
 var registerRuntime = createBncrRegisterRuntime();
+var registeredToolRegistryByApi = /* @__PURE__ */ new WeakMap();
 var {
   adoptLifecycleBridge,
   beginRetirement,
@@ -1899,6 +2073,15 @@ var plugin = {
     const sameRegistryAsPrevious = previousRegistryFingerprint === registryFingerprint;
     const apiSeenRecently = globalTrace.seenApiInstanceIds.has(apiInstanceId);
     const registrySeenRecently = globalTrace.seenRegistryFingerprints.has(registryFingerprint);
+    const toolRegistryKey = `${apiInstanceId}:${registryFingerprint}`;
+    if (registeredToolRegistryByApi.get(api) !== toolRegistryKey) {
+      api.registerTool(
+        createBncrHistoryMediaToolFactory({
+          getBridge: getCurrentBridge
+        })
+      );
+      registeredToolRegistryByApi.set(api, toolRegistryKey);
+    }
     let ownerDecision;
     try {
       const gatewayRuntime = getGatewayRuntime();

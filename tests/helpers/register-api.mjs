@@ -112,6 +112,7 @@ export function createRegisterApiStub(overrides = {}) {
     },
     services: [],
     channels: [],
+    tools: [],
     methods: [],
     registerService(def) {
       // Host contract: service ids are unique per registry and the first
@@ -137,6 +138,9 @@ export function createRegisterApiStub(overrides = {}) {
     },
     registerGatewayMethod(name, handler) {
       this.methods.push({ name, handler });
+    },
+    registerTool(tool, options) {
+      this.tools.push({ tool, options });
     },
     registerCli(register, options) {
       this.cli = { register, options };

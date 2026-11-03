@@ -10,7 +10,6 @@ import {
   resolveBncrInboundSessionStorePath,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { resolveBncrMediaMaxBytes } from '../../openclaw/media-limit-runtime.ts';
-import { saveOpenClawChannelMediaBuffer } from '../../openclaw/media-runtime.ts';
 import {
   formatOpenClawAgentEnvelope,
   resolveOpenClawEnvelopeFormatOptions,
@@ -20,6 +19,11 @@ import {
   resolveOpenClawAgentRoute,
 } from '../../openclaw/routing-runtime.ts';
 import type { BncrInboundApi, BncrInboundConfig, BncrRememberSessionRoute } from './contracts.ts';
+import {
+  createBncrMediaId,
+  readBncrMediaFile,
+  saveBncrHistoryMediaBuffer,
+} from './media-assets.ts';
 import { isHttpMediaUrl } from './media-url-download.ts';
 import { parseBncrNativeCommand, resolveBncrNativeCommandParseOptions } from './native-command.ts';
 import { loadInboundRemoteMedia } from './remote-media.ts';
@@ -57,11 +61,20 @@ export type BncrInboundReplyRouteFact = {
 export type BncrPreparedInboundSessionContext = {
   storePath: string;
   mediaItems: Array<{
-    path: string;
+    mediaId: string;
+    path?: string;
+    url?: string;
     contentType?: string;
     fileName?: string;
     kind: 'image' | 'video' | 'audio' | 'document';
     transferId?: string;
+    originAgentId: string;
+    sourceKind: 'local' | 'url' | 'buffer';
+    sourceRef?: string;
+    storedPath?: string;
+    attachmentScope: 'current' | 'historical';
+    status: 'ready' | 'deferred' | 'fetch_failed' | 'oversize' | 'unavailable';
+    sizeBytes?: number;
   }>;
   mediaPath?: string;
   mediaContentType?: string;
@@ -191,51 +204,110 @@ async function saveBncrInboundMediaItem(args: {
   api: BncrInboundApi;
   item: ParsedInbound['mediaItems'][number];
   maxBytes: number;
+  originAgentId: string;
+  currentTurn: boolean;
 }) {
   const pathFromTransfer = String(args.item?.path || '').trim();
   const base64 = String(args.item?.base64 || '').trim();
   const mimeType = String(args.item?.mimeType || '').trim() || undefined;
-  const fileName = String(args.item?.fileName || '').trim() || undefined;
+  let effectiveFileName = String(args.item?.fileName || '').trim() || undefined;
   const transferId = String(args.item?.transferId || '').trim() || undefined;
+  const mediaId = createBncrMediaId();
   let mediaPath: string | undefined;
+  let storedPath: string | undefined;
   let mediaContentType = mimeType;
+  let mediaUrl: string | undefined;
+  let sourceRef: string | undefined;
+  let sourceKind: 'local' | 'url' | 'buffer' = 'local';
+  let status: 'ready' | 'deferred' | 'fetch_failed' | 'oversize' | 'unavailable' = 'ready';
+  let sizeBytes: number | undefined;
   if (base64) {
-    const mediaBuf = decodeInboundMediaBase64(base64, args.maxBytes);
-    const saved = await saveOpenClawChannelMediaBuffer(
-      args.api,
-      mediaBuf,
-      mimeType,
-      'inbound',
-      args.maxBytes,
-      fileName,
-    );
-    mediaPath = saved.path;
+    sourceKind = 'buffer';
+    try {
+      const mediaBuf = decodeInboundMediaBase64(base64, args.maxBytes);
+      sizeBytes = mediaBuf.byteLength;
+      const saved = await saveBncrHistoryMediaBuffer({
+        buffer: mediaBuf,
+        contentType: mimeType,
+        agentId: args.originAgentId,
+        maxBytes: args.maxBytes,
+        fileName: effectiveFileName,
+      });
+      storedPath = saved.path;
+    } catch (error) {
+      status =
+        error instanceof Error && /too large/i.test(error.message) ? 'oversize' : 'unavailable';
+    }
   } else if (pathFromTransfer && isHttpMediaUrl(pathFromTransfer)) {
-    const downloaded = await loadInboundRemoteMedia(args.api, pathFromTransfer, args.maxBytes);
-    mediaContentType = downloaded.contentType || mimeType;
-    const saved = await saveOpenClawChannelMediaBuffer(
-      args.api,
-      downloaded.buffer,
-      mediaContentType,
-      'inbound',
-      args.maxBytes,
-      fileName,
-    );
-    mediaPath = saved.path;
+    sourceKind = 'url';
+    sourceRef = pathFromTransfer;
+    mediaUrl = pathFromTransfer;
+    if (!args.currentTurn) {
+      status = 'deferred';
+    } else {
+      try {
+        const downloaded = await loadInboundRemoteMedia(args.api, pathFromTransfer, args.maxBytes);
+        mediaContentType = downloaded.contentType || mimeType;
+        effectiveFileName = effectiveFileName || downloaded.fileName;
+        sizeBytes = downloaded.buffer.byteLength;
+        const saved = await saveBncrHistoryMediaBuffer({
+          buffer: downloaded.buffer,
+          contentType: mediaContentType,
+          agentId: args.originAgentId,
+          maxBytes: args.maxBytes,
+          fileName: effectiveFileName,
+        });
+        storedPath = saved.path;
+      } catch (error) {
+        status =
+          error instanceof Error && /too large/i.test(error.message) ? 'oversize' : 'fetch_failed';
+      }
+    }
   } else if (pathFromTransfer && fs.existsSync(pathFromTransfer)) {
-    mediaPath = pathFromTransfer;
+    sourceRef = pathFromTransfer;
+    try {
+      const mediaBuffer = await readBncrMediaFile(pathFromTransfer, args.maxBytes);
+      sizeBytes = mediaBuffer.byteLength;
+      const saved = await saveBncrHistoryMediaBuffer({
+        buffer: mediaBuffer,
+        contentType: mimeType,
+        agentId: args.originAgentId,
+        maxBytes: args.maxBytes,
+        fileName: effectiveFileName || pathFromTransfer.split(/[\\/]/).at(-1),
+      });
+      storedPath = saved.path;
+    } catch (error) {
+      status =
+        error instanceof Error && /too large/i.test(error.message) ? 'oversize' : 'unavailable';
+    }
   }
-  if (!mediaPath) return null;
+  if (!storedPath && sourceKind === 'local' && !sourceRef) return null;
   const kind = inferBncrInboundMediaKind({
     msgType: String(args.item?.type || '').trim(),
     mediaContentType: mediaContentType || mimeType,
   });
+  const attachmentScope: 'current' | 'historical' = args.currentTurn ? 'current' : 'historical';
+  if (args.currentTurn && storedPath) {
+    // The host stages current-turn media only from its managed media root.
+    // The stored copy is already unique and scoped to the resolved agent, so
+    // use it directly instead of duplicating it into the agent workspace.
+    mediaPath = storedPath;
+  }
   return {
-    path: mediaPath,
+    mediaId,
+    ...(mediaPath ? { path: mediaPath } : {}),
+    ...(mediaUrl ? { url: mediaUrl } : {}),
     ...(mediaContentType ? { contentType: mediaContentType } : {}),
-    ...(fileName ? { fileName } : {}),
+    ...(effectiveFileName ? { fileName: effectiveFileName } : {}),
     kind,
     ...(transferId ? { transferId } : {}),
+    originAgentId: args.originAgentId,
+    sourceKind,
+    ...(sourceRef ? { sourceRef } : {}),
+    ...(storedPath ? { storedPath } : {}),
+    attachmentScope,
+    status,
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
   };
 }
 
@@ -325,8 +397,9 @@ export async function prepareBncrInboundSessionContext(args: {
   parsed: ParsedInbound;
   resolution: BncrInboundConversationResolution;
   rememberSessionRoute: BncrRememberSessionRoute;
+  currentTurn: boolean;
 }) {
-  const { api, cfg, parsed, resolution, rememberSessionRoute } = args;
+  const { api, cfg, parsed, resolution, rememberSessionRoute, currentTurn } = args;
   const {
     msgType,
     mediaBase64,
@@ -372,6 +445,8 @@ export async function prepareBncrInboundSessionContext(args: {
           api,
           item,
           maxBytes: mediaMaxBytes,
+          originAgentId: resolvedRoute.agentId,
+          currentTurn,
         }),
       ),
     )
@@ -432,10 +507,19 @@ export async function prepareBncrInboundDispatch(args: {
   parsed: ParsedInbound;
   canonicalAgentId: string;
   resolvedAgentId?: string;
+  currentTurn: boolean;
   rememberSessionRoute: BncrRememberSessionRoute;
 }) {
-  const { api, channelId, cfg, parsed, canonicalAgentId, resolvedAgentId, rememberSessionRoute } =
-    args;
+  const {
+    api,
+    channelId,
+    cfg,
+    parsed,
+    canonicalAgentId,
+    resolvedAgentId,
+    currentTurn,
+    rememberSessionRoute,
+  } = args;
   const resolution = resolveBncrInboundConversation({
     api,
     cfg,
@@ -450,6 +534,7 @@ export async function prepareBncrInboundDispatch(args: {
     parsed,
     resolution,
     rememberSessionRoute,
+    currentTurn,
   });
   const replyRouteFact = buildBncrInboundReplyRouteFact(resolution);
   const senderIdForContext = parsed.userId || parsed.clientId || resolution.canonicalTo;

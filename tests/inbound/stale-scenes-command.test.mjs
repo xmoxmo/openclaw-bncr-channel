@@ -43,7 +43,7 @@ function directRow(overrides = {}) {
 }
 
 function command(name, argsText = '') {
-  return { command: name, raw: '/bncr ' + name, body: '/bncr ' + name, argsText };
+  return { command: name, raw: `/bncr ${name}`, body: `/bncr ${name}`, argsText };
 }
 
 function buildDeps(args) {
@@ -59,7 +59,7 @@ function buildDeps(args) {
     now: () => NOW,
     readSessionUpdatedAt: async ({ agentId, sessionKey }) => {
       reads.push({ agentId, sessionKey });
-      return sessions.get(agentId + '|' + sessionKey) ?? null;
+      return sessions.get(`${agentId}|${sessionKey}`) ?? null;
     },
     deleteSession: async ({ agentId, sessionKey, archiveTranscript }) => {
       deleted.push({ agentId, sessionKey, archiveTranscript });
@@ -72,7 +72,7 @@ function buildDeps(args) {
   // Only wire the reverse-lookup path when a test opts in, so the legacy
   // timestamp-only cases keep exercising the readSessionUpdatedAt fallback.
   if (args.nodes) {
-    deps.readSessionNode = async ({ agentId, sessionKey }) => nodes.get(agentId + '|' + sessionKey);
+    deps.readSessionNode = async ({ agentId, sessionKey }) => nodes.get(`${agentId}|${sessionKey}`);
   }
   return { deps, registry, deleted, purged, reads };
 }
@@ -108,7 +108,7 @@ test('parse: stale accepts every filter, including the session anomalies', () =>
 });
 
 test('help and usage take their filter list from the same source as parse', () => {
-  const bracketed = '[' + STALE_SCENES_FILTERS.join('|') + ']';
+  const bracketed = `[${STALE_SCENES_FILTERS.join('|')}]`;
   assert.ok(STALE_SCENES_HELP_TEXT.includes(bracketed), 'help must list every filter');
   const invalid = parseStaleScenesCommand(command('stale', 'whatever'));
   assert.equal(invalid.valid, false);
@@ -174,9 +174,9 @@ test('list: only rows whose scene and session are both older than 72h are listed
   const { deps } = buildDeps({
     rows: [stale, active, sessionAlive],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(stale, 'public')]: NOW - 94 * DAY,
-      ['public|' + buildStaleSceneSessionKey(active, 'public')]: NOW - 60 * 1000,
-      ['orion|' + buildStaleSceneSessionKey(sessionAlive, 'orion')]: NOW - 11 * 60 * 60 * 1000,
+      [`public|${buildStaleSceneSessionKey(stale, 'public')}`]: NOW - 94 * DAY,
+      [`public|${buildStaleSceneSessionKey(active, 'public')}`]: NOW - 60 * 1000,
+      [`orion|${buildStaleSceneSessionKey(sessionAlive, 'orion')}`]: NOW - 11 * 60 * 60 * 1000,
     },
   });
 
@@ -217,7 +217,7 @@ test('prune: deletes the host session first and then the scene row', async () =>
   const row = groupRow();
   const { deps, registry, deleted, purged } = buildDeps({
     rows: [row],
-    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 94 * DAY },
+    sessions: { [`public|${buildStaleSceneSessionKey(row, 'public')}`]: NOW - 94 * DAY },
   });
 
   const result = await executeStaleScenesCommand({
@@ -248,7 +248,7 @@ test('prune: refuses an active scene unless force is given', async () => {
   const row = groupRow({ lastSeenAt: NOW - 60 * 1000 });
   const { deps, registry, deleted } = buildDeps({
     rows: [row],
-    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 60 * 1000 },
+    sessions: { [`public|${buildStaleSceneSessionKey(row, 'public')}`]: NOW - 60 * 1000 },
   });
 
   const refused = await executeStaleScenesCommand({
@@ -324,9 +324,9 @@ test('sibling: another platform on the same group is marked, and filters split t
   const { deps } = buildDeps({
     rows: [deadWithSibling, sibling, deadAlone],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(deadWithSibling, 'public')]: NOW - 94 * DAY,
-      ['public|' + buildStaleSceneSessionKey(sibling, 'public')]: NOW - 16 * 60 * 60 * 1000,
-      ['public|' + buildStaleSceneSessionKey(deadAlone, 'public')]: NOW - 83 * DAY,
+      [`public|${buildStaleSceneSessionKey(deadWithSibling, 'public')}`]: NOW - 94 * DAY,
+      [`public|${buildStaleSceneSessionKey(sibling, 'public')}`]: NOW - 16 * 60 * 60 * 1000,
+      [`public|${buildStaleSceneSessionKey(deadAlone, 'public')}`]: NOW - 83 * DAY,
     },
   });
 
@@ -363,8 +363,8 @@ test('sibling: a quiet sibling is reported without the active mark', async () =>
   const { deps } = buildDeps({
     rows: [dead, quietSibling],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(dead, 'public')]: NOW - 94 * DAY,
-      ['public|' + buildStaleSceneSessionKey(quietSibling, 'public')]: NOW - 17 * DAY,
+      [`public|${buildStaleSceneSessionKey(dead, 'public')}`]: NOW - 94 * DAY,
+      [`public|${buildStaleSceneSessionKey(quietSibling, 'public')}`]: NOW - 17 * DAY,
     },
   });
   const all = await executeStaleScenesCommand({
@@ -385,8 +385,8 @@ test('sibling: direct chats never borrow a sibling across platforms', async () =
   const { deps } = buildDeps({
     rows: [row, otherPlatform],
     sessions: {
-      ['orion|' + buildStaleSceneSessionKey(row, 'orion')]: NOW - 73 * DAY,
-      ['orion|' + buildStaleSceneSessionKey(otherPlatform, 'orion')]: NOW - 60 * 1000,
+      [`orion|${buildStaleSceneSessionKey(row, 'orion')}`]: NOW - 73 * DAY,
+      [`orion|${buildStaleSceneSessionKey(otherPlatform, 'orion')}`]: NOW - 60 * 1000,
     },
   });
   const all = await executeStaleScenesCommand({
@@ -485,8 +485,8 @@ test('list shows a per-row label when agents in one scene carry different names'
   const { deps } = buildDeps({
     rows: [left, right],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(left, 'public')]: NOW - 94 * DAY,
-      ['orion|' + buildStaleSceneSessionKey(right, 'orion')]: NOW - 94 * DAY,
+      [`public|${buildStaleSceneSessionKey(left, 'public')}`]: NOW - 94 * DAY,
+      [`orion|${buildStaleSceneSessionKey(right, 'orion')}`]: NOW - 94 * DAY,
     },
   });
   const result = await executeStaleScenesCommand({
@@ -500,7 +500,7 @@ test('list shows a per-row label when agents in one scene carry different names'
 test('list says when a filter matched nothing while stale rows exist', async () => {
   const { deps } = buildDeps({
     rows: [groupRow()],
-    sessions: { ['public|' + buildStaleSceneSessionKey(groupRow(), 'public')]: NOW - 94 * DAY },
+    sessions: { [`public|${buildStaleSceneSessionKey(groupRow(), 'public')}`]: NOW - 94 * DAY },
   });
   const result = await executeStaleScenesCommand({
     command: { action: 'list', filter: 'swapped' },
@@ -554,12 +554,12 @@ test('list caps a long listing and points at the filters', async () => {
   const sessions = {};
   for (let i = 0; i < 55; i += 1) {
     const row = groupRow({
-      sceneKey: 'GewePlus:' + (50000000000 + i),
+      sceneKey: `GewePlus:${50000000000 + i}`,
       groupId: String(50000000000 + i),
-      groupName: 'chat-' + i,
+      groupName: `chat-${i}`,
     });
     rows.push(row);
-    sessions['public|' + buildStaleSceneSessionKey(row, 'public')] = NOW - 94 * DAY;
+    sessions[`public|${buildStaleSceneSessionKey(row, 'public')}`] = NOW - 94 * DAY;
   }
   const { deps } = buildDeps({ rows, sessions });
   const result = await executeStaleScenesCommand({
@@ -625,7 +625,7 @@ test('list: the missing filter surfaces a fresh row whose host session is gone',
   const { deps } = buildDeps({
     rows: [row],
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(row, 'public')}`]: {
         exists: false,
         archivedAt: null,
         updatedAt: null,
@@ -659,7 +659,7 @@ test('list: bare stale stays clock only, the filter views add the anomalies', as
   const { deps } = buildDeps({
     rows: [row],
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(row, 'public')}`]: {
         exists: false,
         archivedAt: null,
         updatedAt: null,
@@ -693,7 +693,7 @@ test('list: the clock view keeps a long-dead row whose session is gone too', asy
   const { deps } = buildDeps({
     rows: [row],
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(row, 'public')}`]: {
         exists: false,
         archivedAt: null,
         updatedAt: null,
@@ -716,12 +716,12 @@ test('list: a clock-view listing still counts the anomalies it left out', async 
   const { deps } = buildDeps({
     rows: [quiet, fresh],
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(quiet, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(quiet, 'public')}`]: {
         exists: true,
         archivedAt: null,
         updatedAt: NOW - 200 * DAY,
       },
-      ['orion|' + buildStaleSceneSessionKey(fresh, 'orion')]: {
+      [`orion|${buildStaleSceneSessionKey(fresh, 'orion')}`]: {
         exists: false,
         archivedAt: null,
         updatedAt: null,
@@ -751,7 +751,7 @@ test('list: the archived filter surfaces a session archived from the UI', async 
   const { deps } = buildDeps({
     rows: [row],
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(row, 'public')}`]: {
         exists: true,
         archivedAt,
         updatedAt: archivedAt,
@@ -813,7 +813,7 @@ test('prune: a row whose host session is gone is prunable without force', async 
   const { deps, registry, deleted } = buildDeps({
     rows: [row],
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(row, 'public')}`]: {
         exists: false,
         archivedAt: null,
         updatedAt: null,
@@ -838,21 +838,21 @@ test('solo: session anomalies are not counted as a chat that simply went quiet',
   const { deps } = buildDeps({
     rows: [quiet, gone, archived],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(quiet, 'public')]: NOW - 94 * DAY,
-      ['public|' + buildStaleSceneSessionKey(archived, 'public')]: NOW - 94 * DAY,
+      [`public|${buildStaleSceneSessionKey(quiet, 'public')}`]: NOW - 94 * DAY,
+      [`public|${buildStaleSceneSessionKey(archived, 'public')}`]: NOW - 94 * DAY,
     },
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(quiet, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(quiet, 'public')}`]: {
         exists: true,
         archivedAt: null,
         updatedAt: NOW - 94 * DAY,
       },
-      ['public|' + buildStaleSceneSessionKey(gone, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(gone, 'public')}`]: {
         exists: false,
         archivedAt: null,
         updatedAt: null,
       },
-      ['public|' + buildStaleSceneSessionKey(archived, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(archived, 'public')}`]: {
         exists: true,
         archivedAt: NOW - 3 * DAY,
         updatedAt: NOW - 94 * DAY,
@@ -873,7 +873,7 @@ test('solo: session anomalies are not counted as a chat that simply went quiet',
     ...deps,
   });
   for (const key of ['60000000001', '60000000002', '60000000003']) {
-    assert.match(all.text, new RegExp('GewePlus:' + key));
+    assert.match(all.text, new RegExp(`GewePlus:${key}`));
   }
   assert.match(solo.text, /no sibling platform active within 24h and no session anomaly/);
 });
@@ -886,7 +886,7 @@ test('sibling: an archived sibling does not count as a platform the chat moved t
     groupId: '70000000001',
     lastSeenAt: NOW - 200 * DAY,
   });
-  const key = (row) => 'public|' + buildStaleSceneSessionKey(row, 'public');
+  const key = (row) => `public|${buildStaleSceneSessionKey(row, 'public')}`;
   const { deps } = buildDeps({
     rows: [dead, archivedSibling],
     nodes: {
@@ -917,7 +917,7 @@ test('sibling: an archived sibling does not count as a platform the chat moved t
 
 test('display: an archived row shows when it was archived, not the last store write', async () => {
   const row = groupRow({ sceneKey: 'GewePlus:80000000001', groupId: '80000000001' });
-  const key = 'public|' + buildStaleSceneSessionKey(row, 'public');
+  const key = `public|${buildStaleSceneSessionKey(row, 'public')}`;
   const { deps } = buildDeps({
     rows: [row],
     nodes: {
@@ -951,10 +951,10 @@ test('sibling: an unreadable sibling session is not evidence the chat moved ther
   const { deps } = buildDeps({
     rows: [dead, unreadable],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(unreadable, 'public')]: NOW - 3600 * 1000,
+      [`public|${buildStaleSceneSessionKey(unreadable, 'public')}`]: NOW - 3600 * 1000,
     },
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(dead, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(dead, 'public')}`]: {
         exists: true,
         archivedAt: null,
         updatedAt: NOW - 94 * DAY,
@@ -1031,17 +1031,17 @@ test('the 180d listing is exactly what the 180d batch would delete', async () =>
   });
   const freshAnomaly = directRow({ lastSeenAt: NOW - 60 * 1000 });
   const nodes = {
-    ['public|' + buildStaleSceneSessionKey(quietAlive, 'public')]: {
+    [`public|${buildStaleSceneSessionKey(quietAlive, 'public')}`]: {
       exists: true,
       archivedAt: null,
       updatedAt: NOW - 200 * DAY,
     },
-    ['orion|' + buildStaleSceneSessionKey(quietGone, 'orion')]: {
+    [`orion|${buildStaleSceneSessionKey(quietGone, 'orion')}`]: {
       exists: false,
       archivedAt: null,
       updatedAt: null,
     },
-    ['orion|' + buildStaleSceneSessionKey(freshAnomaly, 'orion')]: {
+    [`orion|${buildStaleSceneSessionKey(freshAnomaly, 'orion')}`]: {
       exists: false,
       archivedAt: null,
       updatedAt: null,
@@ -1097,9 +1097,9 @@ test('batch prune: deletes quiet rows, hands their scene keys to the client once
   const { deps, deleted, registry } = buildDeps({
     rows: [old, older, fresh],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(old, 'public')]: NOW - 200 * DAY,
-      ['orion|' + buildStaleSceneSessionKey(older, 'orion')]: NOW - 310 * DAY,
-      ['public|' + buildStaleSceneSessionKey(fresh, 'public')]: NOW - 10 * DAY,
+      [`public|${buildStaleSceneSessionKey(old, 'public')}`]: NOW - 200 * DAY,
+      [`orion|${buildStaleSceneSessionKey(older, 'orion')}`]: NOW - 310 * DAY,
+      [`public|${buildStaleSceneSessionKey(fresh, 'public')}`]: NOW - 10 * DAY,
     },
   });
   const clearCalls = [];
@@ -1157,8 +1157,8 @@ test('batch prune: a scene another agent still uses keeps its client gate state'
   const { deps, registry } = buildDeps({
     rows: [staleRow, siblingRow],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(staleRow, 'public')]: NOW - 200 * DAY,
-      ['orion|' + buildStaleSceneSessionKey(siblingRow, 'orion')]: NOW - 30 * 60 * 1000,
+      [`public|${buildStaleSceneSessionKey(staleRow, 'public')}`]: NOW - 200 * DAY,
+      [`orion|${buildStaleSceneSessionKey(siblingRow, 'orion')}`]: NOW - 30 * 60 * 1000,
     },
   });
   const result = await executeStaleScenesCommand({
@@ -1183,8 +1183,8 @@ test('batch prune: clearing happens once the last agent row goes', async () => {
   const { deps } = buildDeps({
     rows: [left, right],
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(left, 'public')]: NOW - 200 * DAY,
-      ['orion|' + buildStaleSceneSessionKey(right, 'orion')]: NOW - 210 * DAY,
+      [`public|${buildStaleSceneSessionKey(left, 'public')}`]: NOW - 200 * DAY,
+      [`orion|${buildStaleSceneSessionKey(right, 'orion')}`]: NOW - 210 * DAY,
     },
   });
   const result = await executeStaleScenesCommand({
@@ -1206,7 +1206,7 @@ test('prune: a single row on a shared scene leaves the client gate state alone',
   const calls = [];
   const { deps } = buildDeps({
     rows: [target, sibling],
-    sessions: { ['public|' + buildStaleSceneSessionKey(target, 'public')]: NOW - 200 * DAY },
+    sessions: { [`public|${buildStaleSceneSessionKey(target, 'public')}`]: NOW - 200 * DAY },
   });
   const result = await executeStaleScenesCommand({
     command: { action: 'prune', sceneKey: 'GewePlus:51720530884', agentId: 'public', force: false },
@@ -1229,7 +1229,7 @@ test('prune: the last row of a scene clears the client gate state', async () => 
   const calls = [];
   const { deps } = buildDeps({
     rows: [target],
-    sessions: { ['public|' + buildStaleSceneSessionKey(target, 'public')]: NOW - 200 * DAY },
+    sessions: { [`public|${buildStaleSceneSessionKey(target, 'public')}`]: NOW - 200 * DAY },
   });
   const result = await executeStaleScenesCommand({
     command: { action: 'prune', sceneKey: 'GewePlus:51720530884', force: false },
@@ -1247,7 +1247,7 @@ test('batch prune: an older client without the RPC is reported, not fatal', asyn
   const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
   const { deps } = buildDeps({
     rows: [row],
-    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 400 * DAY },
+    sessions: { [`public|${buildStaleSceneSessionKey(row, 'public')}`]: NOW - 400 * DAY },
   });
   const result = await executeStaleScenesCommand({
     command: { action: 'prune-batch', days: 180, force: false },
@@ -1262,7 +1262,7 @@ test('list with a day window keeps the 72h default wording out of the header', a
   const row = groupRow({ lastSeenAt: NOW - 200 * DAY });
   const { deps } = buildDeps({
     rows: [row],
-    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 200 * DAY },
+    sessions: { [`public|${buildStaleSceneSessionKey(row, 'public')}`]: NOW - 200 * DAY },
   });
   const result = await executeStaleScenesCommand({
     command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
@@ -1279,7 +1279,7 @@ test('batch prune: an unknown RPC method on an old client reads as a version gap
   const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
   const { deps } = buildDeps({
     rows: [row],
-    sessions: { ['public|' + buildStaleSceneSessionKey(row, 'public')]: NOW - 400 * DAY },
+    sessions: { [`public|${buildStaleSceneSessionKey(row, 'public')}`]: NOW - 400 * DAY },
   });
   const result = await executeStaleScenesCommand({
     command: { action: 'prune-batch', days: 180, force: false },
@@ -1301,7 +1301,7 @@ test('batch prune: an archived session on a chat still in use is not swept', asy
   const { deps, deleted } = buildDeps({
     rows: [row],
     nodes: {
-      ['public|' + buildStaleSceneSessionKey(row, 'public')]: {
+      [`public|${buildStaleSceneSessionKey(row, 'public')}`]: {
         exists: true,
         archivedAt: NOW - DAY,
         updatedAt: NOW - DAY,
@@ -1331,8 +1331,8 @@ test('prune persists the registry once, even when the purge step throws', async 
   const { deps } = buildDeps({
     rows,
     sessions: {
-      ['public|' + buildStaleSceneSessionKey(rows[0], 'public')]: NOW - 400 * DAY,
-      ['orion|' + buildStaleSceneSessionKey(rows[1], 'orion')]: NOW - 500 * DAY,
+      [`public|${buildStaleSceneSessionKey(rows[0], 'public')}`]: NOW - 400 * DAY,
+      [`orion|${buildStaleSceneSessionKey(rows[1], 'orion')}`]: NOW - 500 * DAY,
     },
   });
   let saves = 0;

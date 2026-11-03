@@ -3,9 +3,19 @@ import path from 'node:path';
 type BncrConversationContextMedia = {
   type?: string;
   path?: string;
+  url?: string;
   contentType?: string;
+  fileName?: string;
   kind?: string;
   messageId?: string;
+  mediaId?: string;
+  originAgentId?: string;
+  sourceKind?: string;
+  sourceRef?: string;
+  storedPath?: string;
+  attachmentScope?: 'current' | 'historical';
+  status?: string;
+  sizeBytes?: number;
 };
 
 type BncrConversationContextEntry = {
@@ -84,16 +94,73 @@ export type BncrStructuredContextFactsInput = {
     envelopeBody?: string;
   };
   media?: Array<{
-    path: string;
+    path?: string;
+    url?: string;
     contentType?: string;
+    fileName?: string;
     kind?: string;
     messageId?: string;
+    mediaId?: string;
+    originAgentId?: string;
+    sourceKind?: string;
+    sourceRef?: string;
+    storedPath?: string;
+    attachmentScope?: 'current' | 'historical';
+    status?: string;
+    sizeBytes?: number;
   }>;
   conversationContext?: BncrConversationContextEntry[];
   participants?: BncrParticipantRecord | null;
   isGroupChat?: boolean;
   groupSubject?: string;
 };
+
+function resolveBncrMediaContractFields(item: {
+  path?: string;
+  url?: string;
+  kind?: string;
+  mediaId?: string;
+  sourceKind?: string;
+  sourceRef?: string;
+  storedPath?: string;
+  attachmentScope?: 'current' | 'historical';
+  status?: string;
+}) {
+  const explicitKind =
+    item.sourceKind === 'url' || item.sourceKind === 'local' ? item.sourceKind : undefined;
+  // Older persisted rows stored remote URLs in `path` before sourceKind was
+  // introduced. Infer only unambiguous HTTP(S) sources so those historical
+  // entries remain downloadable; an explicit modern sourceKind still wins.
+  const pathValue = String(item.path || '').trim();
+  const sourceRefValue = String(item.sourceRef || '').trim();
+  const inferredUrl =
+    explicitKind !== 'local' &&
+    (/^https?:\/\//i.test(pathValue) || /^https?:\/\//i.test(sourceRefValue));
+  const url = String(
+    (explicitKind !== 'local' ? item.url : '') ||
+      (explicitKind === 'url' ? sourceRefValue : '') ||
+      (inferredUrl ? pathValue || sourceRefValue : '') ||
+      '',
+  ).trim();
+  const local = String(
+    item.storedPath || (explicitKind !== 'url' && !url ? pathValue : '') || '',
+  ).trim();
+  const source = url || local;
+  const sourceKind = url ? ('url' as const) : local ? ('local' as const) : undefined;
+  const attachmentScope = item.attachmentScope || 'current';
+  const downloadable =
+    attachmentScope === 'historical' &&
+    Boolean(source) &&
+    item.status !== 'oversize' &&
+    item.status !== 'unavailable';
+  return {
+    ...(source ? { source } : {}),
+    ...(sourceKind ? { sourceKind } : {}),
+    ...(item.mediaId ? { mediaRef: item.mediaId } : {}),
+    attachmentScope,
+    downloadable,
+  };
+}
 
 function toBncrPromptMediaPath(id: string): string | undefined {
   if (
@@ -112,6 +179,8 @@ function toBncrPromptMediaPath(id: string): string | undefined {
 function resolveBncrPromptMediaPath(mediaPath: string | undefined): string | undefined {
   const normalized = String(mediaPath || '').trim();
   if (!normalized) return undefined;
+
+  if (/^https?:\/\//i.test(normalized)) return normalized;
 
   const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(normalized);
   if (canonicalMatch?.[1]) {
@@ -185,10 +254,21 @@ export function buildBncrStructuredContextFacts(input: BncrStructuredContextFact
       envelopeBody: input.message.envelopeBody,
     },
     media: (input.media || []).map((item) => ({
-      path: item.path,
-      contentType: item.contentType,
-      kind: item.kind,
-      messageId: item.messageId,
+      ...(item.path ? { path: item.path } : {}),
+      ...(item.url ? { url: item.url } : {}),
+      ...(item.contentType ? { contentType: item.contentType } : {}),
+      ...(item.fileName ? { fileName: item.fileName } : {}),
+      ...(item.kind ? { kind: item.kind } : {}),
+      ...(item.messageId ? { messageId: item.messageId } : {}),
+      ...(item.mediaId ? { mediaId: item.mediaId } : {}),
+      ...(item.originAgentId ? { originAgentId: item.originAgentId } : {}),
+      ...(item.sourceKind ? { sourceKind: item.sourceKind } : {}),
+      ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
+      ...(item.storedPath ? { storedPath: item.storedPath } : {}),
+      ...(item.attachmentScope ? { attachmentScope: item.attachmentScope } : {}),
+      ...(item.status ? { status: item.status } : {}),
+      ...(item.sizeBytes !== undefined ? { sizeBytes: item.sizeBytes } : {}),
+      ...(item.attachmentScope === 'historical' ? resolveBncrMediaContractFields(item) : {}),
     })),
     conversationContext: (input.conversationContext || []).map((entry) => ({
       messageId: entry.messageId,
@@ -199,9 +279,20 @@ export function buildBncrStructuredContextFacts(input: BncrStructuredContextFact
       content: entry.content,
       media: (entry.media || []).map((item) => ({
         type: item.type || item.kind || 'document',
-        path: item.path,
-        contentType: item.contentType,
-        messageId: item.messageId,
+        ...(item.path ? { path: item.path } : {}),
+        ...(item.url ? { url: item.url } : {}),
+        ...(item.contentType ? { contentType: item.contentType } : {}),
+        ...(item.fileName ? { fileName: item.fileName } : {}),
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        ...(item.mediaId ? { mediaId: item.mediaId } : {}),
+        ...(item.originAgentId ? { originAgentId: item.originAgentId } : {}),
+        ...(item.sourceKind ? { sourceKind: item.sourceKind } : {}),
+        ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
+        ...(item.storedPath ? { storedPath: item.storedPath } : {}),
+        ...(item.attachmentScope ? { attachmentScope: item.attachmentScope } : {}),
+        ...(item.status ? { status: item.status } : {}),
+        ...(item.sizeBytes !== undefined ? { sizeBytes: item.sizeBytes } : {}),
+        ...resolveBncrMediaContractFields(item),
       })),
     })),
     participants: input.participants ?? null,
@@ -236,9 +327,19 @@ export function buildBncrPromptVisibleContextFacts(
     };
     media?: Array<{
       path?: string;
+      url?: string;
       contentType?: string;
+      fileName?: string;
       kind?: string;
       messageId?: string;
+      mediaId?: string;
+      originAgentId?: string;
+      sourceKind?: string;
+      sourceRef?: string;
+      storedPath?: string;
+      attachmentScope?: 'current' | 'historical';
+      status?: string;
+      sizeBytes?: number;
     }>;
     conversation_context?: Array<Record<string, unknown>>;
     participants?: BncrParticipantRecord;
@@ -285,12 +386,17 @@ export function buildBncrPromptVisibleContextFacts(
 
   if (facts.media.length > 0) {
     result.media = facts.media.flatMap((item) => {
-      const promptMediaPath = resolveBncrPromptMediaPath(item.path);
+      const promptMediaPath = resolveBncrPromptMediaPath(item.url || item.path);
       const payload = {
         ...(promptMediaPath ? { path: promptMediaPath } : {}),
-        contentType: item.contentType,
-        kind: item.kind,
-        messageId: item.messageId,
+        ...(item.contentType ? { contentType: item.contentType } : {}),
+        ...(item.fileName ? { fileName: item.fileName } : {}),
+        ...(item.kind ? { kind: item.kind } : {}),
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        ...(item.mediaId ? { mediaRef: item.mediaId } : {}),
+        ...(item.originAgentId ? { originAgentId: item.originAgentId } : {}),
+        ...(item.status ? { status: item.status } : {}),
+        ...(item.attachmentScope === 'historical' ? resolveBncrMediaContractFields(item) : {}),
       };
       return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
     });
@@ -309,7 +415,6 @@ export function buildBncrPromptVisibleContextFacts(
         });
       }
       for (const item of entry.media || []) {
-        const promptMediaPath = resolveBncrPromptMediaPath(item.path);
         const payload = {
           messageId: item.messageId ?? entry.messageId,
           timestamp: entry.timestamp,
@@ -317,8 +422,11 @@ export function buildBncrPromptVisibleContextFacts(
           sender: entry.sender,
           senderId: entry.senderId,
           media_type: item.type || 'document',
-          ...(promptMediaPath ? { path: promptMediaPath } : {}),
           ...(item.contentType ? { contentType: item.contentType } : {}),
+          ...(item.fileName ? { fileName: item.fileName } : {}),
+          ...(item.originAgentId ? { originAgentId: item.originAgentId } : {}),
+          ...(item.status ? { status: item.status } : {}),
+          ...resolveBncrMediaContractFields({ ...item, attachmentScope: 'historical' }),
         };
         if (Object.values(payload).some((field) => field !== undefined)) items.push(payload);
       }
@@ -382,9 +490,19 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
     rawBody: string;
     body?: string;
     mediaItems?: Array<{
-      path: string;
+      path?: string;
+      url?: string;
       contentType?: string;
+      fileName?: string;
       kind?: string;
+      mediaId?: string;
+      originAgentId?: string;
+      sourceKind?: string;
+      sourceRef?: string;
+      storedPath?: string;
+      attachmentScope?: 'current' | 'historical';
+      status?: string;
+      sizeBytes?: number;
     }>;
   };
   senderIdForContext: string;
@@ -458,9 +576,19 @@ export function buildBncrStructuredContextFactsFromInboundParts(
     },
     media: mediaItems.map((item) => ({
       path: item.path,
+      url: item.url,
       contentType: item.contentType,
+      fileName: item.fileName,
       kind: item.kind || inferBncrStructuredMediaKind(item.contentType),
       messageId: input.parsed.msgId,
+      mediaId: item.mediaId,
+      originAgentId: item.originAgentId,
+      sourceKind: item.sourceKind,
+      sourceRef: item.sourceRef,
+      storedPath: item.storedPath,
+      attachmentScope: item.attachmentScope,
+      status: item.status,
+      sizeBytes: item.sizeBytes,
     })),
     conversationContext: conversationHistoryContext,
     participants: input.participants ?? null,

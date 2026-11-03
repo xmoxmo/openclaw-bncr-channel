@@ -132,6 +132,7 @@ test('outbound messages write assistant entries into unified private history', (
           path: 'https://cdn.example.com/image.png',
           kind: 'image',
           messageId: 'out-private-history-1',
+          attachmentScope: 'historical',
         },
       ],
     },

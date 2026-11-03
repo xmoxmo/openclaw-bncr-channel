@@ -187,7 +187,11 @@ export function buildBncrChannelSendRuntime(deps: {
   asString: (value: unknown, fallback?: string) => string;
   syncDebugFlag: () => Promise<void>;
   logInfo: (scope: string, message: string, options?: Record<string, unknown>) => void;
-  resolveVerifiedTarget: (to: string, accountId: string) => BncrVerifiedTarget;
+  resolveVerifiedTarget: (
+    to: string,
+    accountId: string,
+    preferredAgentId?: string,
+  ) => BncrVerifiedTarget;
   rememberSessionRoute: (sessionKey: string, accountId: string, route: BncrRoute) => void;
   enqueueFromReply: (args: {
     accountId: string;

@@ -71,6 +71,7 @@ export function createBncrTargetRuntime(runtime: {
   function resolveVerifiedTarget(
     rawTarget: string,
     accountId: string,
+    preferredAgentId?: string,
   ): { sessionKey: string; route: BncrRoute; displayScope: string } {
     const acc = runtime.normalizeAccountId(accountId);
     const raw = asString(rawTarget).trim();
@@ -99,6 +100,7 @@ export function createBncrTargetRuntime(runtime: {
     }
 
     const canonicalAgentId =
+      asString(preferredAgentId).trim() ||
       runtime.canonicalAgentId ||
       runtime.ensureCanonicalAgentId({
         cfg: getOpenClawRuntimeConfigOrDefault<BncrChannelConfigRoot>(runtime.api, {}),

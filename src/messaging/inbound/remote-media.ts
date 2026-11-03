@@ -19,9 +19,15 @@ type RuntimeChannelMediaReader = {
 function assertLoadedInboundRemoteMedia(
   loaded: OpenClawLoadedMedia,
   source: 'runtime' | 'fallback',
+  maxBytes: number,
 ): OpenClawLoadedMedia {
   if (!loaded?.buffer?.length) {
     throw new Error(`inbound remote media ${source} download returned empty buffer`);
+  }
+  if (loaded.buffer.byteLength > maxBytes) {
+    throw new Error(
+      `inbound remote media ${source} download is too large: ${loaded.buffer.byteLength} > ${maxBytes}`,
+    );
   }
   return loaded;
 }
@@ -35,10 +41,7 @@ async function readRemoteMediaBufferFromRuntime(
   if (typeof readRemoteMediaBuffer !== 'function') {
     throw new Error('OpenClaw channel media readRemoteMediaBuffer API is unavailable');
   }
-  return assertLoadedInboundRemoteMedia(
-    await readRemoteMediaBuffer({ url, maxBytes, ssrfPolicy: { allowPrivateNetwork: true } }),
-    'runtime',
-  );
+  return readRemoteMediaBuffer({ url, maxBytes, ssrfPolicy: { allowPrivateNetwork: true } });
 }
 
 export async function loadInboundRemoteMedia(
@@ -47,9 +50,7 @@ export async function loadInboundRemoteMedia(
   maxBytes: number,
   options?: { urlGuard?: InboundMediaUrlGuard },
 ): Promise<OpenClawLoadedMedia> {
-  try {
-    return await readRemoteMediaBufferFromRuntime(api, url, maxBytes);
-  } catch {
+  const loadFallback = async () => {
     // Host reader failed (unavailable, or host-side policy). The fallback does a
     // direct fetch under the same trust model: Bncr treats internal and public
     // destinations identically, so it only validates URL shape, not destination.
@@ -57,6 +58,15 @@ export async function loadInboundRemoteMedia(
     return assertLoadedInboundRemoteMedia(
       await downloadInboundMediaUrl(url, maxBytes, undefined, urlGuard),
       'fallback',
+      maxBytes,
     );
+  };
+  let runtimeLoaded: OpenClawLoadedMedia;
+  try {
+    runtimeLoaded = await readRemoteMediaBufferFromRuntime(api, url, maxBytes);
+  } catch {
+    return loadFallback();
   }
+  if (!runtimeLoaded?.buffer?.length) return loadFallback();
+  return assertLoadedInboundRemoteMedia(runtimeLoaded, 'runtime', maxBytes);
 }

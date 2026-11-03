@@ -172,6 +172,25 @@ openclaw config get channels.bncr.mediaMaxMb
 
 优先级为 `accounts.<accountId>.mediaMaxMb` > `channels.bncr.mediaMaxMb` > `agents.defaults.mediaMaxMb` > 默认 `2048` MiB。该值同时约束入站媒体、入站文件分片和出站媒体；未显式配置时使用 2 GiB 默认值。传输层仍受分片大小、ACK 超时和网络条件限制。
 
+### 入站媒体和历史媒体
+
+- 当前轮的远端 URL 会尝试下载一次，下载成功后以本地文件进入当前轮的 `ctx.media`，同时保留原始 URL。
+- 当前轮媒体先按路由 Agent 保存到 OpenClaw 管理媒体目录，再把该托管路径交给 `ctx.media`，由宿主完成沙箱暂存。
+- 历史消息中的远端 URL 在入站时不下载，只在 `conversation_context` 中保存 `mediaRef`、`source`、`sourceKind` 和状态，不会进入当前轮顶层媒体。
+- Agent 读取历史媒体时，把上下文中的 `source`、`sourceKind`、`mediaRef`、`contentType` 和 `fileName` 原样传给 `bncr_download_media`。工具只下载或复制该来源到当前 Agent 工作区，不按 `mediaRef` 反查会话。
+- `sourceKind=url` 支持公网和内网地址；`sourceKind=local` 只接受 OpenClaw 管理媒体目录内的文件，其他本地路径按 `SOURCE_NOT_FOUND` 拒绝。
+- 工具失败时返回稳定错误码：`SOURCE_REQUIRED`、`SOURCE_KIND_INVALID`、`SOURCE_NOT_FOUND`、`SOURCE_TOO_LARGE` 或 `SOURCE_FETCH_FAILED`。
+- `sandbox.mode` 为 `all` 时，宿主会按 Agent 的沙箱工具白名单过滤插件工具；需把 `bncr_download_media` 加入对应 Agent，例如：
+
+  ```bash
+  openclaw config set 'agents.entries.public.tools.sandbox.tools.alsoAllow' \
+    '["group:messaging","bncr_download_media"]' --strict-json
+  ```
+
+  已存在其他项时必须保留原数组，只追加缺少的工具。该白名单由宿主执行，插件无法绕过。
+- 本地文件和 base64 历史媒体会按来源 Agent 保存副本；历史窗口之外的来源被清理后不承诺凭 `mediaRef` 恢复。
+- 历史媒体始终是历史附件，不能提升为当前轮顶层媒体。
+
 ## 命令
 
 ### 基础命令

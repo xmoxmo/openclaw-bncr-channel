@@ -36,7 +36,7 @@ const STALE_USAGE_TEXT = [
   'Usage:',
   '  /bncr stale help',
   '  /bncr stale',
-  '  /bncr stale [' + STALE_FILTER_LIST + ']',
+  `  /bncr stale [${STALE_FILTER_LIST}]`,
   '  /bncr stale <days>',
   '  /bncr stale orphans',
   '  /bncr prune <SceneId> [<agentId>] [force]',
@@ -60,7 +60,7 @@ export const STALE_SCENES_HELP_TEXT = [
   '    清理视图，只看时钟：超过 ' +
     String(BNCR_STALE_SCENE_BATCH_DAYS) +
     ' 天没动静的行；单纯会话异常不会把行拉进来。',
-  '  • /bncr stale [' + STALE_FILTER_LIST + ']',
+  `  • /bncr stale [${STALE_FILTER_LIST}]`,
   '    诊断视图，按 72 小时判定，包含会话异常；按场景列出，带侧边栏标签和同群其它平台的活动。',
   '    all = 全部候选；swapped = 同群另一个平台 24 小时内有过活动；',
   '    solo = 同群没活动、也没会话异常，只是没人说话；',
@@ -555,9 +555,9 @@ function describeRow(row: StaleSceneRow, now: number): string {
     // Show when it was archived, not when the store was last written: the two
     // differ exactly when someone archived the session long after using it.
     const archivedAt = row.archivedAt ?? row.sessionAt;
-    sessionText = 'archived ' + formatClock(archivedAt) + ' (' + formatAge(archivedAt, now) + ')';
+    sessionText = `archived ${formatClock(archivedAt)} (${formatAge(archivedAt, now)})`;
   } else {
-    sessionText = formatClock(row.sessionAt) + ' (' + formatAge(row.sessionAt, now) + ')';
+    sessionText = `${formatClock(row.sessionAt)} (${formatAge(row.sessionAt, now)})`;
   }
   const sibling = row.sibling
     ? row.sibling.platform +
@@ -603,8 +603,8 @@ function formatStaleList(
     filter === 'missing' || filter === 'archived'
       ? '🧹 Stale scenes'
       : wantAnomalies
-        ? '🧹 Stale scenes — quiet ' + quietLabel + '+ or session missing/archived'
-        : '🧹 Stale scenes — quiet ' + quietLabel + '+ (clock only)';
+        ? `🧹 Stale scenes — quiet ${quietLabel}+ or session missing/archived`
+        : `🧹 Stale scenes — quiet ${quietLabel}+ (clock only)`;
   const lines: string[] = [
     headerBase + FILTER_CAPTION[filter],
     `${rows.length} of ${total} scene rows`,
@@ -623,14 +623,14 @@ function formatStaleList(
     const labels = new Set(bucket.map((row) => formatStaleSceneLabel(row.scene)));
     if (labels.size === 1) {
       const label = formatStaleSceneLabel(bucket[0].scene);
-      if (label && label !== sceneKey) lines.push('  ' + label);
+      if (label && label !== sceneKey) lines.push(`  ${label}`);
       for (const row of shown) lines.push(describeRow(row, now));
     } else {
       // Agents in one scene can carry different custom names; show each row's
       // own label instead of pretending they share one.
       for (const row of shown) {
         lines.push(describeRow(row, now));
-        lines.push('    label: ' + formatStaleSceneLabel(row.scene));
+        lines.push(`    label: ${formatStaleSceneLabel(row.scene)}`);
       }
     }
     printed += shown.length;
@@ -682,9 +682,9 @@ function describeClientClear(
     return 'Client state not cleared: the connected Bncr client is too old to expose bncr.state.clear.';
   }
   if (result?.ok === false) {
-    return 'Client state clear failed: ' + String(result.error || 'unknown error');
+    return `Client state clear failed: ${String(result.error || 'unknown error')}`;
   }
-  return 'Client state cleared: ' + String(result?.cleared ?? 0) + ' key(s).';
+  return `Client state cleared: ${String(result?.cleared ?? 0)} key(s).`;
 }
 
 async function clearClientStateForScenes(
@@ -701,7 +701,7 @@ async function clearClientStateForScenes(
         '.'
       : '';
   const joinNotes = (note: string) =>
-    keptNote && note ? keptNote + '\n' + note : keptNote || note;
+    keptNote && note ? `${keptNote}\n${note}` : keptNote || note;
   if (sceneKeys.length === 0) {
     if (keptNote) return keptNote;
     return deps.clearClientState === undefined
@@ -721,7 +721,7 @@ async function clearClientStateForScenes(
     return joinNotes(
       /method not found/i.test(message)
         ? 'Client state not cleared: the connected Bncr client is too old to expose bncr.state.clear.'
-        : 'Client state clear failed: ' + message,
+        : `Client state clear failed: ${message}`,
     );
   }
 }
@@ -742,8 +742,8 @@ function describeOrphanState(entry: BncrClientSceneStateEntry, now: number): str
     );
   }
   const mode = normalizeToken(entry.mode).toLowerCase();
-  parts.push('mode ' + (mode || 'unset'));
-  return '  ' + parts.join(' · ');
+  parts.push(`mode ${mode || 'unset'}`);
+  return `  ${parts.join(' · ')}`;
 }
 
 /**
@@ -760,7 +760,7 @@ async function listOrphanClientStates(deps: StaleScenesDeps): Promise<StaleScene
   if (!deps.listClientState) {
     return {
       ok: false,
-      text: title + '\n\nNo Bncr client RPC available: the client gate table cannot be read.',
+      text: `${title}\n\nNo Bncr client RPC available: the client gate table cannot be read.`,
     };
   }
   let listed: BncrClientSceneStateList | undefined | null;
@@ -773,14 +773,14 @@ async function listOrphanClientStates(deps: StaleScenesDeps): Promise<StaleScene
       text:
         title +
         '\n\n' +
-        (/method not found/i.test(message) ? tooOld : 'Client gate read failed: ' + message),
+        (/method not found/i.test(message) ? tooOld : `Client gate read failed: ${message}`),
     };
   }
-  if (listed?.unsupported) return { ok: false, text: title + '\n\n' + tooOld };
+  if (listed?.unsupported) return { ok: false, text: `${title}\n\n${tooOld}` };
   if (listed && listed.ok === false) {
     return {
       ok: false,
-      text: title + '\n\nClient gate read failed: ' + String(listed.error || 'unknown error'),
+      text: `${title}\n\nClient gate read failed: ${String(listed.error || 'unknown error')}`,
     };
   }
 
@@ -799,8 +799,8 @@ async function listOrphanClientStates(deps: StaleScenesDeps): Promise<StaleScene
     return !bound.has(key.toLowerCase());
   });
   const invalid = Number(listed?.invalid || 0);
-  const invalidNote = invalid > 0 ? invalid + ' unreadable state key(s) skipped.' : '';
-  const counted = entries.length + ' state entr' + (entries.length === 1 ? 'y' : 'ies');
+  const invalidNote = invalid > 0 ? `${invalid} unreadable state key(s) skipped.` : '';
+  const counted = `${entries.length} state entr${entries.length === 1 ? 'y' : 'ies'}`;
 
   if (orphans.length === 0) {
     const lines = [
@@ -808,7 +808,7 @@ async function listOrphanClientStates(deps: StaleScenesDeps): Promise<StaleScene
       '',
       entries.length === 0
         ? 'None: the client holds no scene gate state at all.'
-        : 'None: every client scene gate state has a scene row (' + counted + ').',
+        : `None: every client scene gate state has a scene row (${counted}).`,
     ];
     if (invalidNote) lines.push(invalidNote);
     return { ok: true, text: lines.join('\n') };
@@ -827,14 +827,14 @@ async function listOrphanClientStates(deps: StaleScenesDeps): Promise<StaleScene
     }
   }
 
-  const lines = [title + ' — client has, scene table has none', orphans.length + ' of ' + counted];
+  const lines = [`${title} — client has, scene table has none`, `${orphans.length} of ${counted}`];
   if (invalidNote) lines.push(invalidNote);
   for (const sceneKey of sceneKeys.slice(0, MAX_ORPHAN_SCENES)) {
     lines.push('', sceneKey);
     for (const entry of byScene.get(sceneKey) || []) lines.push(describeOrphanState(entry, now));
   }
   if (sceneKeys.length > MAX_ORPHAN_SCENES) {
-    lines.push('', '… ' + (sceneKeys.length - MAX_ORPHAN_SCENES) + ' more scene(s) not shown.');
+    lines.push('', `… ${sceneKeys.length - MAX_ORPHAN_SCENES} more scene(s) not shown.`);
   }
   lines.push(
     '',
@@ -862,7 +862,7 @@ async function executePruneOrphanState(
   if (isInternalSceneKey(sceneKey)) {
     return {
       ok: false,
-      text: title + '\n\nNot a chat scene: ' + sceneKey + ' is an internal config row.',
+      text: `${title}\n\nNot a chat scene: ${sceneKey} is an internal config row.`,
     };
   }
   // 大小写按场景键比对：平台代号大小写在两边不一定一致。
@@ -875,10 +875,10 @@ async function executePruneOrphanState(
     return {
       ok: false,
       text: [
-        title + ' — refused',
+        `${title} — refused`,
         '',
-        'Scene table still has ' + rows.length + ' row(s) for ' + sceneKey + '.',
-        'Use /bncr prune ' + sceneKey + ' [<agentId>] [force] to archive and delete them.',
+        `Scene table still has ${rows.length} row(s) for ${sceneKey}.`,
+        `Use /bncr prune ${sceneKey} [<agentId>] [force] to archive and delete them.`,
       ].join('\n'),
     };
   }
@@ -901,21 +901,21 @@ async function executePruneOrphanState(
       text:
         title +
         '\n\n' +
-        (/method not found/i.test(message) ? tooOld : 'Client gate read failed: ' + message),
+        (/method not found/i.test(message) ? tooOld : `Client gate read failed: ${message}`),
     };
   }
-  if (listed?.unsupported) return { ok: false, text: title + '\n\n' + tooOld };
+  if (listed?.unsupported) return { ok: false, text: `${title}\n\n${tooOld}` };
   if (listed && listed.ok === false) {
     return {
       ok: false,
-      text: title + '\n\nClient gate read failed: ' + String(listed.error || 'unknown error'),
+      text: `${title}\n\nClient gate read failed: ${String(listed.error || 'unknown error')}`,
     };
   }
   const entry = (Array.isArray(listed?.entries) ? listed.entries : []).find(
     (item) => normalizeToken(item?.sceneKey).toLowerCase() === sceneKey.toLowerCase(),
   );
   if (!entry) {
-    return { ok: false, text: title + '\n\nNo client gate state for ' + sceneKey + '.' };
+    return { ok: false, text: `${title}\n\nNo client gate state for ${sceneKey}.` };
   }
 
   const now = deps.now();
@@ -927,13 +927,13 @@ async function executePruneOrphanState(
     return {
       ok: false,
       text: [
-        title + ' — needs force',
+        `${title} — needs force`,
         '',
         sceneKey,
         describeOrphanState(entry, now),
         'A gate opened in the last 72h may be a super gate switched on before the first',
         'message arrived, so it is not treated as a leftover.',
-        'Re-send with force: /bncr prune state ' + sceneKey + ' force',
+        `Re-send with force: /bncr prune state ${sceneKey} force`,
       ].join('\n'),
     };
   }
@@ -962,14 +962,14 @@ async function executePruneOrphanState(
       text:
         title +
         '\n\n' +
-        (/method not found/i.test(message) ? tooOld : 'Client gate clear failed: ' + message),
+        (/method not found/i.test(message) ? tooOld : `Client gate clear failed: ${message}`),
     };
   }
-  if (cleared?.unsupported) return { ok: false, text: title + '\n\n' + tooOld };
+  if (cleared?.unsupported) return { ok: false, text: `${title}\n\n${tooOld}` };
   if (cleared && cleared.ok === false) {
     return {
       ok: false,
-      text: title + '\n\nClient gate clear failed: ' + String(cleared.error || 'unknown error'),
+      text: `${title}\n\nClient gate clear failed: ${String(cleared.error || 'unknown error')}`,
     };
   }
   const count = Number(cleared?.cleared ?? 0);
@@ -977,7 +977,7 @@ async function executePruneOrphanState(
     return {
       ok: true,
       text: [
-        title + ' — already gone',
+        `${title} — already gone`,
         '',
         sceneKey,
         describeOrphanState(entry, now),
@@ -988,7 +988,7 @@ async function executePruneOrphanState(
   return {
     ok: true,
     text: [
-      title + ' — done',
+      `${title} — done`,
       '',
       sceneKey,
       describeOrphanState(entry, now),
@@ -1009,17 +1009,17 @@ function formatPruned(
   if (pruned.length === 0) {
     lines.push('🧹 Nothing pruned: every target row moved after the listing.');
   } else {
-    lines.push('🧹 Pruned ' + pruned.length + ' scene row(s)');
+    lines.push(`🧹 Pruned ${pruned.length} scene row(s)`);
     for (const row of pruned) {
       lines.push(
         '',
         normalizeToken(row.scene.sceneKey),
-        '  ' + formatStaleSceneLabel(row.scene),
+        `  ${formatStaleSceneLabel(row.scene)}`,
         describeRow(row, now).trim(),
       );
     }
   }
-  if (skipped.length > 0) lines.push('', 'Skipped (active again): ' + skipped.join(', '));
+  if (skipped.length > 0) lines.push('', `Skipped (active again): ${skipped.join(', ')}`);
   if (stateNote) lines.push('', stateNote);
   return lines.join('\n');
 }
@@ -1039,14 +1039,14 @@ function formatBatchPruned(
   stateNote: string,
 ): string {
   if (pruned.length === 0) {
-    const lines = ['🧹 Batch prune — quiet ' + String(days) + 'd+', 'Nothing pruned.'];
-    if (raced.length > 0) lines.push('Skipped (active again): ' + raced.join(', '));
-    if (unreadable > 0) lines.push(String(unreadable) + ' row(s) skipped: session unreadable');
+    const lines = [`🧹 Batch prune — quiet ${String(days)}d+`, 'Nothing pruned.'];
+    if (raced.length > 0) lines.push(`Skipped (active again): ${raced.join(', ')}`);
+    if (unreadable > 0) lines.push(`${String(unreadable)} row(s) skipped: session unreadable`);
     return lines.join('\n');
   }
   const lines = [
-    '🧹 Batch prune — quiet ' + String(days) + 'd+',
-    'Deleted ' + String(pruned.length) + ' scene row(s), transcript archived',
+    `🧹 Batch prune — quiet ${String(days)}d+`,
+    `Deleted ${String(pruned.length)} scene row(s), transcript archived`,
   ];
   for (const row of pruned.slice(0, BATCH_REPORT_LINES)) {
     lines.push(
@@ -1061,13 +1061,13 @@ function formatBatchPruned(
     );
   }
   if (pruned.length > BATCH_REPORT_LINES) {
-    lines.push('  … ' + String(pruned.length - BATCH_REPORT_LINES) + ' more');
+    lines.push(`  … ${String(pruned.length - BATCH_REPORT_LINES)} more`);
   }
   if (stateNote) lines.push('', stateNote);
-  if (raced.length > 0) lines.push('', 'Skipped (active again): ' + raced.join(', '));
-  if (unreadable > 0) lines.push('', String(unreadable) + ' row(s) skipped: session unreadable');
+  if (raced.length > 0) lines.push('', `Skipped (active again): ${raced.join(', ')}`);
+  if (unreadable > 0) lines.push('', `${String(unreadable)} row(s) skipped: session unreadable`);
   if (remaining > 0) {
-    lines.push('', '… ' + String(remaining) + ' more candidate(s); run it again.');
+    lines.push('', `… ${String(remaining)} more candidate(s); run it again.`);
   }
   return lines.join('\n');
 }
@@ -1115,7 +1115,7 @@ async function executeStaleScenesBatch(
         '🧹 No scene row is quiet ' +
         String(command.days) +
         'd+' +
-        (unreadable > 0 ? ' (' + String(unreadable) + ' row(s) skipped: session unreadable)' : '') +
+        (unreadable > 0 ? ` (${String(unreadable)} row(s) skipped: session unreadable)` : '') +
         '.',
     };
   }
@@ -1130,7 +1130,7 @@ async function executeStaleScenesBatch(
       buildAgentSceneRegistryKey(row.scene.sceneKey, row.agentId),
     );
     if (!current || Number(current.lastSeenAt) !== row.rowAt) {
-      raced.push(normalizeToken(row.scene.sceneKey) + '/' + (row.agentId || '(unassigned)'));
+      raced.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
       continue;
     }
     if (row.sessionKey) {
@@ -1191,7 +1191,7 @@ export async function executeStaleScenesCommand(
     const days = command.days;
     const windowMs = days ? days * DAY_MS : (deps.staleMs ?? BNCR_STALE_SCENE_MS);
     const { rows, now } = await inspectAll({ ...deps, staleMs: windowMs });
-    const quietLabel = days ? String(days) + 'd' : '72h';
+    const quietLabel = days ? `${String(days)}d` : '72h';
     // Nothing has ever come in on this bridge: saying "every row moved within
     // 72h" would describe rows that do not exist.
     if (rows.length === 0) {
@@ -1212,7 +1212,7 @@ export async function executeStaleScenesCommand(
       : rows.filter((row) => row.stale && !row.quietByClock).length;
     const hiddenNote =
       hiddenAnomalies > 0
-        ? ' ' + hiddenAnomalies + ' session anomaly row(s) not in this view: /bncr stale all'
+        ? ` ${hiddenAnomalies} session anomaly row(s) not in this view: /bncr stale all`
         : '';
     const filtered = stale.filter((row) => {
       if (command.filter === 'swapped') return row.siblingActive;
@@ -1229,7 +1229,7 @@ export async function executeStaleScenesCommand(
     const unknown = rows.filter(
       (row) => row.sessionUnknown && (row.rowAt <= 0 || now - row.rowAt > windowMs),
     ).length;
-    const unknownNote = unknown > 0 ? ' ' + unknown + ' row(s) skipped: session unreadable.' : '';
+    const unknownNote = unknown > 0 ? ` ${unknown} row(s) skipped: session unreadable.` : '';
     if (filtered.length === 0) {
       if (stale.length > 0) {
         return {
@@ -1265,7 +1265,7 @@ export async function executeStaleScenesCommand(
           unknown,
           quietLabel,
           wantAnomalies,
-        ) + (hiddenNote ? '\n' + hiddenNote.trim() : ''),
+        ) + (hiddenNote ? `\n${hiddenNote.trim()}` : ''),
     };
   }
 
@@ -1280,12 +1280,12 @@ export async function executeStaleScenesCommand(
   const sceneKey = normalizeToken(command.sceneKey);
   const wantedAgent = normalizeToken(command.agentId);
   if (isInternalSceneKey(sceneKey)) {
-    return { ok: false, text: 'Not a chat scene: ' + sceneKey + ' is an internal config row.' };
+    return { ok: false, text: `Not a chat scene: ${sceneKey} is an internal config row.` };
   }
   const matching = Array.from(deps.sceneRegistry.values()).filter(
     (scene) => normalizeToken(scene.sceneKey) === sceneKey,
   );
-  if (matching.length === 0) return { ok: false, text: 'Scene not found: ' + sceneKey };
+  if (matching.length === 0) return { ok: false, text: `Scene not found: ${sceneKey}` };
 
   const targets = matching.filter(
     (scene) => !wantedAgent || normalizeToken(scene.agentId) === wantedAgent,
@@ -1307,12 +1307,12 @@ export async function executeStaleScenesCommand(
     return {
       ok: false,
       text: [
-        'Refusing to prune ' + sceneKey + ': session activity could not be read',
+        `Refusing to prune ${sceneKey}: session activity could not be read`,
         ...unverified.map((row) => describeRow(row, now)),
         '',
         'Retry once the session store is readable, or force to delete anyway: /bncr prune ' +
           sceneKey +
-          (wantedAgent ? ' ' + wantedAgent : '') +
+          (wantedAgent ? ` ${wantedAgent}` : '') +
           ' force',
       ].join('\n'),
     };
@@ -1323,12 +1323,12 @@ export async function executeStaleScenesCommand(
     return {
       ok: false,
       text: [
-        'Refusing to prune ' + sceneKey + ': still active within 72h',
+        `Refusing to prune ${sceneKey}: still active within 72h`,
         ...active.map((row) => describeRow(row, now)),
         '',
         'Re-run with force to delete anyway: /bncr prune ' +
           sceneKey +
-          (wantedAgent ? ' ' + wantedAgent : '') +
+          (wantedAgent ? ` ${wantedAgent}` : '') +
           ' force',
       ].join('\n'),
     };
@@ -1344,7 +1344,7 @@ export async function executeStaleScenesCommand(
       buildAgentSceneRegistryKey(row.scene.sceneKey, row.agentId),
     );
     if (!current || Number(current.lastSeenAt) !== row.rowAt) {
-      skipped.push(normalizeToken(row.scene.sceneKey) + '/' + (row.agentId || '(unassigned)'));
+      skipped.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
       continue;
     }
     if (row.sessionKey) {
