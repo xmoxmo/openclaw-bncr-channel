@@ -4,6 +4,7 @@ import {
   normalizeInboundSessionKey,
   withTaskSessionKey,
 } from '../../core/targets.ts';
+import { resolveBncrChannelInboundRuntime } from '../../openclaw/inbound-runtime.ts';
 import type {
   BncrEnqueueFromReply,
   BncrInboundApi,
@@ -12,7 +13,6 @@ import type {
 } from './contracts.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 import { buildBncrNativeReplyDeliveryPayload } from './native-reply-delivery.ts';
-import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 
 export function logBncrNativeCommandEvent(
   event: string,

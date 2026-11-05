@@ -1,20 +1,14 @@
-import type { OpenClawLoadedMedia } from '../../openclaw/media-runtime.ts';
+import { emitBncrLogLine } from '../../core/logging.ts';
+import {
+  type OpenClawLoadedMedia,
+  readOpenClawRemoteMediaBuffer,
+} from '../../openclaw/media-runtime.ts';
 import { downloadInboundMediaUrl, type InboundMediaUrlGuard } from './media-url-download.ts';
 import { assertFetchableMediaUrl } from './media-url-policy.ts';
 
-type RuntimeChannelMediaReader = {
-  runtime?: {
-    channel?: {
-      media?: {
-        readRemoteMediaBuffer?: (options: {
-          url: string;
-          maxBytes?: number;
-          ssrfPolicy?: { allowPrivateNetwork?: boolean };
-        }) => Promise<OpenClawLoadedMedia>;
-      };
-    };
-  };
-};
+type RuntimeApiHolder = Parameters<typeof readOpenClawRemoteMediaBuffer>[0];
+
+let warnedHostMediaReaderFallback = false;
 
 function assertLoadedInboundRemoteMedia(
   loaded: OpenClawLoadedMedia,
@@ -32,20 +26,8 @@ function assertLoadedInboundRemoteMedia(
   return loaded;
 }
 
-async function readRemoteMediaBufferFromRuntime(
-  api: RuntimeChannelMediaReader,
-  url: string,
-  maxBytes: number,
-): Promise<OpenClawLoadedMedia> {
-  const readRemoteMediaBuffer = api?.runtime?.channel?.media?.readRemoteMediaBuffer;
-  if (typeof readRemoteMediaBuffer !== 'function') {
-    throw new Error('OpenClaw channel media readRemoteMediaBuffer API is unavailable');
-  }
-  return readRemoteMediaBuffer({ url, maxBytes, ssrfPolicy: { allowPrivateNetwork: true } });
-}
-
 export async function loadInboundRemoteMedia(
-  api: RuntimeChannelMediaReader,
+  api: RuntimeApiHolder,
   url: string,
   maxBytes: number,
   options?: { urlGuard?: InboundMediaUrlGuard },
@@ -63,8 +45,15 @@ export async function loadInboundRemoteMedia(
   };
   let runtimeLoaded: OpenClawLoadedMedia;
   try {
-    runtimeLoaded = await readRemoteMediaBufferFromRuntime(api, url, maxBytes);
+    runtimeLoaded = await readOpenClawRemoteMediaBuffer(api, url, maxBytes);
   } catch {
+    if (!warnedHostMediaReaderFallback) {
+      warnedHostMediaReaderFallback = true;
+      emitBncrLogLine(
+        'warn',
+        '[bncr] inbound media host reader failed; using trusted direct-download fallback',
+      );
+    }
     return loadFallback();
   }
   if (!runtimeLoaded?.buffer?.length) return loadFallback();

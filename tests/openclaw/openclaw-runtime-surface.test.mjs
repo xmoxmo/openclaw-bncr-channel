@@ -9,6 +9,9 @@ import {
 function createCompleteRuntimeApi() {
   return {
     runtime: {
+      agent: {
+        resolveAgentWorkspaceDir() {},
+      },
       config: {
         current() {},
         mutateConfigFile() {},
@@ -24,6 +27,9 @@ function createCompleteRuntimeApi() {
         media: {
           readRemoteMediaBuffer() {},
           saveMediaBuffer() {},
+        },
+        session: {
+          recordInboundSession() {},
         },
         reply: {
           resolveEnvelopeFormatOptions() {},
@@ -42,9 +48,10 @@ test('OpenClaw runtime surface contract list has stable unique keys', () => {
   const keys = OPENCLAW_RUNTIME_SURFACE_CONTRACTS.map((spec) => spec.key);
   assert.equal(new Set(keys).size, keys.length);
   assert.ok(keys.includes('runtime.config.current|get'));
+  assert.ok(keys.includes('runtime.agent.resolveAgentWorkspaceDir'));
   assert.ok(keys.includes('runtime.channel.media.readRemoteMediaBuffer'));
+  assert.ok(keys.includes('runtime.channel.session.recordInboundSession'));
   assert.ok(keys.includes('runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher'));
-  assert.ok(!keys.some((key) => key.startsWith('runtime.channel.session')));
 });
 
 test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contract', () => {
@@ -52,11 +59,13 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contra
 
   assert.deepEqual(diagnostics.runtime, {
     config: true,
+    agent: true,
     media: true,
   });
   assert.deepEqual(diagnostics.channel, {
     inbound: true,
     media: true,
+    session: true,
     reply: true,
     routing: true,
   });
@@ -65,8 +74,10 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contra
     saveMediaBuffer: true,
   });
   assert.equal(diagnostics.contract['runtime.config.current|get'], true);
+  assert.equal(diagnostics.contract['runtime.agent.resolveAgentWorkspaceDir'], true);
   assert.equal(diagnostics.contract['runtime.media.loadWebMedia'], true);
   assert.equal(diagnostics.contract['runtime.channel.inbound.buildContext'], true);
+  assert.equal(diagnostics.contract['runtime.channel.session.recordInboundSession'], true);
   assert.equal(diagnostics.contract['runtime.channel.reply.formatAgentEnvelope'], true);
   assert.equal(
     diagnostics.contract['runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher'],
@@ -78,6 +89,7 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contra
 test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports method-level host drift', () => {
   const api = createCompleteRuntimeApi();
   delete api.runtime.channel.media.readRemoteMediaBuffer;
+  delete api.runtime.channel.session.recordInboundSession;
   delete api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher;
 
   const diagnostics = buildOpenClawChannelRuntimeSurfaceDiagnostics(api);
@@ -90,6 +102,7 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports method-level host dr
   });
   assert.deepEqual(diagnostics.missing, [
     'runtime.channel.media.readRemoteMediaBuffer',
+    'runtime.channel.session.recordInboundSession',
     'runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher',
   ]);
 });
@@ -124,11 +137,13 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics tolerates missing runtime ob
 
   assert.deepEqual(diagnostics.runtime, {
     config: false,
+    agent: false,
     media: false,
   });
   assert.deepEqual(diagnostics.channel, {
     inbound: false,
     media: false,
+    session: false,
     reply: false,
     routing: false,
   });

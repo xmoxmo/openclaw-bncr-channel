@@ -19,6 +19,12 @@ export function createRegisterApiStub(overrides = {}) {
 
   return {
     runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          const safeAgentId = String(agentId || 'agent').replace(/[^a-zA-Z0-9._-]+/g, '_');
+          return `/tmp/bncr-test-workspaces/${safeAgentId}`;
+        },
+      },
       config: {
         current() {
           return currentConfig;
@@ -90,6 +96,9 @@ export function createRegisterApiStub(overrides = {}) {
           },
         },
         session: {
+          async recordInboundSession() {
+            return undefined;
+          },
           readSessionUpdatedAt() {
             return undefined;
           },

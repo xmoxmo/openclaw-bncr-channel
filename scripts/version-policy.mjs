@@ -12,7 +12,7 @@ export const validateVersionSyntax = (version) => {
   if (patch > 9) {
     return {
       ok: false,
-      reason: 'patch version must stay within 0-9; bump minor instead',
+      reason: 'patch version must stay within 0-9',
       version,
     };
   }
@@ -41,8 +41,6 @@ export const validateReleaseVersionPolicy = (version, latestVersion) => {
     };
   }
 
-  const latestMajor = Number.parseInt(latestMatch[1], 10);
-  const latestMinor = Number.parseInt(latestMatch[2], 10);
   const latestPatch = Number.parseInt(latestMatch[3], 10);
   if (latestPatch > 9) {
     return {
@@ -52,17 +50,20 @@ export const validateReleaseVersionPolicy = (version, latestVersion) => {
     };
   }
 
-  const expected =
-    latestPatch < 9
-      ? `${latestMajor}.${latestMinor}.${latestPatch + 1}`
-      : latestMinor < 9
-        ? `${latestMajor}.${latestMinor + 1}.0`
-        : `${latestMajor + 1}.0.0`;
+  if (latestPatch === 9) {
+    return {
+      ok: false,
+      reason: `npm latest version has no legal next release under the patch-only policy: ${latestVersion}`,
+      version,
+    };
+  }
+
+  const expected = `${latestMatch[1]}.${latestMatch[2]}.${latestPatch + 1}`;
 
   if (version !== expected) {
     return {
       ok: false,
-      reason: `release version must be exactly one valid step after ${latestVersion}: expected ${expected}, got ${version}`,
+      reason: `release version must be exactly one patch step after ${latestVersion}: expected ${expected}, got ${version}`,
       version,
     };
   }

@@ -7,6 +7,7 @@ import {
 import {
   isOpenClawRemoteHttpMediaUrl,
   loadOpenClawWebMedia,
+  resolveOpenClawMediaDir,
 } from '../../src/openclaw/media-runtime.ts';
 import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
 
@@ -61,6 +62,21 @@ test('isOpenClawRemoteHttpMediaUrl only treats http and https URLs as remote fet
   assert.equal(isOpenClawRemoteHttpMediaUrl('file:///tests/media/a.png'), false);
   assert.equal(isOpenClawRemoteHttpMediaUrl('data:image/png;base64,abc'), false);
   assert.equal(isOpenClawRemoteHttpMediaUrl('media://inbound/demo'), false);
+});
+
+test('resolveOpenClawMediaDir preserves host state-dir precedence over config path', () => {
+  assert.equal(
+    resolveOpenClawMediaDir(
+      { OPENCLAW_STATE_DIR: '/srv/openclaw-state', OPENCLAW_CONFIG_PATH: '/etc/ignored.json' },
+      '/srv/openclaw-state',
+    ),
+    '/srv/openclaw-state/media',
+  );
+  assert.equal(
+    resolveOpenClawMediaDir({ OPENCLAW_CONFIG_PATH: '/etc/openclaw.json' }, '/default-state'),
+    '/etc/media',
+  );
+  assert.equal(resolveOpenClawMediaDir({}, '/default-state'), '/default-state/media');
 });
 
 test('loadOpenClawWebMedia keeps local media paths on runtime loadWebMedia path', async () => {

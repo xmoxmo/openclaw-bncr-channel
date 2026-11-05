@@ -19,10 +19,15 @@ import { createBncrBridge } from '../../src/channel.ts';
 import { BncrMediaSourceError } from '../../src/messaging/inbound/media-assets.ts';
 import { installBncrTestMediaStorage } from '../helpers/bncr-media-storage.mjs';
 
-function createApi(readRemoteMediaBuffer, mediaMaxMb = 2048) {
+function createApi(readRemoteMediaBuffer, mediaMaxMb = 2048, workspaceRoot = os.tmpdir()) {
   return {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return path.join(workspaceRoot, 'workspaces', agentId);
+        },
+      },
       config: {
         current() {
           return { channels: { bncr: { mediaMaxMb, accounts: { Primary: {} } } } };
@@ -65,10 +70,14 @@ test('bncr_download_media downloads an explicit URL into the calling agent works
   const mediaStorage = await installBncrTestMediaStorage();
   let downloads = 0;
   const bridge = createBncrBridge(
-    createApi(async () => {
-      downloads += 1;
-      return { buffer: Buffer.from('history-image'), contentType: 'image/png' };
-    }),
+    createApi(
+      async () => {
+        downloads += 1;
+        return { buffer: Buffer.from('history-image'), contentType: 'image/png' };
+      },
+      2048,
+      mediaStorage.root,
+    ),
   );
 
   try {
@@ -95,9 +104,13 @@ test('bncr_download_media copies a managed local source and preserves metadata',
   const sourcePath = path.join(sourceDir, 'history.pdf');
   await writeFile(sourcePath, 'pdf-bytes');
   const bridge = createBncrBridge(
-    createApi(async () => {
-      throw new Error('URL reader must not run for local media');
-    }),
+    createApi(
+      async () => {
+        throw new Error('URL reader must not run for local media');
+      },
+      2048,
+      mediaStorage.root,
+    ),
   );
 
   try {
@@ -136,7 +149,9 @@ test('bncr_download_media atomically replaces a pre-existing workspace symlink',
   await writeFile(sourcePath, 'safe-image');
   await writeFile(outsidePath, 'must-not-change');
   await symlink(outsidePath, targetPath);
-  const bridge = createBncrBridge(createApi(async () => ({ buffer: Buffer.from('unused') })));
+  const bridge = createBncrBridge(
+    createApi(async () => ({ buffer: Buffer.from('unused') }), 2048, mediaStorage.root),
+  );
 
   try {
     const downloaded = await bridge.downloadHistoryMedia(
@@ -163,7 +178,9 @@ test('bncr_download_media rejects a symlinked workspace media directory', async 
   const sourcePath = path.join(sourceDir, 'history.png');
   await writeFile(sourcePath, 'safe-image');
   await symlink(outsideDir, path.join(workspaceDir, 'media', 'inbound'));
-  const bridge = createBncrBridge(createApi(async () => ({ buffer: Buffer.from('unused') })));
+  const bridge = createBncrBridge(
+    createApi(async () => ({ buffer: Buffer.from('unused') }), 2048, mediaStorage.root),
+  );
 
   try {
     await assert.rejects(
@@ -194,7 +211,9 @@ test('bncr_download_media rejects a symlinked media parent without creating outs
   const sourcePath = path.join(sourceDir, 'history.png');
   await writeFile(sourcePath, 'safe-image');
   await symlink(outsideDir, path.join(workspaceDir, 'media'));
-  const bridge = createBncrBridge(createApi(async () => ({ buffer: Buffer.from('unused') })));
+  const bridge = createBncrBridge(
+    createApi(async () => ({ buffer: Buffer.from('unused') }), 2048, mediaStorage.root),
+  );
 
   try {
     await assert.rejects(
@@ -214,7 +233,9 @@ test('bncr_download_media rejects local files outside the managed media director
   await writeFile(outsidePath, 'secret');
   const linkedPath = path.join(mediaStorage.root, 'linked-secret.txt');
   await symlink(outsidePath, linkedPath);
-  const bridge = createBncrBridge(createApi(async () => ({ buffer: Buffer.from('unused') })));
+  const bridge = createBncrBridge(
+    createApi(async () => ({ buffer: Buffer.from('unused') }), 2048, mediaStorage.root),
+  );
 
   try {
     await assert.rejects(
@@ -234,9 +255,13 @@ test('bncr_download_media rejects local files outside the managed media director
 test('bncr_download_media reports missing, oversized, invalid, and failed sources', async () => {
   const mediaStorage = await installBncrTestMediaStorage();
   const bridge = createBncrBridge(
-    createApi(async () => {
-      throw new Error('offline');
-    }, 0.000001),
+    createApi(
+      async () => {
+        throw new Error('offline');
+      },
+      0.000001,
+      mediaStorage.root,
+    ),
   );
 
   try {
@@ -289,7 +314,11 @@ test('bncr_download_media reports missing, oversized, invalid, and failed source
 test('bncr_download_media honors stale invocation checks before writing URL output', async () => {
   const mediaStorage = await installBncrTestMediaStorage();
   const bridge = createBncrBridge(
-    createApi(async () => ({ buffer: Buffer.from('history-image'), contentType: 'image/png' })),
+    createApi(
+      async () => ({ buffer: Buffer.from('history-image'), contentType: 'image/png' }),
+      2048,
+      mediaStorage.root,
+    ),
   );
   let checks = 0;
 
@@ -321,7 +350,9 @@ test('bncr_download_media honors stale invocation checks before writing local ou
   await mkdir(sourceDir, { recursive: true });
   const sourcePath = path.join(sourceDir, 'history.png');
   await writeFile(sourcePath, 'history-image');
-  const bridge = createBncrBridge(createApi(async () => ({ buffer: Buffer.from('unused') })));
+  const bridge = createBncrBridge(
+    createApi(async () => ({ buffer: Buffer.from('unused') }), 2048, mediaStorage.root),
+  );
   let checks = 0;
 
   try {
@@ -351,7 +382,11 @@ test('bncr_download_media honors stale invocation checks before writing local ou
 test('bncr_download_media removes the temporary file when invocation becomes stale before rename', async () => {
   const mediaStorage = await installBncrTestMediaStorage();
   const bridge = createBncrBridge(
-    createApi(async () => ({ buffer: Buffer.from('history-image'), contentType: 'image/png' })),
+    createApi(
+      async () => ({ buffer: Buffer.from('history-image'), contentType: 'image/png' }),
+      2048,
+      mediaStorage.root,
+    ),
   );
   let checks = 0;
 
@@ -380,10 +415,14 @@ test('bncr_download_media removes the temporary file when invocation becomes sta
 test('bncr_download_media keeps concurrent writes with the same mediaRef isolated', async () => {
   const mediaStorage = await installBncrTestMediaStorage();
   const bridge = createBncrBridge(
-    createApi(async ({ url }) => ({
-      buffer: Buffer.from(url.endsWith('/first.png') ? 'first-image' : 'second-image'),
-      contentType: 'image/png',
-    })),
+    createApi(
+      async ({ url }) => ({
+        buffer: Buffer.from(url.endsWith('/first.png') ? 'first-image' : 'second-image'),
+        contentType: 'image/png',
+      }),
+      2048,
+      mediaStorage.root,
+    ),
   );
 
   try {

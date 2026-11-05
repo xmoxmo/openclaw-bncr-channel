@@ -1,4 +1,4 @@
-import { resolveChannelMediaMaxBytes } from 'openclaw/plugin-sdk/media-runtime';
+import { resolveChannelMediaMaxBytes } from 'openclaw/plugin-sdk/account-helpers';
 import { DEFAULT_BNCR_MEDIA_MAX_MB } from '../core/config-schema.ts';
 import type { BncrChannelConfigRoot } from '../plugin/channel-runtime-types.ts';
 import { getOpenClawRuntimeConfigOrDefault } from './config-runtime.ts';

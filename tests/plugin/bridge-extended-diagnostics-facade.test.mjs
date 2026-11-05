@@ -21,7 +21,7 @@ test('bridge extended-diagnostics facade assembles register connection outbound 
     lastPrePushGuardSkipReasonByAccount: new Map([['Primary', 'no-gateway-context']]),
     hasGatewayContext: () => true,
     buildRuntimeSurfaceDiagnostics: () => ({
-      runtime: { config: true, media: false },
+      runtime: { config: true, agent: false, media: false },
       channel: { inbound: false, media: false, reply: false, routing: false, session: false },
       channelMedia: { readRemoteMediaBuffer: false, saveMediaBuffer: false },
       contract: { 'runtime.config.current|get': true },

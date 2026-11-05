@@ -547,6 +547,19 @@ test('bare new command is handled via elevated native session reset for non-admi
   assert.equal(enqueueCalls[0].sessionKey, 'agent:orion:bncr:direct:7467426f743a3130303031');
   assert.equal(enqueueCalls[0].payload.text, '✅ New session started.');
   assert.equal(enqueueCalls[0].payload.replyToId, 'bare-new-user');
+  assert.deepEqual(calls.requests, [
+    {
+      method: 'sessions.reset',
+      params: {
+        key: 'agent:orion:bncr:direct:7467426f743a3130303031',
+        reason: 'new',
+        agentId: 'orion',
+        commandSource: 'bncr:native-command',
+        authorizedPluginId: 'bncr',
+      },
+    },
+  ]);
+  assert.equal(calls.sessionPatches.length, 1);
 });
 
 test('bare reset command is handled via elevated native session reset for non-admin direct callers', async () => {
@@ -589,6 +602,105 @@ test('bare reset command is handled via elevated native session reset for non-ad
   assert.equal(enqueueCalls[0].sessionKey, 'agent:orion:bncr:direct:7467426f743a3130303031');
   assert.equal(enqueueCalls[0].payload.text, '✅ Session reset.');
   assert.equal(enqueueCalls[0].payload.replyToId, 'bare-reset-user');
+  assert.deepEqual(calls.requests, [
+    {
+      method: 'sessions.reset',
+      params: {
+        key: 'agent:orion:bncr:direct:7467426f743a3130303031',
+        reason: 'reset',
+        agentId: 'orion',
+        commandSource: 'bncr:native-command',
+        authorizedPluginId: 'bncr',
+      },
+    },
+  ]);
+  assert.equal(calls.sessionPatches.length, 1);
+});
+
+test('a foreign plugin-owned session is rejected before identity patch or reset', async () => {
+  const { api, calls } = createInboundApiStub({
+    sessionEntry: { pluginOwnerId: 'memory-core' },
+  });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'bncr-client-long-id',
+    bridgeId: 'bncr-client-long-id',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: false,
+    type: 'text',
+    msg: '/bncr reset',
+    mimeType: 'text/plain',
+    msgId: 'foreign-owned-reset',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.requests.filter((request) => request.method === 'sessions.reset').length, 0);
+  assert.equal(calls.sessionPatches.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Session reset was rejected by the gateway.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'foreign-owned-reset');
+});
+
+test('a session store read failure rejects reset before identity patch or reset', async () => {
+  const { api, calls } = createInboundApiStub({
+    sessionEntry() {
+      throw new Error('session store unavailable');
+    },
+  });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'bncr-client-long-id',
+    bridgeId: 'bncr-client-long-id',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: false,
+    type: 'text',
+    msg: '/bncr reset',
+    mimeType: 'text/plain',
+    msgId: 'reset-store-read-failure',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.requests.filter((request) => request.method === 'sessions.reset').length, 0);
+  assert.equal(calls.sessionPatches.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Session reset was rejected by the gateway.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'reset-store-read-failure');
 });
 
 test('a failed session reset keeps host paths out of the chat', async () => {
@@ -635,6 +747,54 @@ test('a failed session reset keeps host paths out of the chat', async () => {
     'Session reset failed. Check the server log for details.',
   );
   assert.equal(/\/(usr|root|home)\//.test(enqueueCalls[0].payload.text), false);
+});
+
+test('a reset rejected at the host effect boundary does not report success', async () => {
+  const { api, calls } = createInboundApiStub();
+  const restore = setBncrSessionResetRuntimeForTest(async () => ({ ok: false }));
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'bncr-client-long-id',
+    bridgeId: 'bncr-client-long-id',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: false,
+    isAdmin: true,
+    type: 'text',
+    msg: '/bncr reset',
+    mimeType: 'text/plain',
+    msgId: 'reset-effect-boundary-rejected',
+  });
+  const enqueueCalls = [];
+  let rememberedRoutes = 0;
+  try {
+    await dispatchBncrInbound({
+      api,
+      channelId: 'bncr',
+      cfg: {},
+      parsed,
+      canonicalAgentId: 'orion',
+      rememberSessionRoute() {
+        rememberedRoutes += 1;
+      },
+      enqueueFromReply: async (args) => {
+        enqueueCalls.push(args);
+      },
+      setInboundActivity() {},
+      scheduleSave() {},
+    });
+  } finally {
+    restore();
+  }
+
+  assert.equal(calls.sessionPatches.length, 1);
+  // Inbound preparation remembers the route before the native reset result is known.
+  assert.equal(rememberedRoutes, 1);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Session reset was rejected by the gateway.');
+  assert.equal(enqueueCalls[0].payload.replyToId, 'reset-effect-boundary-rejected');
 });
 
 test('bare new with extra arguments does not invoke session reset', async () => {

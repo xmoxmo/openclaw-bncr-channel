@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { canonicalizeBase64, estimateBase64DecodedBytes } from 'openclaw/plugin-sdk/media-runtime';
+import { extensionForMime } from 'openclaw/plugin-sdk/media-mime';
+import { saveMediaBuffer } from 'openclaw/plugin-sdk/media-store';
+import { resolveConfigPath, STATE_DIR } from 'openclaw/plugin-sdk/state-paths';
+import { canonicalizeBase64, estimateBase64DecodedBytes } from '../core/base64.ts';
 
 export const OPENCLAW_SEND_BUFFER_MEDIA_URL = 'buffer://message-send/attachment';
 
@@ -42,6 +45,34 @@ type RuntimeApiHolder = {
 };
 
 export type OpenClawLoadedMedia = RuntimeMediaLoaded;
+
+/** Return the host's canonical extension for a MIME type. */
+export function extensionForOpenClawMime(contentType: string): string | undefined {
+  return extensionForMime(contentType);
+}
+
+/** Save a media buffer in the host-managed media store. */
+export async function saveOpenClawMediaBuffer(
+  buffer: Buffer,
+  contentType: string | undefined,
+  subdir: string,
+  maxBytes: number,
+  fileName?: string,
+): Promise<{ path: string }> {
+  const saved = await saveMediaBuffer(buffer, contentType, subdir, maxBytes, fileName);
+  return { path: saved.path };
+}
+
+/** Match the host media root precedence: state dir, then config-path directory, then default state. */
+export function resolveOpenClawMediaDir(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir = STATE_DIR,
+): string {
+  if (!env.OPENCLAW_STATE_DIR?.trim() && env.OPENCLAW_CONFIG_PATH?.trim()) {
+    return path.join(path.dirname(resolveConfigPath(env)), 'media');
+  }
+  return path.join(stateDir, 'media');
+}
 
 type OpenClawSendBufferDecodeResult = {
   buffer: Buffer;
@@ -155,6 +186,23 @@ export function isOpenClawRemoteHttpMediaUrl(mediaUrl: string): boolean {
   return /^https?:\/\//i.test(String(mediaUrl || '').trim());
 }
 
+/** Read remote HTTP media through the host reader with Bncr's trusted-network policy. */
+export async function readOpenClawRemoteMediaBuffer(
+  api: RuntimeApiHolder,
+  mediaUrl: string,
+  maxBytes?: number,
+): Promise<OpenClawLoadedMedia> {
+  const readRemoteMediaBuffer = api?.runtime?.channel?.media?.readRemoteMediaBuffer;
+  if (typeof readRemoteMediaBuffer !== 'function') {
+    throw new Error('OpenClaw channel media readRemoteMediaBuffer API is unavailable');
+  }
+  return readRemoteMediaBuffer({
+    url: mediaUrl,
+    maxBytes,
+    ssrfPolicy: { allowPrivateNetwork: true },
+  });
+}
+
 /**
  * Try to resolve a relative media path against each local root.
  * Returns the first absolute path that exists on disk, or the original
@@ -179,13 +227,11 @@ export async function loadOpenClawWebMedia(
   mediaUrl: string,
   options?: { localRoots?: readonly string[]; maxBytes?: number },
 ): Promise<RuntimeMediaLoaded> {
-  const readRemoteMediaBuffer = api?.runtime?.channel?.media?.readRemoteMediaBuffer;
-  if (isOpenClawRemoteHttpMediaUrl(mediaUrl) && typeof readRemoteMediaBuffer === 'function') {
-    return readRemoteMediaBuffer({
-      url: mediaUrl,
-      maxBytes: options?.maxBytes,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+  if (
+    isOpenClawRemoteHttpMediaUrl(mediaUrl) &&
+    typeof api?.runtime?.channel?.media?.readRemoteMediaBuffer === 'function'
+  ) {
+    return readOpenClawRemoteMediaBuffer(api, mediaUrl, options?.maxBytes);
   }
 
   const loadWebMedia = api?.runtime?.media?.loadWebMedia;

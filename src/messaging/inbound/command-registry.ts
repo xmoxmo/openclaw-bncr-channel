@@ -1,6 +1,9 @@
 import { describeMissingPublicAgentFromIds } from '../../core/agent-surface.ts';
 import { emitBncrLogLine } from '../../core/logging.ts';
-import { performBncrGatewaySessionReset } from '../../openclaw/session-reset-runtime.ts';
+import {
+  assertBncrSessionResetOwnership,
+  performBncrGatewaySessionReset,
+} from '../../openclaw/session-reset-runtime.ts';
 import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
 import { ADMIN_REQUIRED_TEXT } from './command-constants.ts';
 import type { BncrEnqueueFromReply, BncrRememberSessionRoute } from './contracts.ts';
@@ -314,6 +317,29 @@ const LOCAL_COMMAND_HANDLERS: LocalCommandHandler[] = [
     run: async (ctx, parsed) => {
       const reset = (parsed as { data: NativeSessionResetCommand }).data;
       const requestedAgentId = ctx.routeAgentId;
+      try {
+        await assertBncrSessionResetOwnership({
+          storePath: ctx.storePath,
+          sessionKey: ctx.baseSessionKey,
+        });
+      } catch (ownershipError) {
+        emitBncrLogLine(
+          'warn',
+          `[bncr] native-command sessions.reset rejected|key=${ctx.baseSessionKey}|reason=ownership|err=${
+            ownershipError instanceof Error ? ownershipError.message : String(ownershipError)
+          }`,
+        );
+        await ctx.enqueueFromReply({
+          accountId: ctx.accountId,
+          sessionKey: ctx.baseSessionKey,
+          route: ctx.route,
+          payload: {
+            text: 'Session reset was rejected by the gateway.',
+            replyToId: ctx.msgId || undefined,
+          },
+        });
+        return { handled: true, command: ctx.command.command, sessionKey: ctx.baseSessionKey };
+      }
       // Record the identity patch before the reset wipes the session entry.
       await recordAndPatchBncrInboundSessionEntry({
         storePath: ctx.storePath,

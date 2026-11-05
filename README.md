@@ -17,7 +17,7 @@ openclaw plugins update bncr
 openclaw gateway restart
 ```
 
-当前兼容 `OpenClaw >= 2026.10.5`。会话存储通过 `getSessionEntryAsync`、`patchSessionEntry`、`readSessionUpdatedAtAsync` 访问，不使用已弃用的同步接口。
+当前兼容 `OpenClaw >= 2026.10.10`。会话存储通过 `getSessionEntryAsync`、`listSessionEntriesAsync`、`prepareSessionEntryPatch`、`applySessionEntryPatch`、`readSessionUpdatedAtAsync` 访问，不使用已弃用的同步接口。
 
 ## 状态目录
 
@@ -312,7 +312,7 @@ openclaw config get channels.bncr.mediaMaxMb
 
 `stale orphans` 是反向核对：经 RPC `bncr.state.list` 只读读一遍客户端的 `state:<hex>` 表（不建行、不改 rev、不归一脏值），按 `平台:群` / `平台:用户` 还原成场景键，列出「客户端有门控状态、场景表里没有对应行」的场景。多出来的只有两种来历：超级门控（oc/occ）已经打开但消息还没进场景表；或者场景行已经清掉、客户端那份留在原地。每行标 `gate on|off`、开启时间（`rev`）和 `mode`，只做展示，删不删由管理员判断；这些场景没有场景行，`/bncr prune` 也就没有目标行，要用 `/bncr prune state <SceneId>` 只清客户端那份门控：不归档 transcript、不动会话、不碰场景表；门控在 72 小时内开过要加 `force`（那也可能是还没来消息的超级门控），下发 RPC 前会再查一次场景表，期间冒出场景行就放弃并提示重跑；场景表还有行时这条路直接拒绝，提示改用 `/bncr prune <SceneId>`。客户端太旧时提示 `too old to expose bncr.state.list`。
 
-`stale` 只读，列出两种清理候选。一是静默：场景行的最后活动时间超过判定窗口（入站，或管理员改配置时刷新该行），并且该行对应 sessionKey 的宿主会话活动时间也超过同一窗口（清理视图 180 天，诊断视图 72 小时）。只满足一条的不列——例如 cron 直接投递的会话，场景行很久没更新，但会话还在动。二是会话异常：用宿主 SDK 只读列出该 agent 的会话项（`listSessionEntries`，不建库、不迁移），再按 sessionKey 查；查不到就是 `missing`（被 UI 删除或从未建过），`archivedAt` 有值就是 `archived`（被 UI 归档）；这两种不看场景行时钟，直接列出。列表读不出来时回退到时间戳判定：只按上面那条 72 小时双静默规则列，状态标 `unreadable (unknown)`，不会判 `missing` / `archived`；列表和时间戳都读不出来才整行跳过，不当成死行。
+`stale` 只读，列出两种清理候选。一是静默：场景行的最后活动时间超过判定窗口（入站，或管理员改配置时刷新该行），并且该行对应 sessionKey 的宿主会话活动时间也超过同一窗口（清理视图 180 天，诊断视图 72 小时）。只满足一条的不列——例如 cron 直接投递的会话，场景行很久没更新，但会话还在动。二是会话异常：用宿主 SDK 只读列出该 agent 的会话项（`listSessionEntriesAsync`，不建库、不迁移），再按 sessionKey 查；查不到就是 `missing`（被 UI 删除或从未建过），`archivedAt` 有值就是 `archived`（被 UI 归档）；这两种不看场景行时钟，直接列出。列表读不出来时回退到时间戳判定：只按上面那条 72 小时双静默规则列，状态标 `unreadable (unknown)`，不会判 `missing` / `archived`；列表和时间戳都读不出来才整行跳过，不当成死行。
 
 每条给出侧边栏 label、agent、两个时间和各自静默时长，会话异常时改为标 `missing (no session row)` 或 `archived`。第三个维度是兄弟场景：同一个 `group_id`、不同平台的另一行在 24 小时内有活动（取行入站与会话活动里较新的那个；只有确认仍然存活的会话才算活动，missing / archived / 读不出来的兄弟只按行入站算，避免归档动作或读不到的时间冒充活动），说明这个群已经换到那个平台。`swapped` 只列这一类，`solo` 只列既没有兄弟活动、也没有会话异常的行（就是单纯静默），`missing` / `archived` 只列对应异常，`all` 是全部候选（诊断视图）。私聊不参与兄弟匹配。
 

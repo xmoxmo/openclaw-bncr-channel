@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readBncrSessionEntryStrict } from './inbound-session-runtime.ts';
 
 type SessionResetResult = { ok?: boolean } | undefined;
 type SessionResetParams = {
@@ -9,8 +10,11 @@ type SessionResetParams = {
   reason: 'new' | 'reset';
   agentId?: string;
   commandSource?: string;
+  authorizedPluginId?: string;
 };
 type SessionResetFn = (params: SessionResetParams) => Promise<SessionResetResult>;
+
+const BNCR_PLUGIN_ID = 'bncr';
 
 let testOverride: SessionResetFn | null = null;
 let resolvedSessionResetRuntimeCache: SessionResetFn | null = null;
@@ -96,30 +100,66 @@ function resolveOpenClawSessionsRuntimeUrls(): string[] {
   return candidates.map((name) => pathToFileURL(join(distDir, name)).href);
 }
 
+async function resolveSessionResetRuntime(): Promise<SessionResetFn> {
+  if (testOverride) return testOverride;
+  if (resolvedSessionResetRuntimeCache) return resolvedSessionResetRuntimeCache;
+
+  const candidates = resolveOpenClawSessionsRuntimeUrls();
+  const importErrors: string[] = [];
+  for (const url of candidates) {
+    try {
+      const mod = (await import(url)) as { performGatewaySessionReset?: SessionResetFn };
+      if (typeof mod.performGatewaySessionReset === 'function') {
+        resolvedSessionResetRuntimeCache = mod.performGatewaySessionReset;
+        return resolvedSessionResetRuntimeCache;
+      }
+      importErrors.push(`${url}: export unavailable`);
+    } catch (error) {
+      importErrors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(
+    `OpenClaw performGatewaySessionReset is unavailable; candidates: ${importErrors.join('; ') || '(none)'}`,
+  );
+}
+
+export type SessionResetRuntimeProbe = { available: true } | { available: false; error: string };
+
+/** Verify the host lifecycle bridge without mutating a session. */
+export async function probeBncrSessionResetRuntime(): Promise<SessionResetRuntimeProbe> {
+  try {
+    await resolveSessionResetRuntime();
+    return { available: true };
+  } catch (error) {
+    return {
+      available: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Refuse to reset a session owned by another plugin. Channel-created sessions
+ * have no pluginOwnerId; those remain eligible under Bncr's own admission rules.
+ */
+export async function assertBncrSessionResetOwnership(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<void> {
+  const entry = await readBncrSessionEntryStrict(params);
+  const owner = typeof entry?.pluginOwnerId === 'string' ? entry.pluginOwnerId.trim() : '';
+  if (owner && owner !== BNCR_PLUGIN_ID) {
+    throw new Error(
+      `session reset refused: target is owned by plugin ${owner}, not ${BNCR_PLUGIN_ID}`,
+    );
+  }
+}
+
 export async function performBncrGatewaySessionReset(
   params: SessionResetParams,
 ): Promise<SessionResetResult> {
-  if (testOverride) return testOverride(params);
-  if (!resolvedSessionResetRuntimeCache) {
-    const candidates = resolveOpenClawSessionsRuntimeUrls();
-    const importErrors: string[] = [];
-    for (const url of candidates) {
-      try {
-        const mod = (await import(url)) as { performGatewaySessionReset?: SessionResetFn };
-        if (typeof mod.performGatewaySessionReset === 'function') {
-          resolvedSessionResetRuntimeCache = mod.performGatewaySessionReset;
-          break;
-        }
-        importErrors.push(`${url}: export unavailable`);
-      } catch (error) {
-        importErrors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    if (!resolvedSessionResetRuntimeCache) {
-      throw new Error(
-        `OpenClaw performGatewaySessionReset is unavailable; candidates: ${importErrors.join('; ') || '(none)'}`,
-      );
-    }
-  }
-  return resolvedSessionResetRuntimeCache(params);
+  return (await resolveSessionResetRuntime())({
+    ...params,
+    authorizedPluginId: BNCR_PLUGIN_ID,
+  });
 }

@@ -142,6 +142,108 @@ test('bridge lifecycle service helpers preserve startup stop and shutdown sequen
   assert.deepEqual(shutdownCalls, ['shutdown', 'close']);
 });
 
+test('bridge lifecycle probes session reset support without blocking startup', async () => {
+  const calls = [];
+  const runtime = {
+    bridgeId: 'bridge-probe-ok',
+    setStopped(value) {
+      calls.push(['setStopped', value]);
+    },
+    setStatePath() {},
+    getRuntimeConfig() {
+      return { channels: { bncr: { enabled: true } } };
+    },
+    initializeCanonicalAgentId() {},
+    logWarn(scope, message) {
+      calls.push(['logWarn', scope, message]);
+    },
+    async loadState() {
+      calls.push(['loadState']);
+    },
+    setDebugFlag() {},
+    async refreshDebugFlagFromConfig() {},
+    buildIntegratedDiagnostics() {
+      return {
+        regression: { totalKnownRoutes: 0, ok: true },
+        health: { pending: 0, deadLetter: 0 },
+      };
+    },
+    logInfo() {},
+    getChannelConfigRoot(cfg) {
+      return cfg.channels.bncr;
+    },
+    async probeSessionResetBridge() {
+      calls.push(['probeSessionResetBridge']);
+      return { available: true };
+    },
+  };
+
+  assert.equal(await startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, false), true);
+  assert.equal(
+    calls.some(([name]) => name === 'probeSessionResetBridge'),
+    true,
+  );
+  assert.equal(
+    calls.some(([name]) => name === 'logWarn'),
+    false,
+  );
+  assert.equal(
+    calls.some(([name, value]) => name === 'setStopped' && value === false),
+    true,
+  );
+});
+
+test('bridge lifecycle reports unavailable or failed session reset probes without blocking startup', async () => {
+  for (const [probe, expectedMessage] of [
+    [
+      async () => ({ available: false, error: 'bridge unavailable' }),
+      /session reset bridge unavailable; \/new and \/reset will fail\|err=bridge unavailable/,
+    ],
+    [
+      async () => {
+        throw new Error('probe failed');
+      },
+      /session reset bridge probe failed; \/new and \/reset may fail\|err=probe failed/,
+    ],
+  ]) {
+    const warnings = [];
+    const runtime = {
+      bridgeId: 'bridge-probe-warning',
+      setStopped() {},
+      setStatePath() {},
+      getRuntimeConfig() {
+        return { channels: { bncr: { enabled: true } } };
+      },
+      initializeCanonicalAgentId() {},
+      logWarn(scope, message) {
+        warnings.push({ scope, message });
+      },
+      async loadState() {},
+      setDebugFlag() {},
+      async refreshDebugFlagFromConfig() {},
+      buildIntegratedDiagnostics() {
+        return {
+          regression: { totalKnownRoutes: 0, ok: true },
+          health: { pending: 0, deadLetter: 0 },
+        };
+      },
+      logInfo() {},
+      getChannelConfigRoot(cfg) {
+        return cfg.channels.bncr;
+      },
+      probeSessionResetBridge: probe,
+    };
+
+    assert.equal(
+      await startBncrBridgeService(runtime, { stateDir: '/tmp/bncr-state' }, false),
+      true,
+    );
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].scope, 'host-sdk');
+    assert.match(warnings[0].message, expectedMessage);
+  }
+});
+
 test('bridge lifecycle stale start does not clear stopped or resume outbox drain', async () => {
   let current = true;
   let stopped = true;

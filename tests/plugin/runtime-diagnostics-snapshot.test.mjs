@@ -87,7 +87,7 @@ test('extended diagnostics assembler composes register outbound connection and s
     buildRuntimeSurfaceDiagnostics: () => ({
       contract: {},
       missing: [],
-      runtime: { config: true, media: true },
+      runtime: { config: true, agent: true, media: true },
       channel: { inbound: true, media: true, reply: true, routing: true, session: true },
       channelMedia: { readRemoteMediaBuffer: true, saveMediaBuffer: true },
     }),

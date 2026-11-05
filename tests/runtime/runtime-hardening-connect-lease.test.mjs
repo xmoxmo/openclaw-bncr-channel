@@ -43,11 +43,13 @@ test('bncr.connect exposes lease/epoch and diagnostics include hardening fields'
   assert.ok(payload.diagnostics.stale);
   assert.deepEqual(payload.diagnostics.runtimeSurface.runtime, {
     config: true,
+    agent: true,
     media: true,
   });
   assert.deepEqual(payload.diagnostics.runtimeSurface.channel, {
     inbound: true,
     media: true,
+    session: true,
     reply: true,
     routing: true,
   });
@@ -96,11 +98,13 @@ test('bncr diagnostics register info updates after api rebind', async () => {
   assert.equal(ok, true);
   assert.deepEqual(payload.diagnostics.runtimeSurface.runtime, {
     config: true,
+    agent: true,
     media: true,
   });
   assert.deepEqual(payload.diagnostics.runtimeSurface.channel, {
     inbound: true,
     media: true,
+    session: true,
     reply: true,
     routing: true,
   });

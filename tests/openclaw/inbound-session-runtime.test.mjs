@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  applyBncrSessionEntryPatch,
+  configureBncrInboundSessionRuntime,
+  listBncrSessionEntries,
+  prepareBncrSessionEntryPatch,
   readBncrSessionEntry,
   readBncrSessionUpdatedAt,
   recordBncrInboundSession,
@@ -9,7 +13,6 @@ import {
   resolveBncrInboundSessionStorePath,
   resolveBncrPinnedMainDmOwnerFromAllowlist,
   setBncrInboundSessionRuntimeForTest,
-  updateBncrSessionStoreEntry,
 } from '../../src/openclaw/inbound-session-runtime.ts';
 
 test('inbound session runtime forwards calls to injected runtime override', async () => {
@@ -27,8 +30,12 @@ test('inbound session runtime forwards calls to injected runtime override', asyn
       calls.push(['recordSessionMetaFromInbound', params]);
       return 'meta-recorded';
     },
-    async patchSessionEntry(params) {
-      calls.push(['patchSessionEntry', params]);
+    async prepareSessionEntryPatch(params) {
+      calls.push(['prepareSessionEntryPatch', params]);
+      return 'prepared';
+    },
+    async applySessionEntryPatch(params) {
+      calls.push(['applySessionEntryPatch', params]);
       return 'updated';
     },
     async getSessionEntryAsync(params) {
@@ -39,9 +46,9 @@ test('inbound session runtime forwards calls to injected runtime override', asyn
       calls.push(['readSessionUpdatedAtAsync', params]);
       return 1234;
     },
-    resolvePinnedMainDmOwnerFromAllowlist(params) {
-      calls.push(['resolvePinnedMainDmOwnerFromAllowlist', params]);
-      return 'owner:demo';
+    async listSessionEntriesAsync(params) {
+      calls.push(['listSessionEntriesAsync', params]);
+      return [{ sessionKey: 'agent:demo', entry: { updatedAt: 1234 } }];
     },
   });
 
@@ -70,10 +77,18 @@ test('inbound session runtime forwards calls to injected runtime override', asyn
       'meta-recorded',
     );
     assert.equal(
-      await updateBncrSessionStoreEntry({
+      await prepareBncrSessionEntryPatch({
         storePath: '/tmp/store',
         sessionKey: 'agent:demo',
-        update: (current) => current,
+        prepare: (current) => current,
+      }),
+      'prepared',
+    );
+    assert.equal(
+      await applyBncrSessionEntryPatch({
+        storePath: '/tmp/store',
+        sessionKey: 'agent:demo',
+        patch: { verboseLevel: 'on' },
       }),
       'updated',
     );
@@ -85,20 +100,70 @@ test('inbound session runtime forwards calls to injected runtime override', asyn
       await readBncrSessionUpdatedAt({ storePath: '/tmp/store', sessionKey: 'agent:demo' }),
       1234,
     );
+    assert.deepEqual(await listBncrSessionEntries({ agentId: 'orion', storePath: '/tmp/store' }), [
+      { sessionKey: 'agent:demo', entry: { updatedAt: 1234 } },
+    ]);
     assert.equal(
       resolveBncrPinnedMainDmOwnerFromAllowlist({
         dmScope: 'main',
         allowFrom: ['10001'],
         normalizeEntry: (entry) => String(entry || '').trim(),
       }),
-      'owner:demo',
+      '10001',
     );
 
-    assert.equal(calls.length, 7);
+    assert.equal(calls.length, 8);
     assert.deepEqual(calls[0], ['resolveStorePath', 'sessions.json', { agentId: 'orion' }]);
   } finally {
     restore();
   }
+});
+
+test('record inbound session binds to the injected host runtime', async () => {
+  configureBncrInboundSessionRuntime({
+    runtime: {
+      channel: {
+        session: {
+          async recordInboundSession(params) {
+            return params.sessionKey;
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(
+    await recordBncrInboundSession({ storePath: '/tmp/store', sessionKey: 'agent:host' }),
+    'agent:host',
+  );
+});
+
+test('pinned main DM owner keeps host semantics without a broad security barrel', () => {
+  const normalizeEntry = (entry) => String(entry || '').trim();
+  assert.equal(
+    resolveBncrPinnedMainDmOwnerFromAllowlist({
+      dmScope: 'main',
+      allowFrom: [' 10001 ', '10001'],
+      normalizeEntry,
+    }),
+    '10001',
+  );
+  assert.equal(
+    resolveBncrPinnedMainDmOwnerFromAllowlist({
+      dmScope: 'main',
+      allowFrom: ['*', '10001'],
+      normalizeEntry,
+    }),
+    null,
+  );
+  assert.equal(
+    resolveBncrPinnedMainDmOwnerFromAllowlist({
+      dmScope: 'per-channel-peer',
+      allowFrom: ['10001'],
+      normalizeEntry,
+    }),
+    null,
+  );
 });
 
 test('readBncrSessionEntry returns undefined when the async reader throws', async () => {

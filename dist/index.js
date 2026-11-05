@@ -1870,9 +1870,12 @@ function normalizeAccountId(accountId) {
   return v;
 }
 
+// src/openclaw/media-runtime.ts
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { resolveConfigPath, STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+
 // src/messaging/inbound/media-assets.ts
-import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import { extensionForMime, getMediaDir, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 var BncrMediaSourceError = class extends Error {
   code;
   constructor(code, message, options) {

@@ -25,6 +25,13 @@ export const OPENCLAW_RUNTIME_SURFACE_CONTRACTS = [
     path: ['runtime', 'config', 'mutateConfigFile'],
     parent: ['runtime', 'config'],
   },
+  { key: 'runtime.agent', kind: 'object', path: ['runtime', 'agent'] },
+  {
+    key: 'runtime.agent.resolveAgentWorkspaceDir',
+    kind: 'function',
+    path: ['runtime', 'agent', 'resolveAgentWorkspaceDir'],
+    parent: ['runtime', 'agent'],
+  },
   { key: 'runtime.media', kind: 'object', path: ['runtime', 'media'] },
   {
     key: 'runtime.media.loadWebMedia',
@@ -58,6 +65,13 @@ export const OPENCLAW_RUNTIME_SURFACE_CONTRACTS = [
     path: ['runtime', 'channel', 'media', 'saveMediaBuffer'],
     parent: ['runtime', 'channel', 'media'],
   },
+  { key: 'runtime.channel.session', kind: 'object', path: ['runtime', 'channel', 'session'] },
+  {
+    key: 'runtime.channel.session.recordInboundSession',
+    kind: 'function',
+    path: ['runtime', 'channel', 'session', 'recordInboundSession'],
+    parent: ['runtime', 'channel', 'session'],
+  },
   { key: 'runtime.channel.reply', kind: 'object', path: ['runtime', 'channel', 'reply'] },
   {
     key: 'runtime.channel.reply.resolveEnvelopeFormatOptions',
@@ -89,11 +103,13 @@ export const OPENCLAW_RUNTIME_SURFACE_CONTRACTS = [
 export type OpenClawChannelRuntimeSurfaceDiagnostics = {
   runtime: {
     config: boolean;
+    agent: boolean;
     media: boolean;
   };
   channel: {
     inbound: boolean;
     media: boolean;
+    session: boolean;
     reply: boolean;
     routing: boolean;
   };
@@ -146,11 +162,13 @@ export function buildOpenClawChannelRuntimeSurfaceDiagnostics(
   return {
     runtime: {
       config: contract['runtime.config'],
+      agent: contract['runtime.agent'],
       media: contract['runtime.media'],
     },
     channel: {
       inbound: contract['runtime.channel.inbound'],
       media: contract['runtime.channel.media'],
+      session: contract['runtime.channel.session'],
       reply: contract['runtime.channel.reply'],
       routing: contract['runtime.channel.routing'],
     },

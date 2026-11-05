@@ -2,8 +2,9 @@ import { emitBncrLogLine } from '../../core/logging.ts';
 import { formatHumanDisplayScope, parseRouteFromDisplayScope } from '../../core/targets.ts';
 import type { OpenClawChannelRuntimeContext } from '../../openclaw/channel-runtime-contracts.ts';
 import {
+  applyBncrSessionEntryPatch,
+  prepareBncrSessionEntryPatch,
   recordBncrSessionMetaFromInbound,
-  updateBncrSessionStoreEntry,
 } from '../../openclaw/inbound-session-runtime.ts';
 import { formatBncrSceneLabel } from './session-identity.ts';
 
@@ -139,10 +140,10 @@ export async function correctBncrInboundSessionLabel(args: {
     return;
 
   try {
-    await updateBncrSessionStoreEntry({
+    await prepareBncrSessionEntryPatch({
       storePath,
       sessionKey,
-      update: (entry: SessionStoreEntryLike) => {
+      prepare: (entry: SessionStoreEntryLike) => {
         const origin =
           entry?.origin && typeof entry.origin === 'object'
             ? (entry.origin as Record<string, unknown>)
@@ -220,10 +221,10 @@ export async function recordAndPatchBncrInboundSessionEntry(args: {
         createIfMissing: true,
       });
     }
-    await updateBncrSessionStoreEntry({
+    await applyBncrSessionEntryPatch({
       storePath,
       sessionKey,
-      update: () => args.patch,
+      patch: args.patch,
     });
   } catch (err) {
     emitBncrLogLine('warn', `[bncr] inbound session patch failed: ${String(err)}`);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { resolveCommandAuthorization } from 'openclaw/plugin-sdk/command-auth-native';
+import { resolveCommandAuthorizationAsync } from 'openclaw/plugin-sdk/command-auth-native';
 import {
   clearConversationHistorySerialLocks,
   readConversationHistorySerialStates,
@@ -1043,7 +1043,7 @@ test('OpenClaw command auth still authorizes admin sender when static owner list
     '6278285192',
     '58C799392B49460B9959504A0723A2FD',
   ];
-  const auth = resolveCommandAuthorization({
+  const auth = await resolveCommandAuthorizationAsync({
     ctx: {
       ...calls.builtContexts[0],
       OwnerAllowFrom: mergedOwnerAllowFrom,

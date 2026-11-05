@@ -1,10 +1,10 @@
-import { recordInboundSession as sdkRecordInboundSession } from 'openclaw/plugin-sdk/conversation-runtime';
-import { resolvePinnedMainDmOwnerFromAllowlist as sdkResolvePinnedMainDmOwnerFromAllowlist } from 'openclaw/plugin-sdk/security-runtime';
+import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
 import {
+  applySessionEntryPatch as sdkApplySessionEntryPatch,
   deleteSessionEntry as sdkDeleteSessionEntry,
   getSessionEntryAsync as sdkGetSessionEntryAsync,
-  listSessionEntries as sdkListSessionEntries,
-  patchSessionEntry as sdkPatchSessionEntry,
+  listSessionEntriesAsync as sdkListSessionEntriesAsync,
+  prepareSessionEntryPatch as sdkPrepareSessionEntryPatch,
   readSessionUpdatedAtAsync as sdkReadSessionUpdatedAtAsync,
   recordSessionMetaFromInbound as sdkRecordSessionMetaFromInbound,
   resolveStorePath as sdkResolveStorePath,
@@ -14,44 +14,62 @@ type ResolveStorePathFn = (
   storeConfig?: string,
   options?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) => string;
-type RecordInboundSessionFn = typeof sdkRecordInboundSession;
+type RecordInboundSessionFn =
+  OpenClawPluginApi['runtime']['channel']['session']['recordInboundSession'];
 type RecordSessionMetaFromInboundFn = typeof sdkRecordSessionMetaFromInbound;
-type PatchSessionEntryFn = typeof sdkPatchSessionEntry;
+type PrepareSessionEntryPatchFn = typeof sdkPrepareSessionEntryPatch;
+type ApplySessionEntryPatchFn = typeof sdkApplySessionEntryPatch;
 type GetSessionEntryAsyncFn = typeof sdkGetSessionEntryAsync;
 type ReadSessionUpdatedAtAsyncFn = typeof sdkReadSessionUpdatedAtAsync;
 type DeleteSessionEntryFn = typeof sdkDeleteSessionEntry;
-type ResolvePinnedMainDmOwnerFromAllowlistFn = typeof sdkResolvePinnedMainDmOwnerFromAllowlist;
-type ListSessionEntriesFn = typeof sdkListSessionEntries;
+type ListSessionEntriesAsyncFn = typeof sdkListSessionEntriesAsync;
 
 type BncrInboundSessionRuntime = {
   resolveStorePath: ResolveStorePathFn;
   recordInboundSession: RecordInboundSessionFn;
   recordSessionMetaFromInbound: RecordSessionMetaFromInboundFn;
-  patchSessionEntry: PatchSessionEntryFn;
+  prepareSessionEntryPatch: PrepareSessionEntryPatchFn;
+  applySessionEntryPatch: ApplySessionEntryPatchFn;
   getSessionEntryAsync: GetSessionEntryAsyncFn;
   readSessionUpdatedAtAsync: ReadSessionUpdatedAtAsyncFn;
   deleteSessionEntry: DeleteSessionEntryFn;
-  listSessionEntries: ListSessionEntriesFn;
-  resolvePinnedMainDmOwnerFromAllowlist: ResolvePinnedMainDmOwnerFromAllowlistFn;
+  listSessionEntriesAsync: ListSessionEntriesAsyncFn;
 };
 
+type HostInboundSessionRuntime = Pick<BncrInboundSessionRuntime, 'recordInboundSession'>;
+
+let hostRuntime: HostInboundSessionRuntime | null = null;
 let testRuntimeOverride: Partial<BncrInboundSessionRuntime> | null = null;
+
+function unavailableRecordInboundSession(): never {
+  throw new Error('OpenClaw channel session recordInboundSession API is unavailable');
+}
+
+/** Bind the host-owned inbound-session runtime once per plugin API generation. */
+export function configureBncrInboundSessionRuntime(api: Pick<OpenClawPluginApi, 'runtime'>): void {
+  const recordInboundSession = api?.runtime?.channel?.session?.recordInboundSession;
+  hostRuntime = typeof recordInboundSession === 'function' ? { recordInboundSession } : null;
+}
 
 function resolveRuntime(): BncrInboundSessionRuntime {
   return {
     resolveStorePath: testRuntimeOverride?.resolveStorePath ?? sdkResolveStorePath,
-    recordInboundSession: testRuntimeOverride?.recordInboundSession ?? sdkRecordInboundSession,
+    recordInboundSession:
+      testRuntimeOverride?.recordInboundSession ??
+      hostRuntime?.recordInboundSession ??
+      unavailableRecordInboundSession,
     recordSessionMetaFromInbound:
       testRuntimeOverride?.recordSessionMetaFromInbound ?? sdkRecordSessionMetaFromInbound,
-    patchSessionEntry: testRuntimeOverride?.patchSessionEntry ?? sdkPatchSessionEntry,
+    prepareSessionEntryPatch:
+      testRuntimeOverride?.prepareSessionEntryPatch ?? sdkPrepareSessionEntryPatch,
+    applySessionEntryPatch:
+      testRuntimeOverride?.applySessionEntryPatch ?? sdkApplySessionEntryPatch,
     getSessionEntryAsync: testRuntimeOverride?.getSessionEntryAsync ?? sdkGetSessionEntryAsync,
     readSessionUpdatedAtAsync:
       testRuntimeOverride?.readSessionUpdatedAtAsync ?? sdkReadSessionUpdatedAtAsync,
     deleteSessionEntry: testRuntimeOverride?.deleteSessionEntry ?? sdkDeleteSessionEntry,
-    listSessionEntries: testRuntimeOverride?.listSessionEntries ?? sdkListSessionEntries,
-    resolvePinnedMainDmOwnerFromAllowlist:
-      testRuntimeOverride?.resolvePinnedMainDmOwnerFromAllowlist ??
-      sdkResolvePinnedMainDmOwnerFromAllowlist,
+    listSessionEntriesAsync:
+      testRuntimeOverride?.listSessionEntriesAsync ?? sdkListSessionEntriesAsync,
   };
 }
 
@@ -74,10 +92,16 @@ export function recordBncrSessionMetaFromInbound(
   return resolveRuntime().recordSessionMetaFromInbound(params);
 }
 
-export function updateBncrSessionStoreEntry(
-  params: Parameters<PatchSessionEntryFn>[0],
-): ReturnType<PatchSessionEntryFn> {
-  return resolveRuntime().patchSessionEntry(params);
+export function prepareBncrSessionEntryPatch(
+  params: Parameters<PrepareSessionEntryPatchFn>[0],
+): ReturnType<PrepareSessionEntryPatchFn> {
+  return resolveRuntime().prepareSessionEntryPatch(params);
+}
+
+export function applyBncrSessionEntryPatch(
+  params: Parameters<ApplySessionEntryPatchFn>[0],
+): ReturnType<ApplySessionEntryPatchFn> {
+  return resolveRuntime().applySessionEntryPatch(params);
 }
 
 export function readBncrSessionUpdatedAt(params: {
@@ -87,21 +111,14 @@ export function readBncrSessionUpdatedAt(params: {
   return resolveRuntime().readSessionUpdatedAtAsync(params);
 }
 
-/**
- * Lists one agent's host session entries. `readOnly` keeps the call out of the
- * agent database writable lifecycle (no create/register/migrate), which is what
- * the stale-scene inspection needs: it must never create the store it inspects.
- */
+/** List public session metadata without opening a writable store lifecycle. */
 export function listBncrSessionEntries(
-  params: Parameters<ListSessionEntriesFn>[0],
-): ReturnType<ListSessionEntriesFn> {
-  return resolveRuntime().listSessionEntries(params);
+  params: Parameters<ListSessionEntriesAsyncFn>[0],
+): ReturnType<ListSessionEntriesAsyncFn> {
+  return resolveRuntime().listSessionEntriesAsync(params);
 }
 
-/**
- * Drop one host session. Operator commands use it to clear a scene whose row
- * and session are both long dead; nothing on the inbound path calls it.
- */
+/** Drop one host session without creating or migrating the inspected store. */
 export function deleteBncrSessionEntry(params: {
   storePath: string;
   sessionKey: string;
@@ -125,10 +142,35 @@ export async function readBncrSessionEntry(params: {
   }
 }
 
-export function resolveBncrPinnedMainDmOwnerFromAllowlist(
-  params: Parameters<ResolvePinnedMainDmOwnerFromAllowlistFn>[0],
-): ReturnType<ResolvePinnedMainDmOwnerFromAllowlistFn> {
-  return resolveRuntime().resolvePinnedMainDmOwnerFromAllowlist(params);
+/** Read one session entry without converting storage failures into a missing row. */
+export async function readBncrSessionEntryStrict(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const entry = await resolveRuntime().getSessionEntryAsync(params);
+  return entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : undefined;
+}
+
+/**
+ * Derive a stable main-DM owner from one normalized allowlist entry.
+ * Wildcards, multiple owners, and non-main DM scopes stay unpinned.
+ */
+export function resolveBncrPinnedMainDmOwnerFromAllowlist(params: {
+  dmScope?: string | null;
+  allowFrom?: Array<string | number> | null;
+  normalizeEntry: (entry: string) => string | undefined;
+}): string | null {
+  if ((params.dmScope ?? 'main') !== 'main') return null;
+  const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+  if (rawAllowFrom.some((entry) => String(entry).trim() === '*')) return null;
+  const normalizedOwners = Array.from(
+    new Set(
+      rawAllowFrom
+        .map((entry) => params.normalizeEntry(String(entry)))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  );
+  return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
 }
 
 export function setBncrInboundSessionRuntimeForTest(

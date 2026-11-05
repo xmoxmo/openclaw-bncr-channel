@@ -17,9 +17,6 @@ export async function installBncrTestMediaStorage() {
       await writeFile(savedPath, buffer);
       return { path: savedPath };
     },
-    resolveWorkspaceDir(_cfg, agentId) {
-      return path.join(root, 'workspaces', agentId.replace(/[^a-zA-Z0-9._-]+/g, '_'));
-    },
     getMediaDir() {
       return root;
     },

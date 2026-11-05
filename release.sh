@@ -37,7 +37,7 @@ if [[ ! "$PKG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 if (( VERSION_PATCH > 9 )); then
-  echo "[release] invalid version policy: patch=$VERSION_PATCH is not allowed; bump minor instead (example: 0.1.9 -> 0.2.0)" >&2
+  echo "[release] invalid version policy: patch=$VERSION_PATCH is not allowed" >&2
   exit 1
 fi
 

@@ -60,6 +60,7 @@ export function startBncrBridgeService(
     getChannelConfigRoot: (
       cfg: BncrChannelConfigRoot,
     ) => BncrChannelPolicyConfig | null | undefined;
+    probeSessionResetBridge?: () => Promise<{ available: boolean; error?: string }>;
     resumeOutboxDrain?: () => void;
     isStartCurrent?: () => boolean;
     closeState?: () => Promise<void> | void;
@@ -84,6 +85,24 @@ export function startBncrBridgeService(
         if (missingPublic) runtime.logWarn('config', missingPublic);
       } catch {
         // ignore startup canonical agent initialization errors
+      }
+      if (runtime.probeSessionResetBridge) {
+        try {
+          const probe = await runtime.probeSessionResetBridge();
+          if (!probe.available) {
+            runtime.logWarn(
+              'host-sdk',
+              `session reset bridge unavailable; /new and /reset will fail|err=${probe.error || 'unknown'}`,
+            );
+          }
+        } catch (error) {
+          runtime.logWarn(
+            'host-sdk',
+            `session reset bridge probe failed; /new and /reset may fail|err=${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       }
       await runtime.loadState();
       if (!isStartCurrent()) return false;

@@ -47,18 +47,39 @@ export function createInboundApiStub(options = {}) {
       };
       fs.writeFileSync(args.storePath, JSON.stringify(existing, null, 2));
     },
-    async patchSessionEntry(args) {
+    async prepareSessionEntryPatch(args) {
       calls.sessionPatches.push(args);
       const existing = fs.existsSync(args.storePath)
         ? JSON.parse(fs.readFileSync(args.storePath, 'utf8'))
         : {};
       const current = existing[args.sessionKey] || {};
-      const patch = args.update(current);
+      const patch = await args.prepare(current, { existingEntry: current });
       if (patch) {
         existing[args.sessionKey] = { ...current, ...patch };
         fs.writeFileSync(args.storePath, JSON.stringify(existing, null, 2));
+        return existing[args.sessionKey];
       }
+      return current;
     },
+    async applySessionEntryPatch(args) {
+      calls.sessionPatches.push(args);
+      const existing = fs.existsSync(args.storePath)
+        ? JSON.parse(fs.readFileSync(args.storePath, 'utf8'))
+        : {};
+      const current = existing[args.sessionKey] || {};
+      existing[args.sessionKey] = { ...current, ...args.patch };
+      fs.writeFileSync(args.storePath, JSON.stringify(existing, null, 2));
+      return existing[args.sessionKey];
+    },
+    ...(options.sessionEntry !== undefined
+      ? {
+          async getSessionEntryAsync(args) {
+            return typeof options.sessionEntry === 'function'
+              ? options.sessionEntry(args)
+              : options.sessionEntry;
+          },
+        }
+      : {}),
   });
 
   const gatewayRequest = async (method, params) => {
@@ -109,9 +130,6 @@ export function createInboundApiStub(options = {}) {
           },
           async recordSessionMetaFromInbound(args) {
             calls.recorded.push(args);
-          },
-          async updateSessionStoreEntry(args) {
-            calls.sessionPatches.push(args);
           },
         },
         media: {

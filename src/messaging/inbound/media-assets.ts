@@ -2,9 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { resolveAgentWorkspaceDir } from 'openclaw/plugin-sdk/agent-runtime';
-import { extensionForMime, getMediaDir, saveMediaBuffer } from 'openclaw/plugin-sdk/media-runtime';
-import type { BncrChannelConfigRoot } from '../../plugin/channel-runtime-types.ts';
+import {
+  extensionForOpenClawMime,
+  resolveOpenClawMediaDir,
+  saveOpenClawMediaBuffer,
+} from '../../openclaw/media-runtime.ts';
 
 export const BNCR_MEDIA_REF_PREFIX = 'bncr-media:';
 
@@ -25,8 +27,6 @@ export class BncrMediaSourceError extends Error {
   }
 }
 
-export type BncrMediaWorkspaceResolver = (cfg: BncrChannelConfigRoot, agentId: string) => string;
-
 type HistoryMediaStorage = {
   saveBuffer: (args: {
     buffer: Buffer;
@@ -35,26 +35,21 @@ type HistoryMediaStorage = {
     maxBytes: number;
     fileName?: string;
   }) => Promise<{ path: string }>;
-  resolveWorkspaceDir: BncrMediaWorkspaceResolver;
   getMediaDir: () => string;
 };
 
 const defaultStorage: HistoryMediaStorage = {
   async saveBuffer(args) {
-    const saved = await saveMediaBuffer(
+    return saveOpenClawMediaBuffer(
       args.buffer,
       args.contentType,
       `history/${sanitizeMediaPathSegment(args.agentId)}`,
       args.maxBytes,
       args.fileName,
     );
-    return { path: saved.path };
-  },
-  resolveWorkspaceDir(cfg, agentId) {
-    return resolveAgentWorkspaceDir(cfg, agentId);
   },
   getMediaDir() {
-    return getMediaDir();
+    return resolveOpenClawMediaDir();
   },
 };
 
@@ -64,7 +59,6 @@ export function setBncrHistoryMediaStorageForTest(next: Partial<HistoryMediaStor
   storage = next
     ? {
         saveBuffer: next.saveBuffer ?? defaultStorage.saveBuffer,
-        resolveWorkspaceDir: next.resolveWorkspaceDir ?? defaultStorage.resolveWorkspaceDir,
         getMediaDir: next.getMediaDir ?? defaultStorage.getMediaDir,
       }
     : defaultStorage;
@@ -176,8 +170,7 @@ export async function assertBncrManagedMediaFile(
 }
 
 async function writeBncrMaterializedMedia(args: {
-  cfg: BncrChannelConfigRoot;
-  agentId: string;
+  workspaceDir: string;
   mediaRef: string;
   contentType?: string;
   fileName?: string;
@@ -185,17 +178,16 @@ async function writeBncrMaterializedMedia(args: {
   write: (hostPath: string) => Promise<void>;
   assertCurrent?: () => void;
 }): Promise<{ mediaUri: string; hostPath: string }> {
-  const workspaceDir = storage.resolveWorkspaceDir(args.cfg, args.agentId);
   const extension =
-    extensionForMime(args.contentType || '') ||
+    extensionForOpenClawMime(args.contentType || '') ||
     path.extname(args.fileName || '').replace(/[^a-zA-Z0-9.]/g, '');
   const discriminator = args.contentDiscriminator
     ? `_${sanitizeMediaPathSegment(args.contentDiscriminator)}`
     : '';
   const fileName = `${sanitizeMediaPathSegment(args.mediaRef)}${discriminator}${extension}`;
   args.assertCurrent?.();
-  await fs.mkdir(workspaceDir, { recursive: true });
-  const resolvedWorkspaceDir = await fs.realpath(workspaceDir);
+  await fs.mkdir(args.workspaceDir, { recursive: true });
+  const resolvedWorkspaceDir = await fs.realpath(args.workspaceDir);
   const mediaDir = path.join(resolvedWorkspaceDir, 'media');
   await fs.mkdir(mediaDir, { recursive: true });
   const resolvedMediaDir = await fs.realpath(mediaDir);
@@ -226,8 +218,7 @@ async function writeBncrMaterializedMedia(args: {
 }
 
 export async function materializeBncrMediaBuffer(args: {
-  cfg: BncrChannelConfigRoot;
-  agentId: string;
+  workspaceDir: string;
   mediaRef: string;
   buffer: Buffer;
   contentType?: string;

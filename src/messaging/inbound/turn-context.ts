@@ -1,3 +1,4 @@
+import { resolveBncrChannelInboundRuntime } from '../../openclaw/inbound-runtime.ts';
 import { readBncrSessionUpdatedAt } from '../../openclaw/inbound-session-runtime.ts';
 import {
   formatOpenClawAgentEnvelope,
@@ -18,7 +19,6 @@ import type {
   BncrPreparedInboundSessionContext,
   ParsedInbound,
 } from './dispatch-prep.ts';
-import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 
 function dedupeBncrTurnMedia(entries: readonly BncrHistoryMediaEntry[]): BncrHistoryMediaEntry[] {
   const seen = new Set<string>();

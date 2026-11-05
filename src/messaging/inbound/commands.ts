@@ -3,6 +3,7 @@ import { listConfiguredAgentIds } from '../../core/agent-surface.ts';
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
 import { formatDisplayScope } from '../../core/targets.ts';
+import { resolveBncrChannelInboundRuntime } from '../../openclaw/inbound-runtime.ts';
 import {
   deleteBncrSessionEntry,
   listBncrSessionEntries,
@@ -52,7 +53,6 @@ import {
   resolveNativeCommandDebugEnabled,
 } from './native-command-runtime.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
-import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import type { BncrSessionActivity } from './session-cleanup-command.ts';
 import { resolveBncrSceneIdentity, resolveBncrSessionCategory } from './session-identity.ts';
 import {
@@ -509,9 +509,8 @@ export async function handleBncrNativeCommand(params: {
             // `session.store` still resolves to its own sqlite target.
             index =
               buildBncrSessionNodeIndex(
-                listBncrSessionEntries({
+                await listBncrSessionEntries({
                   agentId,
-                  readOnly: true,
                   storePath: resolveBncrInboundSessionStorePath({
                     storeConfig: cfg?.session?.store,
                     agentId,
@@ -546,11 +545,10 @@ export async function handleBncrNativeCommand(params: {
           storeConfig: cfg?.session?.store,
           agentId,
         });
-        let entries: ReturnType<typeof listBncrSessionEntries>;
+        let entries: Awaited<ReturnType<typeof listBncrSessionEntries>>;
         try {
-          entries = listBncrSessionEntries({
+          entries = await listBncrSessionEntries({
             agentId,
-            readOnly: true,
             storePath: targetStorePath,
           });
         } catch {

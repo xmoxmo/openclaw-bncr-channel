@@ -1,5 +1,6 @@
 import { emitBncrLogLine } from '../../core/logging.ts';
 import { resolveBncrChannelPolicy } from '../../core/policy.ts';
+import { resolveBncrChannelInboundRuntime } from '../../openclaw/inbound-runtime.ts';
 import {
   readBncrSessionUpdatedAt,
   recordBncrInboundSession,
@@ -28,7 +29,6 @@ import {
 } from './native-command.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { runBncrReplyDispatchSerial } from './reply-dispatch-serial.ts';
-import { resolveBncrChannelInboundRuntime } from './runtime-compat.ts';
 import { resolveBncrSceneIdentity, resolveBncrSessionCategory } from './session-identity.ts';
 import {
   buildBncrInboundSessionIdentityPatch,

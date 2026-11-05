@@ -84,15 +84,18 @@ import type {
   OutboundReplyTargetPolicy,
   ReplyPayloadInput,
 } from './messaging/outbound/reply-enqueue.ts';
+import { resolveOpenClawAgentWorkspaceDir } from './openclaw/agent-runtime.ts';
 import type { OpenClawChannelRuntimeApiHolder } from './openclaw/channel-runtime-contracts.ts';
 import {
   getOpenClawRuntimeConfig,
   getOpenClawRuntimeConfigOrDefault,
 } from './openclaw/config-runtime.ts';
+import { configureBncrInboundSessionRuntime } from './openclaw/inbound-session-runtime.ts';
 import { resolveBncrMediaMaxBytes } from './openclaw/media-limit-runtime.ts';
 import type { OpenClawLoadedMedia } from './openclaw/media-runtime.ts';
 import { resolveOpenClawAgentRoute } from './openclaw/routing-runtime.ts';
 import { extractOpenClawToolSend, openClawJsonResult } from './openclaw/sdk-helpers.ts';
+import { probeBncrSessionResetRuntime } from './openclaw/session-reset-runtime.ts';
 import { createBncrAckOutboxRuntimeGroup } from './plugin/ack-outbox-runtime-group.ts';
 import { createBncrBridgeAckFacade } from './plugin/bridge-ack-facade.ts';
 import { createBncrBridgeConnectionFacade } from './plugin/bridge-connection-facade.ts';
@@ -515,6 +518,7 @@ class BncrBridgeRuntime {
 
   constructor(api: OpenClawPluginApi, runtimePaths: BncrBridgeRuntimePaths = {}) {
     this.api = api;
+    configureBncrInboundSessionRuntime(api);
     this.bindRuntimePaths(runtimePaths);
   }
 
@@ -526,6 +530,7 @@ class BncrBridgeRuntime {
 
   bindApi(api: OpenClawPluginApi) {
     this.api = api;
+    configureBncrInboundSessionRuntime(api);
   }
 
   bindRuntimePaths(runtimePaths: BncrBridgeRuntimePaths = {}) {
@@ -968,6 +973,7 @@ class BncrBridgeRuntime {
             (((cfg as BncrChannelConfigRoot | null | undefined)?.channels || null)?.[CHANNEL_ID] as
               | Record<string, unknown>
               | undefined) || {},
+          probeSessionResetBridge: probeBncrSessionResetRuntime,
           resumeOutboxDrain: () => {
             if (this.outbox.size === 0 || this.connections.size === 0) return;
             this.schedulePushDrain(0);
@@ -2819,8 +2825,7 @@ class BncrBridgeRuntime {
       fileName = loaded.fileName || fileName;
       sizeBytes = loaded.buffer.byteLength;
       materialized = await materializeBncrMediaBuffer({
-        cfg,
-        agentId,
+        workspaceDir: resolveOpenClawAgentWorkspaceDir(this.api, cfg, agentId),
         mediaRef,
         buffer: loaded.buffer,
         contentType,
@@ -2845,8 +2850,7 @@ class BncrBridgeRuntime {
       sizeBytes = buffer.byteLength;
       fileName = fileName || path.basename(sourcePath);
       materialized = await materializeBncrMediaBuffer({
-        cfg,
-        agentId,
+        workspaceDir: resolveOpenClawAgentWorkspaceDir(this.api, cfg, agentId),
         mediaRef,
         buffer,
         contentType,

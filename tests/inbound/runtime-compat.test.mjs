@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveBncrChannelInboundRuntime } from '../../src/messaging/inbound/runtime-compat.ts';
+import { resolveBncrChannelInboundRuntime } from '../../src/openclaw/inbound-runtime.ts';
 
 test('resolveBncrChannelInboundRuntime prefers runtime.channel.inbound when available', () => {
   const buildContext = () => ({ ok: true });

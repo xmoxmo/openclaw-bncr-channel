@@ -1,6 +1,6 @@
-import { emitBncrLogLine } from '../../core/logging.ts';
-import type { OpenClawInboundRuntime } from '../../openclaw/channel-runtime-contracts.ts';
-import type { BncrInboundApi } from './contracts.ts';
+import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
+import { emitBncrLogLine } from '../core/logging.ts';
+import type { OpenClawInboundRuntime } from './channel-runtime-contracts.ts';
 
 type InboundRuntimeShape = {
   buildContext?: (params: unknown) => unknown;
@@ -23,9 +23,11 @@ type ChannelRuntimeShape = {
   [key: string]: unknown;
 };
 
+type RuntimeApiHolder = Pick<OpenClawPluginApi, 'runtime'>;
+
 let warnedLegacyTurnRuntime = false;
 
-export function resolveBncrChannelInboundRuntime(api: BncrInboundApi): OpenClawInboundRuntime {
+export function resolveBncrChannelInboundRuntime(api: RuntimeApiHolder): OpenClawInboundRuntime {
   const channelRuntime = api?.runtime?.channel as ChannelRuntimeShape | undefined;
   const inboundRuntime = channelRuntime?.inbound;
   if (inboundRuntime?.buildContext && inboundRuntime?.run) {
