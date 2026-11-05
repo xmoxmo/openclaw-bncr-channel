@@ -4,6 +4,7 @@ import { ADMIN_REQUIRED_TEXT } from './command-constants.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 import type { NativeCommand } from './native-command.ts';
 import { unknownAgentText } from './scene-admin.ts';
+import { resolveBncrSceneAgentScope } from './scene-agent-scope.ts';
 import {
   BNCR_DIRECT_SESSION_CATEGORY,
   BNCR_SESSION_NAME_MAX_CHARS,
@@ -15,7 +16,7 @@ import {
 
 const TARGET_FORMAT_LINES = [
   'Format:',
-  '  • <agentId> — 只改盯这个场景的某个 agent；省略就是该场景下所有 agent',
+  '  • <agentId> — 管理员省略表示该场景下所有 agent；非管理员省略只作用于自己',
   '  • <SceneId> — 平台:群id 或 平台:用户id；省略就是当前会话',
 ];
 
@@ -24,7 +25,7 @@ export const NAME_HELP_TEXT = [
   '',
   'About:',
   '  • 改这个聊天在侧边栏显示的名字；网页端改的下一条消息就会被覆盖。',
-  '  • 指定别的 agent 或别的场景需要管理员。',
+  '  • 私聊只能管理自己的会话；指定别的 agent、别的场景或群聊设置需要管理员。',
   '',
   'Commands:',
   '  • /bncr name [<agentId>] [<SceneId>]',
@@ -43,7 +44,7 @@ export const GROUP_HELP_TEXT = [
   '',
   'About:',
   '  • 改这个聊天在侧边栏里归到哪个分组。',
-  '  • 指定别的 agent 或别的场景需要管理员。',
+  '  • 私聊只能管理自己的会话；指定别的 agent、别的场景或群聊设置需要管理员。',
   '',
   'Commands:',
   '  • /bncr group [<agentId>] [<SceneId>]',
@@ -188,8 +189,8 @@ export type SessionIdentityCommandResult =
  * Execute /bncr name or /bncr group.
  *
  * Targets follow the same [<agentId>] [<SceneId>] tail every scene setting
- * uses: no agent id fans the write out to every agent watching the scene, which
- * is what keeps two agents in one group from drifting apart.
+ * uses. Administrators may fan a write out to every agent watching one scene;
+ * non-admin private-chat callers are always pinned to the serving agent.
  */
 export function executeSessionIdentityCommand(args: {
   parsed: ParsedInbound;
@@ -221,19 +222,20 @@ export function executeSessionIdentityCommand(args: {
     return { ok: false, text: ADMIN_REQUIRED_TEXT };
   }
 
-  const wantedAgent = normalizeToken(command.agentId);
-  if (wantedAgent && parsed.isAdmin !== true && wantedAgent !== normalizeToken(sceneAgentId)) {
-    return { ok: false, text: ADMIN_REQUIRED_TEXT };
-  }
-
   const rows = Array.from(sceneRegistry.values()).filter(
     (row) => normalizeToken(row.sceneKey) === targetSceneKey,
   );
   if (rows.length === 0) return { ok: false, text: `Scene not found: ${targetSceneKey}` };
 
-  const targets = wantedAgent
-    ? rows.filter((row) => normalizeToken(row.agentId) === wantedAgent)
-    : rows;
+  const wantedAgent = normalizeToken(command.agentId);
+  const scopeResolution = resolveBncrSceneAgentScope({
+    rows,
+    isAdmin: parsed.isAdmin === true,
+    requestedAgentId: wantedAgent,
+    callerAgentId: sceneAgentId,
+  });
+  if (!scopeResolution.ok) return scopeResolution;
+  const targets = scopeResolution.targets;
   if (targets.length === 0) {
     return { ok: false, text: unknownAgentText(wantedAgent, targetSceneKey, rows) };
   }
@@ -246,7 +248,7 @@ export function executeSessionIdentityCommand(args: {
   );
   const scope = wantedAgent
     ? ` for ${wantedAgent}`
-    : targets.length > 1
+    : parsed.isAdmin === true && targets.length > 1
       ? ` for all ${targets.length} agents`
       : '';
 

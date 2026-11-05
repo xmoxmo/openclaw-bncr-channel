@@ -259,7 +259,7 @@ test('name clear takes an optional agent id and a scene id in either order', () 
 
 test('private chat owners rename their own scene but cannot touch another one', () => {
   const registry = new Map();
-  setSceneRecord(registry, directRow());
+  setSceneRecord(registry, directRow({ agentId: 'main' }));
   setSceneRecord(registry, groupRow());
   const parsed = {
     platform: 'tgBot',
@@ -273,12 +273,13 @@ test('private chat owners rename their own scene but cannot touch another one', 
     parsed,
     command: { target: 'name', action: 'set', value: '我自己' },
     sceneRegistry: registry,
+    sceneAgentId: 'main',
     now: () => 50,
   });
   assert.equal(set.ok, true);
   assert.equal(set.text, 'Name set: tgBot · 我自己 (custom)');
   assert.equal(
-    registry.get(buildAgentSceneRegistryKey('tgBot:10001', undefined)).customName,
+    registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'main')).customName,
     '我自己',
   );
 
@@ -286,6 +287,7 @@ test('private chat owners rename their own scene but cannot touch another one', 
     parsed,
     command: { target: 'name', action: 'set', value: '越权', sceneKey: 'tgBot:-1001' },
     sceneRegistry: registry,
+    sceneAgentId: 'main',
     now: () => 50,
   });
   assert.equal(other.ok, false);
@@ -576,6 +578,86 @@ test('a non admin cannot rename another agent row of the same scene', () => {
 
   assert.equal(outcome.ok, false);
   assert.equal(outcome.text, 'Admin permission required.');
+});
+
+test('a non admin private caller without agentId only changes its own agent row', () => {
+  const registry = new Map();
+  setSceneRecord(registry, directRow({ agentId: 'main', lastSeenAt: 1 }));
+  setSceneRecord(registry, directRow({ agentId: 'orion', lastSeenAt: 2 }));
+
+  const run = (command) =>
+    executeSessionIdentityCommand({
+      parsed: {
+        platform: 'tgBot',
+        userId: '10001',
+        groupId: '0',
+        isAdmin: false,
+        peer: { kind: 'direct' },
+      },
+      command,
+      sceneRegistry: registry,
+      sceneAgentId: 'orion',
+      now: () => 96,
+    });
+
+  const set = run({ target: 'name', action: 'set', value: '自己' });
+  assert.equal(set.ok, true);
+  assert.doesNotMatch(set.text, /all 2 agents/);
+  assert.equal(
+    registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'main')).customName,
+    undefined,
+  );
+  assert.equal(registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'orion')).customName, '自己');
+
+  const group = run({ target: 'group', action: 'set', value: '私人' });
+  assert.equal(group.ok, true);
+  assert.equal(registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'main')).category, undefined);
+  assert.equal(registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'orion')).category, '私人');
+
+  const get = run({ target: 'name', action: 'get' });
+  assert.match(get.text, /Name: tgBot · 自己/);
+  assert.doesNotMatch(get.text, /main:/);
+
+  const clear = run({ target: 'name', action: 'clear' });
+  assert.equal(clear.ok, true);
+  assert.equal(
+    registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'orion')).customName,
+    undefined,
+  );
+  assert.equal(
+    registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'main')).customName,
+    undefined,
+  );
+});
+
+test('a non admin private caller without a serving agent identity fails closed', () => {
+  const registry = new Map();
+  setSceneRecord(registry, directRow({ agentId: 'main', customName: '保持原样' }));
+  setSceneRecord(registry, directRow({ agentId: 'orion', customName: '保持原样' }));
+
+  const outcome = executeSessionIdentityCommand({
+    parsed: {
+      platform: 'tgBot',
+      userId: '10001',
+      groupId: '0',
+      isAdmin: false,
+      peer: { kind: 'direct' },
+    },
+    command: { target: 'name', action: 'set', value: '越权' },
+    sceneRegistry: registry,
+    now: () => 97,
+  });
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.text, 'Admin permission required.');
+  assert.equal(
+    registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'main')).customName,
+    '保持原样',
+  );
+  assert.equal(
+    registry.get(buildAgentSceneRegistryKey('tgBot:10001', 'orion')).customName,
+    '保持原样',
+  );
 });
 
 test('history and media settings share the same agent and scene tail', () => {

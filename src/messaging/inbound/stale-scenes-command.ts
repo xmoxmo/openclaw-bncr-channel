@@ -339,7 +339,11 @@ export type StaleSceneRow = {
   /** Host generation used by the conditional delete. */
   sessionId: string | null;
   rowAt: number;
+  /** Last store write. Used only for conditional-delete race protection. */
   sessionAt: number | null;
+  /** Last real chat interaction, with an explicitly marked legacy fallback. */
+  sessionActivityAt: number | null;
+  sessionActivitySource: 'interaction' | 'store-write-fallback' | 'missing' | 'unknown';
   /** The host session read failed; treat activity as unknown, never as dead. */
   sessionUnknown: boolean;
   stale: boolean;
@@ -467,16 +471,36 @@ async function inspectSceneRow(
   // A missing timestamp is unknown, not fresh: a row with no recorded inbound
   // time has nothing that could keep it alive.
   const rowQuiet = rowAt <= 0 || now - rowAt > staleMs;
-  // A missing session counts as quiet: nothing is left to keep the scene warm.
-  const sessionQuiet = sessionAt == null || now - sessionAt > staleMs;
   const sessionAnomaly = classifySessionAnomaly(sessionStatus);
+  const readableLegacyClock = sessionStatus === 'unknown' && !sessionUnknown && sessionAt != null;
+  const sessionActivityAt =
+    sessionStatus === 'alive' || sessionStatus === 'archived' || readableLegacyClock
+      ? (sessionInteractionAt ?? sessionAt)
+      : null;
+  const sessionActivitySource =
+    sessionStatus === 'unknown'
+      ? readableLegacyClock
+        ? 'store-write-fallback'
+        : 'unknown'
+      : sessionStatus === 'missing'
+        ? 'missing'
+        : sessionInteractionAt != null
+          ? 'interaction'
+          : sessionAt != null
+            ? 'store-write-fallback'
+            : 'missing';
+  // A missing timestamp is unknown, not fresh: a session without a recorded
+  // interaction has nothing that could keep the scene warm. updatedAt remains
+  // the delete guard and is used only when the host does not expose
+  // lastInteractionAt (old stores).
+  const sessionQuiet = sessionActivityAt == null || now - sessionActivityAt > staleMs;
   // Only a session we could actually read as alive contributes activity. A
   // deleted session has no timestamp, an archived one only carries the moment
   // it was archived, and an unreadable listing tells us nothing about whether
   // the chat is still in use — none of them may be reported as "the chat moved
   // there".
   const lastActivityAt =
-    sessionStatus === 'alive' ? Math.max(rowAt, sessionInteractionAt ?? 0) : rowAt;
+    sessionStatus === 'alive' ? Math.max(rowAt, sessionActivityAt ?? 0) : rowAt;
   const quietByClock = rowQuiet && sessionQuiet;
   return {
     scene,
@@ -485,6 +509,8 @@ async function inspectSceneRow(
     sessionId,
     rowAt,
     sessionAt,
+    sessionActivityAt,
+    sessionActivitySource,
     sessionUnknown,
     sessionStatus,
     sessionAnomaly,
@@ -634,7 +660,10 @@ function describeRow(row: StaleSceneRow, now: number): string {
     const archivedAt = row.archivedAt ?? row.sessionAt;
     sessionText = `archived ${formatClock(archivedAt)} (${formatAge(archivedAt, now)})`;
   } else {
-    sessionText = `${formatClock(row.sessionAt)} (${formatAge(row.sessionAt, now)})`;
+    sessionText = `${formatClock(row.sessionActivityAt)} (${formatAge(row.sessionActivityAt, now)})`;
+    if (row.sessionActivitySource === 'store-write-fallback') {
+      sessionText += ' (store-write fallback)';
+    }
   }
   const sibling = row.sibling
     ? row.sibling.platform +
@@ -1188,7 +1217,7 @@ async function executeStaleScenesBatch(
     if (!quietByRow(row)) return false;
     if (row.sessionUnknown) return command.force;
     if (row.sessionAnomaly !== null) return true;
-    return row.sessionAt == null || now - row.sessionAt > windowMs;
+    return row.sessionActivityAt == null || now - row.sessionActivityAt > windowMs;
   };
   const candidates = rows
     .filter((row) => quietEnough(row))

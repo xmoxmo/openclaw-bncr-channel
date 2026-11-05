@@ -15,3 +15,11 @@ test('README documents exactly the canonical stale filters', () => {
   assert.ok(documented.length > 0, 'README must document the /bncr stale filters');
   for (const list of documented) assert.deepEqual(list, [...STALE_SCENES_FILTERS]);
 });
+
+test('README scopes omitted-agent fan-out and stale activity consistently', () => {
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert.match(readme, /管理员省略 `<agentId>` 时改动该场景所有 agent 的行/);
+  assert.match(readme, /私聊非管理员省略时只作用于自己的 agent 行/);
+  assert.match(readme, /活动优先取 `lastInteractionAt`/);
+  assert.match(readme, /store-write fallback/);
+});

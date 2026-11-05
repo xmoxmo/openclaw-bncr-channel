@@ -13,6 +13,7 @@ import { ADMIN_REQUIRED_TEXT } from './command-constants.ts';
 import { resolveBncrHistoryLimit } from './conversation-history.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
 import type { NativeCommand } from './native-command.ts';
+import { resolveBncrSceneAgentScope } from './scene-agent-scope.ts';
 import { parseBncrSceneTargets } from './session-identity.ts';
 
 export type BncrSceneAdminCommand =
@@ -655,9 +656,14 @@ export function executeSceneAdminCommand(args: {
       return { ok: false, text: `Scene not found: ${sceneKey}` };
     }
     const wantedAgent = normalizeToken(command.agentId || '');
-    const scoped = wantedAgent
-      ? rows.filter((row) => normalizeToken(row.agentId || '') === wantedAgent)
-      : rows;
+    const agentScope = resolveBncrSceneAgentScope({
+      rows,
+      isAdmin: parsed.isAdmin === true,
+      requestedAgentId: wantedAgent,
+      callerAgentId: sceneAgentId,
+    });
+    if (!agentScope.ok) return agentScope;
+    const scoped = agentScope.targets;
     if (scoped.length === 0) {
       return { ok: false, text: unknownAgentText(wantedAgent, sceneKey, rows) };
     }
@@ -679,23 +685,19 @@ export function executeSceneAdminCommand(args: {
   const resolveTargets = (targetSceneKey: string, agentId?: string) => {
     const rows = listSceneRows(sceneRegistry, targetSceneKey);
     const wanted = normalizeToken(agentId || '');
-    const selfAdminAgent = normalizeToken(sceneAgentId || '');
-    let scopedRows = rows;
-    if (!parsed.isAdmin && allowNonAdminSelfAdmin && selfAdminAgent) {
-      const ownRows = rows.filter((row) => normalizeToken(row.agentId || '') === selfAdminAgent);
-      // A legacy row has no owner. Scoped lookup treats it as the fallback for
-      // the serving agent, so self-admin settings must do the same. Never widen
-      // this fallback to a row owned by a different agent.
-      scopedRows = ownRows.length
-        ? ownRows
-        : rows.filter((row) => !normalizeToken(row.agentId || ''));
-    }
+    const scope = resolveBncrSceneAgentScope({
+      rows,
+      isAdmin: parsed.isAdmin === true,
+      requestedAgentId: wanted,
+      callerAgentId: sceneAgentId,
+      allowLegacyUnowned: allowNonAdminSelfAdmin === true,
+    });
+    if (!scope.ok) return scope;
     return {
+      ok: true as const,
       rows,
       wanted,
-      targets: wanted
-        ? rows.filter((row) => normalizeToken(row.agentId || '') === wanted)
-        : scopedRows,
+      targets: scope.targets,
     };
   };
 
@@ -707,7 +709,9 @@ export function executeSceneAdminCommand(args: {
     if (!qSceneKey) {
       return { ok: true, text: 'Default history limit is 50.' };
     }
-    const { rows, targets, wanted } = resolveTargets(qSceneKey, command.agentId);
+    const resolved = resolveTargets(qSceneKey, command.agentId);
+    if (!resolved.ok) return resolved;
+    const { rows, targets, wanted } = resolved;
     if (rows.length === 0) return { ok: true, text: 'Default history limit is 50.' };
     if (wanted) {
       if (targets.length === 0) {
@@ -735,7 +739,9 @@ export function executeSceneAdminCommand(args: {
     if (!sSceneKey) {
       return { ok: false, text: 'Current conversation shortcut requires a valid chat.' };
     }
-    const { rows, targets, wanted } = resolveTargets(sSceneKey, command.agentId);
+    const resolved = resolveTargets(sSceneKey, command.agentId);
+    if (!resolved.ok) return resolved;
+    const { rows, targets, wanted } = resolved;
     if (rows.length === 0) return { ok: false, text: `Scene not found: ${sSceneKey}` };
     if (targets.length === 0) {
       return { ok: false, text: unknownAgentText(wanted, sSceneKey, rows) };
@@ -782,7 +788,9 @@ export function executeSceneAdminCommand(args: {
     if (!qSceneKey) {
       return { ok: true, text: 'Default history auto flush is on.' };
     }
-    const { rows, targets, wanted } = resolveTargets(qSceneKey, command.agentId);
+    const resolved = resolveTargets(qSceneKey, command.agentId);
+    if (!resolved.ok) return resolved;
+    const { rows, targets, wanted } = resolved;
     if (rows.length === 0) return { ok: true, text: 'Default history auto flush is on.' };
     if (wanted) {
       if (targets.length === 0) {
@@ -820,7 +828,9 @@ export function executeSceneAdminCommand(args: {
     if (!sSceneKey) {
       return { ok: false, text: 'Current conversation shortcut requires a valid chat.' };
     }
-    const { rows, targets, wanted } = resolveTargets(sSceneKey, command.agentId);
+    const resolved = resolveTargets(sSceneKey, command.agentId);
+    if (!resolved.ok) return resolved;
+    const { rows, targets, wanted } = resolved;
     if (rows.length === 0) return { ok: false, text: `Scene not found: ${sSceneKey}` };
     if (targets.length === 0) {
       return { ok: false, text: unknownAgentText(wanted, sSceneKey, rows) };
@@ -883,7 +893,9 @@ export function executeSceneAdminCommand(args: {
     const globalEnabled = lookupScene(GLOBAL_SCENE_KEY)?.downloadMedia === true;
     const globalText = `Global default download remote media is ${globalEnabled ? 'on' : 'off'}.`;
     if (!qSceneKey) return { ok: true, text: globalText };
-    const { rows, targets, wanted } = resolveTargets(qSceneKey, command.agentId);
+    const resolved = resolveTargets(qSceneKey, command.agentId);
+    if (!resolved.ok) return resolved;
+    const { rows, targets, wanted } = resolved;
     // No row yet means nothing was chosen here, so the global default answers.
     if (rows.length === 0) return { ok: true, text: globalText };
     const mediaOf = (row: BncrSceneRecord) =>
@@ -922,7 +934,9 @@ export function executeSceneAdminCommand(args: {
     if (!sSceneKey) {
       return { ok: false, text: 'Current conversation shortcut requires a valid chat.' };
     }
-    const { rows, targets, wanted } = resolveTargets(sSceneKey, command.agentId);
+    const resolved = resolveTargets(sSceneKey, command.agentId);
+    if (!resolved.ok) return resolved;
+    const { rows, targets, wanted } = resolved;
     if (targets.length === 0 && wanted) {
       return { ok: false, text: unknownAgentText(wanted, sSceneKey, rows) };
     }
@@ -1043,9 +1057,14 @@ export function executeSceneAdminCommand(args: {
       return { ok: false, text: `Scene ${sceneKey} is not a group scene.` };
     }
     const wantedAgent = normalizeToken(command.agentId || '');
-    const targets = wantedAgent
-      ? groupRows.filter((row) => normalizeToken(row.agentId || '') === wantedAgent)
-      : groupRows;
+    const agentScope = resolveBncrSceneAgentScope({
+      rows: groupRows,
+      isAdmin: parsed.isAdmin === true,
+      requestedAgentId: wantedAgent,
+      callerAgentId: sceneAgentId,
+    });
+    if (!agentScope.ok) return agentScope;
+    const targets = agentScope.targets;
     if (targets.length === 0) {
       return {
         ok: false,
@@ -1059,7 +1078,7 @@ export function executeSceneAdminCommand(args: {
       else next.groupReplyMode = command.mode as BncrGroupReplyMode;
       setSceneRecord(sceneRegistry, next);
     }
-    const scope = wantedAgent
+    const scopeLabel = wantedAgent
       ? ` for ${wantedAgent}`
       : targets.length > 1
         ? ` for all ${targets.length} agents`
@@ -1067,19 +1086,24 @@ export function executeSceneAdminCommand(args: {
     if (clearing) {
       return {
         ok: true,
-        text: `Cleared ${sceneKey} reply mode${scope}. Will use default (admin).`,
+        text: `Cleared ${sceneKey} reply mode${scopeLabel}. Will use default (admin).`,
       };
     }
-    return { ok: true, text: `Set ${sceneKey} reply mode to ${command.mode}${scope}.` };
+    return { ok: true, text: `Set ${sceneKey} reply mode to ${command.mode}${scopeLabel}.` };
   }
 
   // Naming an agent narrows approval to that row; omitting it admits every agent
   // watching the scene, exactly like the rest of the scene settings.
   const sceneRows = listSceneRows(sceneRegistry, sceneKey);
   const wantedAgent = normalizeToken(command.agentId || '');
-  const targets = wantedAgent
-    ? sceneRows.filter((row) => normalizeToken(row.agentId || '') === wantedAgent)
-    : sceneRows;
+  const agentScope = resolveBncrSceneAgentScope({
+    rows: sceneRows,
+    isAdmin: parsed.isAdmin === true,
+    requestedAgentId: wantedAgent,
+    callerAgentId: sceneAgentId,
+  });
+  if (!agentScope.ok) return agentScope;
+  const targets = agentScope.targets;
   if (targets.length === 0) {
     return {
       ok: false,

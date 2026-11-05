@@ -1418,6 +1418,108 @@ test('executeSceneAdminCommand: non-admin self-admin never fans out to another a
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'orion')?.downloadMedia, false);
 });
 
+test('executeSceneAdminCommand: non-admin self-admin cannot read a sibling-only scene', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    agentId: 'orion',
+    historyLimit: 80,
+    downloadMedia: true,
+    approvedAt: 1,
+    lastSeenAt: 1,
+  });
+  const base = {
+    parsed: {
+      isAdmin: false,
+      userId: '10001',
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+    },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  };
+
+  const history = executeSceneAdminCommand({
+    ...base,
+    command: { kind: 'history-limit-get', sceneKey: 'tgBot:10001' },
+  });
+  assert.deepEqual(history, { ok: false, text: 'Admin permission required.' });
+
+  const media = executeSceneAdminCommand({
+    ...base,
+    command: { kind: 'download-media-get', sceneKey: 'tgBot:10001' },
+  });
+  assert.deepEqual(media, { ok: false, text: 'Admin permission required.' });
+});
+
+test('executeSceneAdminCommand: every self-admin read and write uses the caller row', () => {
+  const sceneRegistry = new Map();
+  for (const [agentId, historyLimit, historyForce, downloadMedia] of [
+    ['public', 20, true, true],
+    ['orion', 80, false, false],
+  ]) {
+    setSceneRecord(sceneRegistry, {
+      sceneKey: 'tgBot:10001',
+      kind: 'direct',
+      status: 'allowed',
+      platform: 'tgBot',
+      userId: '10001',
+      agentId,
+      historyLimit,
+      historyForce,
+      downloadMedia,
+      approvedAt: 1,
+      lastSeenAt: 1,
+    });
+  }
+  const base = {
+    parsed: {
+      isAdmin: false,
+      userId: '10001',
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+    },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  };
+  const run = (command) => executeSceneAdminCommand({ ...base, command });
+  const rowOf = (agentId) => resolveSceneRecord(sceneRegistry, 'tgBot:10001', agentId);
+
+  assert.match(run({ kind: 'history-limit-get', sceneKey: 'tgBot:10001' }).text, /is 20/);
+  assert.match(run({ kind: 'history-force-get', sceneKey: 'tgBot:10001' }).text, /is on/);
+  assert.match(run({ kind: 'download-media-get', sceneKey: 'tgBot:10001' }).text, /is on/);
+
+  assert.equal(run({ kind: 'history-limit-set', sceneKey: 'tgBot:10001', limit: 30 }).ok, true);
+  assert.equal(rowOf('public').historyLimit, 30);
+  assert.equal(rowOf('orion').historyLimit, 80);
+
+  assert.equal(
+    run({ kind: 'history-force-set', sceneKey: 'tgBot:10001', enabled: false }).ok,
+    true,
+  );
+  assert.equal(rowOf('public').historyForce, false);
+  assert.equal(rowOf('orion').historyForce, false);
+
+  assert.equal(
+    run({ kind: 'download-media-set', sceneKey: 'tgBot:10001', enabled: false }).ok,
+    true,
+  );
+  assert.equal(rowOf('public').downloadMedia, false);
+  assert.equal(rowOf('orion').downloadMedia, false);
+});
+
 test('executeSceneAdminCommand: non-admin self-admin fails closed without an agent identity', () => {
   const sceneRegistry = new Map();
   for (const agentId of ['public', 'orion']) {

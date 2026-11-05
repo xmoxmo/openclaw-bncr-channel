@@ -192,6 +192,112 @@ test('list: only rows whose scene and session are both older than 72h are listed
   assert.doesNotMatch(result.text, /wind_novel/);
 });
 
+test('list: a recent store write cannot hide a chat whose last interaction is stale', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const key = `public|${buildStaleSceneSessionKey(row, 'public')}`;
+  const { deps } = buildDeps({
+    rows: [row],
+    nodes: {
+      [key]: {
+        exists: true,
+        sessionId: 'session-1',
+        archivedAt: null,
+        updatedAt: NOW - 60 * 1000,
+        lastInteractionAt: NOW - 200 * DAY,
+      },
+    },
+  });
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.match(result.text, /GewePlus:51720530884/);
+  assert.doesNotMatch(result.text, /store-write fallback/);
+});
+
+test('list: a recent interaction keeps an old row alive despite an old store write', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const key = `public|${buildStaleSceneSessionKey(row, 'public')}`;
+  const { deps } = buildDeps({
+    rows: [row],
+    nodes: {
+      [key]: {
+        exists: true,
+        sessionId: 'session-1',
+        archivedAt: null,
+        updatedAt: NOW - 200 * DAY,
+        lastInteractionAt: NOW - 60 * 60 * 1000,
+      },
+    },
+  });
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.match(result.text, /No stale scenes/);
+});
+
+test('list and batch prune mark a legacy store-write timestamp as fallback', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const key = `public|${buildStaleSceneSessionKey(row, 'public')}`;
+  const { deps, deleted } = buildDeps({
+    rows: [row],
+    nodes: {
+      [key]: {
+        exists: true,
+        sessionId: 'session-1',
+        archivedAt: null,
+        updatedAt: NOW - 200 * DAY,
+        lastInteractionAt: null,
+      },
+    },
+  });
+
+  const listed = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'all', days: 180, includeAnomalies: false },
+    ...deps,
+  });
+  assert.match(listed.text, /store-write fallback/);
+
+  const pruned = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+  assert.match(pruned.text, /Deleted 1 scene row/);
+  assert.equal(deleted.length, 1);
+  assert.equal(deleted[0].expectedSessionId, 'session-1');
+  assert.equal(deleted[0].expectedUpdatedAt, NOW - 200 * DAY);
+});
+
+test('batch prune uses interaction time for eligibility but updatedAt for deletion', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 200 * DAY });
+  const key = `public|${buildStaleSceneSessionKey(row, 'public')}`;
+  const recentStoreWrite = NOW - 60 * 1000;
+  const { deps, deleted } = buildDeps({
+    rows: [row],
+    nodes: {
+      [key]: {
+        exists: true,
+        sessionId: 'session-2',
+        archivedAt: null,
+        updatedAt: recentStoreWrite,
+        lastInteractionAt: NOW - 200 * DAY,
+      },
+    },
+  });
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+  assert.match(result.text, /Deleted 1 scene row/);
+  assert.equal(deleted.length, 1);
+  assert.equal(deleted[0].expectedSessionId, 'session-2');
+  assert.equal(deleted[0].expectedUpdatedAt, recentStoreWrite);
+});
+
 test('list: a row without a host session counts as quiet once the row itself is old', async () => {
   const row = groupRow({ agentId: 'orion', lastSeenAt: NOW - 119 * DAY });
   const { deps } = buildDeps({ rows: [row] });

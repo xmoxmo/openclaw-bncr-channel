@@ -96,9 +96,10 @@ export function formatBncrSceneLabel(args: {
 }
 
 /**
- * Scene identity is shared by every agent watching the same chat: the sidebar
- * name and the group belong to the scene, not to one agent's session row.
- * Each field is taken from the freshest row that defines it.
+ * Resolve the effective sidebar identity for one scene. An explicit per-agent
+ * customName/category wins for that agent. Without one, each field falls back
+ * to the freshest row in the scene. This lets an administrator fan a shared
+ * identity out while preserving deliberate per-agent overrides.
  */
 export function resolveBncrSceneIdentity(
   registry: ReadonlyMap<string, BncrSceneRecord>,

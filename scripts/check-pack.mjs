@@ -82,6 +82,7 @@ const requiredSourceFiles = [
   'src/messaging/inbound/remote-media.ts',
   'src/messaging/inbound/reply-config.ts',
   'src/messaging/inbound/reply-dispatch.ts',
+  'src/messaging/inbound/scene-agent-scope.ts',
   'src/messaging/inbound/session-cleanup-command.ts',
   'src/messaging/inbound/session-label.ts',
   'src/messaging/inbound/session-identity.ts',

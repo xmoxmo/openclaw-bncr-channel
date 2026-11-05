@@ -1609,8 +1609,11 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
     ['测试4', '测试5'],
   );
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
-  assert.match(String(calls.turnRuns[0].ctxPayload.RawBody || ''), /Output exactly NO_REPLY\./);
-  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /Output exactly NO_REPLY\./);
+  assert.match(
+    String(calls.turnRuns[0].ctxPayload.RawBody || ''),
+    /Output exactly NO_REPLY FROM AGENT\./,
+  );
+  assert.match(calls.turnRuns[0].ctxPayload.BodyForAgent, /Output exactly NO_REPLY FROM AGENT\./);
   assert.deepEqual(
     calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
       (entry) => entry.content,

@@ -223,8 +223,8 @@ openclaw config get channels.bncr.mediaMaxMb
 /bncr mode <admin|mention|hybrid|all|clear> [<agentId>] [<SceneId>]
 ```
 
-省略 `<agentId>` 时改动该场景所有 agent 的行；同群多 agent 因此始终统一。新建场景行会继承同场景已有的
-模式、名字和分组，不会退回默认值。
+管理员省略 `<agentId>` 时改动该场景所有 agent 的行；私聊非管理员省略时只作用于自己的 agent 行。
+新建场景行会继承同场景已有的模式、名字和分组，不会退回默认值。
 
 `<agentId>` 可以是任意 agent 名字（数字也算），但必须真在这个场景里有一行；点不到时所有命令统一回
 `Agent <id> has no scene row for <SceneId>. Agents here: ...`，后半句列出这个场景实际有哪些 agent。
@@ -260,15 +260,15 @@ openclaw config get channels.bncr.mediaMaxMb
 
 私聊默认归入「私聊」分组；`group clear` 对私聊仍然回到「私聊」。群聊不设置时沿用宿主的 Groups 分区。
 分组在侧边栏的先后顺序由宿主维护，插件只写会话归属，不碰分组目录，也不新建、改名或删除任何分组。
-名字和分组按场景保存：省略 `<agentId>` 时把该场景所有 agent 的行写成同一份，写 `<agentId>`
-时只改那一行，和 `/bncr mode` 完全一致。`mode`、准入状态和历史设置存在各自 agent 的行里，
-省略 `<agentId>` 只是让一条命令把这些行一次写齐。
+名字和分组按场景保存：管理员省略 `<agentId>` 时把该场景所有 agent 的行写成同一份，私聊非管理员
+省略时只写自己的 agent 行；写 `<agentId>` 时只改那一行。`mode`、准入状态和历史设置存在各自
+agent 的行里，管理员省略 `<agentId>` 只是让一条命令把这些行一次写齐。
 
 展示名只影响显示，投递目标 `delivery.context.to` 不随名字变化。
 
-`[<agentId>] [<SceneId>]` 是所有场景设置的统一尾缀：两个都省略作用于当前会话，只写 `<SceneId>` 作用于该场景的
-全部 agent，只写 `<agentId>` 作用于当前会话里的那个 agent，两个都写则精确定位。`mode`、`name`、`group`、
-`history-limit`、`history-force`、`download-media` 都是这一套。
+`[<agentId>] [<SceneId>]` 是所有场景设置的统一尾缀：两个都省略作用于当前会话，只写 `<SceneId>` 时管理员作用于
+该场景的全部 agent、私聊非管理员只作用于自己的行，只写 `<agentId>` 作用于当前会话里的那个 agent，两个都写则
+精确定位。`mode`、`name`、`group`、`history-limit`、`history-force`、`download-media` 都是这一套。
 
 ### 会话历史
 
@@ -314,7 +314,7 @@ openclaw config get channels.bncr.mediaMaxMb
 
 `stale orphans` 是反向核对：经 RPC `bncr.state.list` 只读读一遍客户端的 `state:<hex>` 表（不建行、不改 rev、不归一脏值），按 `平台:群` / `平台:用户` 还原成场景键，列出「客户端有门控状态、场景表里没有对应行」的场景。多出来的只有两种来历：超级门控（oc/occ）已经打开但消息还没进场景表；或者场景行已经清掉、客户端那份留在原地。每行标 `gate on|off`、开启时间（`rev`）和 `mode`，只做展示，删不删由管理员判断；这些场景没有场景行，`/bncr prune` 也就没有目标行，要用 `/bncr prune state <SceneId>` 只清客户端那份门控：不归档 transcript、不动会话、不碰场景表；门控在 72 小时内开过要加 `force`（那也可能是还没来消息的超级门控），下发 RPC 前会再查一次场景表，期间冒出场景行就放弃并提示重跑；场景表还有行时这条路直接拒绝，提示改用 `/bncr prune <SceneId>`。客户端太旧时提示 `too old to expose bncr.state.list`。
 
-`stale` 只读，列出两种清理候选。一是静默：场景行的最后活动时间超过判定窗口（入站，或管理员改配置时刷新该行），并且该行对应 sessionKey 的宿主会话最近写库时间也超过同一窗口（清理视图 180 天，诊断视图 72 小时）。只满足一条的不列——例如 cron 直接投递的会话，场景行很久没更新，但会话还在动。二是会话异常：用宿主 SDK 只读列出该 agent 的会话项（`listSessionEntriesAsync`，不建库、不迁移），再按 sessionKey 查；查不到就是 `missing`（被 UI 删除或从未建过），`archivedAt` 有值就是 `archived`（被 UI 归档）；这两种不看场景行时钟，直接列出。列表读不出来时回退到时间戳判定：只按上面那条 72 小时双静默规则列，状态标 `unreadable (unknown)`，不会判 `missing` / `archived`；列表和时间戳都读不出来才整行跳过，不当成死行。
+`stale` 只读，列出两种清理候选。一是静默：场景行的最后活动时间超过判定窗口（入站，或管理员改配置时刷新该行），并且该行对应 sessionKey 的宿主会话最近真实聊天活动也超过同一窗口（清理视图 180 天，诊断视图 72 小时）。活动优先取 `lastInteractionAt`；旧会话库没有这个字段时才退回 `updatedAt`，并在列表标 `(store-write fallback)`。只满足一条的不列——例如 cron 直接投递的会话，场景行很久没更新，但会话还在动。二是会话异常：用宿主 SDK 只读列出该 agent 的会话项（`listSessionEntriesAsync`，不建库、不迁移），再按 sessionKey 查；查不到就是 `missing`（被 UI 删除或从未建过），`archivedAt` 有值就是 `archived`（被 UI 归档）；这两种不看场景行时钟，直接列出。列表读不出来时回退到时间戳判定：只按上面那条 72 小时双静默规则列，状态标 `unreadable (unknown)`，不会判 `missing` / `archived`；列表和时间戳都读不出来才整行跳过，不当成死行。
 
 每条给出侧边栏 label、agent、两个时间和各自静默时长，会话异常时改为标 `missing (no session row)` 或 `archived`。第三个维度是兄弟场景：同一个 `group_id`、不同平台的另一行在 24 小时内有活动（取行入站与会话 `lastInteractionAt` 里较新的那个；只有确认仍然存活的会话才算活动，missing / archived / 读不出来的兄弟只按行入站算）。改标签、归档等只写库的时间不会被算成聊天活动。`swapped` 只列这一类，`solo` 只列既没有兄弟活动、也没有会话异常的行（就是单纯静默），`missing` / `archived` 只列对应异常，`all` 是全部候选（诊断视图）。私聊不参与兄弟匹配。
 
