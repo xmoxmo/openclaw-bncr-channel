@@ -2225,11 +2225,12 @@ test('purgeSessionArtifacts removes shards, conversation rows, outbound and last
     assert.equal(db.listHistoryShards().length, 1);
     assert.equal(db.loadOutboundState().outbox.length, 1);
 
-    db.purgeSessionArtifacts({
+    const purged = db.purgeSessionArtifacts({
       historyKeys: [historyKey],
       bufferKeys: [historyKey],
       sessionKeys: [sessionKey],
     });
+    assert.equal(purged, true);
 
     assert.equal(db.listHistoryShards().length, 0);
     assert.deepEqual(db.loadOutboundState(), { outbox: [], deadLetter: [] });
@@ -2253,6 +2254,70 @@ test('purgeSessionArtifacts removes shards, conversation rows, outbound and last
       assert.equal(Number(sessionRoute.count), 0);
       const routes = raw.prepare('SELECT COUNT(*) AS count FROM routes').get();
       assert.equal(Number(routes.count), 0);
+    } finally {
+      raw.close();
+    }
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('purgeSessionArtifacts leaves every row intact when its scene guard changes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-purge-guard-'));
+  try {
+    const dbPath = join(dir, 'bncr.sqlite3');
+    const db = createBncrSqliteStateDatabase(dbPath);
+    const sessionKey = 'agent:orion:bncr:direct:demo';
+    const historyKey = 'Primary:tgBot:10001';
+    const control = buildControlState();
+    control.lastSessionByAccount = [
+      { accountId: 'Primary', sessionKey, scope: 'Bncr:tgBot:0:10001', updatedAt: 130 },
+    ];
+    db.importControlState(control, { storeMode: 'dual' });
+    const fixture = buildHistoryState();
+    db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
+    db.createHistoryShard({
+      historyKey,
+      payloadJson: '{}',
+      messageIds: ['h1'],
+      bufferKeys: [historyKey],
+    });
+    const outbound = buildOutboundState();
+    db.importOutboundState(outbound.outbox, outbound.deadLetter);
+    assert.equal(db.listHistoryShards().length, 1);
+    assert.equal(db.loadOutboundState().outbox.length, 1);
+
+    const purged = db.purgeSessionArtifacts({
+      historyKeys: [historyKey],
+      bufferKeys: [historyKey],
+      sessionKeys: [sessionKey],
+      guard: () => false,
+    });
+
+    assert.equal(purged, false);
+    assert.equal(db.listHistoryShards().length, 1);
+    assert.equal(db.loadOutboundState().outbox.length, 1);
+    const raw = new DatabaseSync(dbPath);
+    try {
+      const messages = raw
+        .prepare(
+          'SELECT COUNT(*) AS count FROM conversation_messages WHERE history_key = ? OR buffer_key = ?',
+        )
+        .get(historyKey, historyKey);
+      assert.ok(Number(messages.count) > 0);
+      const lastSession = raw
+        .prepare(
+          "SELECT COUNT(*) AS count FROM account_activity WHERE activity_type = 'last_session' AND session_key = ?",
+        )
+        .get(sessionKey);
+      assert.equal(Number(lastSession.count), 1);
+      const sessionRoute = raw
+        .prepare('SELECT COUNT(*) AS count FROM session_routes WHERE session_key = ?')
+        .get(sessionKey);
+      assert.equal(Number(sessionRoute.count), 1);
+      const routes = raw.prepare('SELECT COUNT(*) AS count FROM routes').get();
+      assert.ok(Number(routes.count) > 0);
     } finally {
       raw.close();
     }

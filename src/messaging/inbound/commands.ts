@@ -8,6 +8,7 @@ import {
   deleteBncrSessionEntry,
   listBncrSessionEntries,
   readBncrSessionEntry,
+  readBncrSessionEntryStrict,
   readBncrSessionUpdatedAt,
   recordBncrInboundSession,
   resolveBncrInboundSessionStorePath,
@@ -106,8 +107,12 @@ function toBncrSessionActivity(
     typeof value === 'number' && Number.isFinite(value) ? value : null;
   const interactionAt = pick(record.lastInteractionAt);
   const storeWriteAt = pick(record.updatedAt);
+  const sessionId =
+    typeof record.sessionId === 'string' && record.sessionId.trim() ? record.sessionId : null;
   return {
     sessionKey: key,
+    sessionId,
+    updatedAt: storeWriteAt,
     lastActivityAt: interactionAt ?? storeWriteAt,
     // Tell the caller when this age is a store write instead of a message: the
     // two are not the same thing and the listing must not pretend they are.
@@ -134,6 +139,7 @@ export async function handleBncrNativeCommand(params: {
     sceneKey: string;
     agentId: string;
     sessionKey: string | null;
+    assertCurrent?: () => boolean;
   }) => Promise<void> | void;
   /** Debounced state save; maintenance commands call it after removing rows. */
   scheduleSave?: () => void;
@@ -524,9 +530,22 @@ export async function handleBncrNativeCommand(params: {
         }
         const index = sessionNodeIndexByAgent.get(agentId);
         if (!index) return undefined;
-        return index.get(targetSessionKey) ?? { exists: false, archivedAt: null, updatedAt: null };
+        return (
+          index.get(targetSessionKey) ?? {
+            exists: false,
+            sessionId: null,
+            archivedAt: null,
+            updatedAt: null,
+            lastInteractionAt: null,
+          }
+        );
       },
-      deleteSession: async ({ agentId, sessionKey: targetSessionKey }) => {
+      deleteSession: async ({
+        agentId,
+        sessionKey: targetSessionKey,
+        expectedSessionId,
+        expectedUpdatedAt,
+      }) => {
         const targetStorePath = resolveBncrInboundSessionStorePath({
           storeConfig: cfg?.session?.store,
           agentId,
@@ -536,6 +555,8 @@ export async function handleBncrNativeCommand(params: {
           sessionKey: targetSessionKey,
           agentId,
           archiveTranscript: true,
+          ...(expectedSessionId !== undefined ? { expectedSessionId } : {}),
+          ...(expectedUpdatedAt !== undefined ? { expectedUpdatedAt } : {}),
         });
       },
       // /bncr sessions works on the host session store directly, so it can see
@@ -567,7 +588,7 @@ export async function handleBncrNativeCommand(params: {
           storeConfig: cfg?.session?.store,
           agentId,
         });
-        const entry = await readBncrSessionEntry({
+        const entry = await readBncrSessionEntryStrict({
           storePath: targetStorePath,
           sessionKey: targetSessionKey,
         });

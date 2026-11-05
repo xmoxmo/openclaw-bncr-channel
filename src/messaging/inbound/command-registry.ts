@@ -1,5 +1,6 @@
 import { describeMissingPublicAgentFromIds } from '../../core/agent-surface.ts';
 import { emitBncrLogLine } from '../../core/logging.ts';
+import type { BncrSessionNodeStatus } from '../../openclaw/session-node-status.ts';
 import {
   assertBncrSessionResetOwnership,
   performBncrGatewaySessionReset,
@@ -88,6 +89,7 @@ export type LocalCommandContext = {
     sceneKey: string;
     agentId: string;
     sessionKey: string | null;
+    assertCurrent?: () => boolean;
   }) => Promise<void> | void;
   readSessionUpdatedAt: (args: {
     agentId: string;
@@ -96,18 +98,18 @@ export type LocalCommandContext = {
   readSessionNode?: (args: {
     agentId: string;
     sessionKey: string;
-  }) => Promise<
-    { exists: boolean; archivedAt: number | null; updatedAt: number | null } | undefined
-  >;
+  }) => Promise<BncrSessionNodeStatus | undefined>;
   deleteSession: (args: {
     agentId: string;
     sessionKey: string;
     archiveTranscript?: boolean;
+    expectedSessionId?: string | null;
+    expectedUpdatedAt?: number;
   }) => Promise<boolean>;
   /** Every bncr session activity row for one agent; undefined means unreadable. */
   listSessions?: (agentId: string) => Promise<readonly BncrSessionActivity[] | undefined>;
-  /** Fresh read of one entry, used before a session delete. */
-  readSessionActivity?: (args: {
+  /** Fresh read of one entry; required before any session delete. */
+  readSessionActivity: (args: {
     agentId: string;
     sessionKey: string;
   }) => Promise<BncrSessionActivity | undefined>;
@@ -520,7 +522,7 @@ const LOCAL_COMMAND_HANDLERS: LocalCommandHandler[] = [
         return handled(ctx);
       }
       const command = (parsed as { data: SessionCleanupCommand }).data;
-      if (!ctx.listSessions) {
+      if (!ctx.listSessions || !ctx.readSessionActivity) {
         await reply(ctx, {
           text: 'Session cleanup is unavailable: the session store is not wired.',
           kind: 'maintenance',

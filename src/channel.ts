@@ -2635,6 +2635,8 @@ class BncrBridgeRuntime {
     sceneKey: string;
     agentId: string;
     sessionKey: string | null;
+    /** Rechecked at the destructive boundary so a message can revive the scene. */
+    assertCurrent?: () => boolean;
   }): Promise<void> {
     const sceneKey = asString(args.sceneKey).trim();
     if (!sceneKey) return;
@@ -2686,6 +2688,19 @@ class BncrBridgeRuntime {
       }
     }
 
+    // Purge persisted artifacts before clearing the live maps. The SQLite write
+    // transaction rechecks the scene snapshot, so a message that arrives while
+    // the async store is resolving prevents this destructive step. Once the
+    // guard passes, the in-memory cleanup below is synchronous and a later
+    // message can repopulate only the live session it owns.
+    const purged = await this.stateStore.purgeSessionArtifacts({
+      historyKeys: Array.from(historyKeys),
+      bufferKeys: Array.from(bufferKeys),
+      sessionKeys: Array.from(sessionKeys),
+      ...(args.assertCurrent ? { guard: args.assertCurrent } : {}),
+    });
+    if (!purged) return;
+
     for (const sessionKey of sessionKeys) {
       const info = this.sessionRoutes.get(sessionKey);
       this.sessionRoutes.delete(sessionKey);
@@ -2708,12 +2723,6 @@ class BncrBridgeRuntime {
       this.outboundReplayCache.delete(key);
       this.conversationHistoryVersions.delete(key);
     }
-
-    await this.stateStore.purgeSessionArtifacts({
-      historyKeys: Array.from(historyKeys),
-      bufferKeys: Array.from(bufferKeys),
-      sessionKeys: Array.from(sessionKeys),
-    });
     this.scheduleSave();
   }
 
@@ -2797,7 +2806,7 @@ class BncrBridgeRuntime {
     let contentType = asString(args.contentType).trim() || undefined;
     let fileName = asString(args.fileName).trim() || undefined;
     let sizeBytes: number | undefined;
-    let materialized: { mediaUri: string; hostPath: string };
+    let materialized: { mediaUri: string; localPath: string };
 
     args.assertCurrent?.();
     if (args.sourceKind === 'url') {
@@ -2863,7 +2872,7 @@ class BncrBridgeRuntime {
     return {
       ...(requestedMediaRef ? { mediaRef: requestedMediaRef } : {}),
       mediaUri: materialized.mediaUri,
-      hostPath: materialized.hostPath,
+      localPath: materialized.localPath,
       ...(contentType ? { contentType } : {}),
       ...(sizeBytes !== undefined ? { sizeBytes } : {}),
       ...(fileName ? { fileName } : {}),

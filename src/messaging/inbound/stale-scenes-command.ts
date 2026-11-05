@@ -282,22 +282,32 @@ export type StaleScenesDeps = {
   /** Reverse-lookup the host session node (existence + archived_at). When
    * present it supersedes readSessionUpdatedAt for existence/timestamp, so the
    * list can flag sessions the operator deleted or archived from the UI. */
-  readSessionNode?: (args: {
-    agentId: string;
-    sessionKey: string;
-  }) => Promise<
-    { exists: boolean; archivedAt: number | null; updatedAt: number | null } | undefined
+  readSessionNode?: (args: { agentId: string; sessionKey: string }) => Promise<
+    | {
+        exists: boolean;
+        sessionId?: string | null;
+        archivedAt: number | null;
+        updatedAt: number | null;
+        lastInteractionAt?: number | null;
+      }
+    | undefined
   >;
   deleteSession: (args: {
     agentId: string;
     sessionKey: string;
     archiveTranscript?: boolean;
+    /** Conditional delete: fail if the host session generation changed. */
+    expectedSessionId?: string | null;
+    /** Conditional delete: fail if the row was written after this snapshot. */
+    expectedUpdatedAt?: number;
   }) => Promise<boolean>;
   /** Wipe every stored artifact for the session behind this scene row. */
   purgeSessionState?: (args: {
     sceneKey: string;
     agentId: string;
     sessionKey: string | null;
+    /** Rechecked by the bridge immediately before it deletes persisted state. */
+    assertCurrent?: () => boolean;
   }) => Promise<void> | void;
   /**
    * Persist the scene registry after rows were removed. Deleting a row only
@@ -326,6 +336,8 @@ export type StaleSceneRow = {
   scene: BncrSceneRecord;
   agentId: string;
   sessionKey: string | null;
+  /** Host generation used by the conditional delete. */
+  sessionId: string | null;
   rowAt: number;
   sessionAt: number | null;
   /** The host session read failed; treat activity as unknown, never as dead. */
@@ -399,6 +411,8 @@ async function inspectSceneRow(
   const sessionKey = buildStaleSceneSessionKey(scene, agentId);
   const rowAt = Number(scene.lastSeenAt) || 0;
   let sessionAt: number | null = null;
+  let sessionInteractionAt: number | null = null;
+  let sessionId: string | null = null;
   let archivedAt: number | null = null;
   let sessionUnknown = false;
   let sessionStatus: StaleSceneRow['sessionStatus'] = 'unknown';
@@ -417,9 +431,15 @@ async function inspectSceneRow(
         if (!node.exists) {
           sessionStatus = 'missing';
         } else {
+          sessionId =
+            typeof node.sessionId === 'string' && node.sessionId.trim() ? node.sessionId : null;
           sessionAt =
             typeof node.updatedAt === 'number' && Number.isFinite(node.updatedAt)
               ? node.updatedAt
+              : null;
+          sessionInteractionAt =
+            typeof node.lastInteractionAt === 'number' && Number.isFinite(node.lastInteractionAt)
+              ? node.lastInteractionAt
               : null;
           sessionStatus = node.archivedAt != null ? 'archived' : 'alive';
           archivedAt =
@@ -455,12 +475,14 @@ async function inspectSceneRow(
   // it was archived, and an unreadable listing tells us nothing about whether
   // the chat is still in use — none of them may be reported as "the chat moved
   // there".
-  const lastActivityAt = sessionStatus === 'alive' ? Math.max(rowAt, sessionAt ?? 0) : rowAt;
+  const lastActivityAt =
+    sessionStatus === 'alive' ? Math.max(rowAt, sessionInteractionAt ?? 0) : rowAt;
   const quietByClock = rowQuiet && sessionQuiet;
   return {
     scene,
     agentId,
     sessionKey,
+    sessionId,
     rowAt,
     sessionAt,
     sessionUnknown,
@@ -486,6 +508,61 @@ async function inspectAll(deps: StaleScenesDeps): Promise<{ rows: StaleSceneRow[
   const rows = await Promise.all(scenes.map((scene) => inspectSceneRow(scene, deps, now, staleMs)));
   attachSiblings(rows, now, deps.siblingActiveMs ?? BNCR_SIBLING_ACTIVE_MS);
   return { rows, now };
+}
+
+function sceneRowStillMatches(row: StaleSceneRow, deps: StaleScenesDeps): boolean {
+  const current = deps.sceneRegistry.get(
+    buildAgentSceneRegistryKey(row.scene.sceneKey, row.agentId),
+  );
+  return Boolean(current && Number(current.lastSeenAt) === row.rowAt);
+}
+
+function sessionDeleteExpectation(row: StaleSceneRow): {
+  expectedSessionId?: string | null;
+  expectedUpdatedAt?: number;
+} {
+  return {
+    ...(row.sessionStatus === 'alive' || row.sessionStatus === 'archived'
+      ? { expectedSessionId: row.sessionId }
+      : {}),
+    ...(row.sessionAt != null ? { expectedUpdatedAt: row.sessionAt } : {}),
+  };
+}
+
+function needsHostSessionDelete(row: StaleSceneRow): boolean {
+  return Boolean(row.sessionKey && row.sessionStatus !== 'missing');
+}
+
+function hasHostSessionDeleteGuard(row: StaleSceneRow): boolean {
+  return row.sessionStatus === 'alive' || row.sessionStatus === 'archived' || row.sessionAt != null;
+}
+
+type SessionDeleteOutcome = 'deleted' | 'changed' | 'failed' | 'unverified';
+
+/**
+ * Remove the host session before the scene row. A known-live session that the
+ * host refuses to delete has changed since inspection; keep the row so the
+ * operator can retry instead of orphaning that session. A session already
+ * missing at inspection has nothing to delete.
+ */
+async function deleteHostSessionForPrune(
+  row: StaleSceneRow,
+  deps: StaleScenesDeps,
+  force: boolean,
+): Promise<SessionDeleteOutcome> {
+  if (!row.sessionKey || row.sessionStatus === 'missing') return 'deleted';
+  if (!force && !hasHostSessionDeleteGuard(row)) return 'unverified';
+  try {
+    const deleted = await deps.deleteSession({
+      agentId: row.agentId,
+      sessionKey: row.sessionKey,
+      archiveTranscript: true,
+      ...sessionDeleteExpectation(row),
+    });
+    return deleted ? 'deleted' : 'changed';
+  } catch {
+    return 'failed';
+  }
 }
 
 /**
@@ -1002,12 +1079,13 @@ async function executePruneOrphanState(
 function formatPruned(
   pruned: StaleSceneRow[],
   now: number,
-  skipped: string[],
+  skippedChanged: string[],
+  skippedFailed: string[],
   stateNote = '',
 ): string {
   const lines: string[] = [];
   if (pruned.length === 0) {
-    lines.push('🧹 Nothing pruned: every target row moved after the listing.');
+    lines.push('🧹 Nothing pruned.');
   } else {
     lines.push(`🧹 Pruned ${pruned.length} scene row(s)`);
     for (const row of pruned) {
@@ -1019,7 +1097,12 @@ function formatPruned(
       );
     }
   }
-  if (skipped.length > 0) lines.push('', `Skipped (active again): ${skipped.join(', ')}`);
+  if (skippedChanged.length > 0) {
+    lines.push('', `Skipped (active again): ${skippedChanged.join(', ')}`);
+  }
+  if (skippedFailed.length > 0) {
+    lines.push('', `Skipped (delete failed): ${skippedFailed.join(', ')}`);
+  }
   if (stateNote) lines.push('', stateNote);
   return lines.join('\n');
 }
@@ -1033,6 +1116,7 @@ function formatBatchPruned(
   pruned: StaleSceneRow[],
   now: number,
   raced: string[],
+  failed: string[],
   days: number,
   remaining: number,
   unreadable: number,
@@ -1041,6 +1125,7 @@ function formatBatchPruned(
   if (pruned.length === 0) {
     const lines = [`🧹 Batch prune — quiet ${String(days)}d+`, 'Nothing pruned.'];
     if (raced.length > 0) lines.push(`Skipped (active again): ${raced.join(', ')}`);
+    if (failed.length > 0) lines.push(`Skipped (delete failed): ${failed.join(', ')}`);
     if (unreadable > 0) lines.push(`${String(unreadable)} row(s) skipped: session unreadable`);
     return lines.join('\n');
   }
@@ -1065,6 +1150,7 @@ function formatBatchPruned(
   }
   if (stateNote) lines.push('', stateNote);
   if (raced.length > 0) lines.push('', `Skipped (active again): ${raced.join(', ')}`);
+  if (failed.length > 0) lines.push('', `Skipped (delete failed): ${failed.join(', ')}`);
   if (unreadable > 0) lines.push('', `${String(unreadable)} row(s) skipped: session unreadable`);
   if (remaining > 0) {
     lines.push('', `… ${String(remaining)} more candidate(s); run it again.`);
@@ -1106,8 +1192,16 @@ async function executeStaleScenesBatch(
   };
   const candidates = rows
     .filter((row) => quietEnough(row))
+    .filter(
+      (row) => command.force || !needsHostSessionDelete(row) || hasHostSessionDeleteGuard(row),
+    )
     .sort((left, right) => left.rowAt - right.rowAt);
-  const unreadable = rows.filter((row) => row.sessionUnknown && !command.force).length;
+  const unreadable = rows.filter(
+    (row) =>
+      !command.force &&
+      quietByRow(row) &&
+      (row.sessionUnknown || (needsHostSessionDelete(row) && !hasHostSessionDeleteGuard(row))),
+  ).length;
   if (candidates.length === 0) {
     return {
       ok: true,
@@ -1122,36 +1216,45 @@ async function executeStaleScenesBatch(
 
   const pruned: StaleSceneRow[] = [];
   const raced: string[] = [];
+  const failed: string[] = [];
   const prunedScenes = new Set<string>();
   for (const row of candidates.slice(0, BNCR_STALE_SCENE_BATCH_MAX)) {
     // A message may land between the listing and this loop; the registry holds
     // the live row, so a changed lastSeenAt means the chat woke up.
-    const current = deps.sceneRegistry.get(
-      buildAgentSceneRegistryKey(row.scene.sceneKey, row.agentId),
-    );
-    if (!current || Number(current.lastSeenAt) !== row.rowAt) {
+    if (!sceneRowStillMatches(row, deps)) {
       raced.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
       continue;
     }
-    if (row.sessionKey) {
-      try {
-        await deps.deleteSession({
-          agentId: row.agentId,
-          sessionKey: row.sessionKey,
-          archiveTranscript: true,
-        });
-      } catch {
-        // The scene row is the part that keeps the dead scene listed.
-      }
+    const deleteOutcome = await deleteHostSessionForPrune(row, deps, command.force);
+    if (deleteOutcome === 'changed') {
+      raced.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
+    }
+    if (deleteOutcome === 'failed') {
+      failed.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
+    }
+    if (deleteOutcome === 'unverified') {
+      failed.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
+    }
+    if (!sceneRowStillMatches(row, deps)) {
+      raced.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
     }
     try {
       await deps.purgeSessionState?.({
         sceneKey: normalizeToken(row.scene.sceneKey),
         agentId: row.agentId,
         sessionKey: row.sessionKey,
+        assertCurrent: () => sceneRowStillMatches(row, deps),
       });
     } catch {
       // Best effort; the row removal is the operator-visible outcome.
+    }
+    if (!sceneRowStillMatches(row, deps)) {
+      raced.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
     }
     deleteSceneRecord(deps.sceneRegistry, row.scene.sceneKey, row.agentId);
     pruned.push(row);
@@ -1164,18 +1267,27 @@ async function executeStaleScenesBatch(
 
   if (pruned.length > 0) deps.onSceneChange?.();
 
-  const remaining = candidates.length - pruned.length - raced.length;
+  const remaining = candidates.length - pruned.length - raced.length - failed.length;
   return {
     ok: true,
-    text: formatBatchPruned(pruned, now, raced, command.days, remaining, unreadable, stateNote),
+    text: formatBatchPruned(
+      pruned,
+      now,
+      raced,
+      failed,
+      command.days,
+      remaining,
+      unreadable,
+      stateNote,
+    ),
   };
 }
 
 /**
  * Execute /bncr stale or /bncr prune.
  *
- * Both are operator driven: nothing here runs on the inbound path, so a cleanup
- * can never race a live message and delete a scene that just woke up.
+ * Both are operator driven. Deletes carry the host session generation and
+ * updatedAt snapshot, and the scene row is checked again after every await.
  */
 export async function executeStaleScenesCommand(
   args: { command: StaleScenesCommand } & StaleScenesDeps,
@@ -1302,7 +1414,11 @@ export async function executeStaleScenesCommand(
 
   // Fail closed: a row whose session store could not be read is not evidence of
   // death, so it blocks the prune the same way a live row does.
-  const unverified = inspected.filter((row) => row.sessionUnknown);
+  const unverified = inspected.filter(
+    (row) =>
+      row.sessionUnknown ||
+      (!command.force && needsHostSessionDelete(row) && !hasHostSessionDeleteGuard(row)),
+  );
   if (unverified.length > 0 && !command.force) {
     return {
       ok: false,
@@ -1335,39 +1451,47 @@ export async function executeStaleScenesCommand(
   }
 
   const pruned: StaleSceneRow[] = [];
-  const skipped: string[] = [];
+  const skippedChanged: string[] = [];
+  const skippedFailed: string[] = [];
   for (const row of inspected) {
     // A message can land between the listing and this loop. The registry holds
     // the live row, so a changed lastSeenAt means the scene woke up: leave both
     // the row and its session alone instead of deleting a chat that is in use.
-    const current = deps.sceneRegistry.get(
-      buildAgentSceneRegistryKey(row.scene.sceneKey, row.agentId),
-    );
-    if (!current || Number(current.lastSeenAt) !== row.rowAt) {
-      skipped.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+    if (!sceneRowStillMatches(row, deps)) {
+      skippedChanged.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
       continue;
     }
-    if (row.sessionKey) {
-      try {
-        await deps.deleteSession({
-          agentId: row.agentId,
-          sessionKey: row.sessionKey,
-          archiveTranscript: true,
-        });
-      } catch {
-        // A missing store or an already-deleted session must not stop the row
-        // removal: the row is the part that keeps the dead scene listed.
-      }
+    const deleteOutcome = await deleteHostSessionForPrune(row, deps, command.force);
+    if (deleteOutcome === 'changed') {
+      skippedChanged.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
+    }
+    if (deleteOutcome === 'failed') {
+      skippedFailed.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
+    }
+    if (deleteOutcome === 'unverified') {
+      skippedFailed.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
+    }
+    if (!sceneRowStillMatches(row, deps)) {
+      skippedChanged.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
     }
     try {
       await deps.purgeSessionState?.({
         sceneKey: normalizeToken(row.scene.sceneKey),
         agentId: row.agentId,
         sessionKey: row.sessionKey,
+        assertCurrent: () => sceneRowStillMatches(row, deps),
       });
     } catch {
       // Purging stored artifacts is best-effort; the scene row removal is the
       // operator-visible outcome and must still proceed.
+    }
+    if (!sceneRowStillMatches(row, deps)) {
+      skippedChanged.push(`${normalizeToken(row.scene.sceneKey)}/${row.agentId || '(unassigned)'}`);
+      continue;
     }
     deleteSceneRecord(deps.sceneRegistry, row.scene.sceneKey, row.agentId);
     pruned.push(row);
@@ -1380,5 +1504,5 @@ export async function executeStaleScenesCommand(
     pruned.length > 0 ? [sceneKey] : [],
   );
   const stateNote = await clearClientStateForScenes(clear, deps, keep);
-  return { ok: true, text: formatPruned(pruned, now, skipped, stateNote) };
+  return { ok: true, text: formatPruned(pruned, now, skippedChanged, skippedFailed, stateNote) };
 }

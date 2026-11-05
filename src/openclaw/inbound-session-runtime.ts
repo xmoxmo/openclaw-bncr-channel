@@ -125,6 +125,8 @@ export function deleteBncrSessionEntry(params: {
   agentId?: string;
   /** Keep the session transcript file and only remove the store entry. */
   archiveTranscript?: boolean;
+  expectedSessionId?: string | null;
+  expectedUpdatedAt?: number;
 }): ReturnType<DeleteSessionEntryFn> {
   return resolveRuntime().deleteSessionEntry(params);
 }

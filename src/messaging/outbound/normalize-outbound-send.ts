@@ -85,11 +85,12 @@ function buildBranchExtra(args: {
   hasMedia?: boolean;
   extra?: Record<string, unknown>;
   consumedType?: string;
+  suppressMediaArrays?: boolean;
 }): Record<string, unknown> | undefined {
   if (args.hasMedia) {
     return stripMediaSourceFieldsFromExtra(args.extra);
   }
-  const textExtra =
+  const textExtra: Record<string, unknown> | undefined =
     args.consumedType && args.extra
       ? { ...args.extra, type: args.consumedType }
       : args.consumedType
@@ -97,6 +98,10 @@ function buildBranchExtra(args: {
         : args.extra
           ? { ...args.extra }
           : undefined;
+  if (textExtra && args.suppressMediaArrays) {
+    delete textExtra.paths;
+    delete textExtra.mediaUrls;
+  }
   return textExtra && Object.keys(textExtra).length > 0 ? textExtra : undefined;
 }
 
@@ -138,9 +143,13 @@ export async function mergeMarkerAndHostFields(args: {
     ...(isPlainObject(args.hostExtra) ? { ...args.hostExtra } : {}),
     ...markerParams,
   };
-  if (args.forceDocument === true) merged.forceDocument = true;
-  if (args.gifPlayback === true) merged.gifPlayback = true;
-  if (args.silent === true) merged.silent = true;
+  // Direct host flags fill only missing controls. Marker values and hostExtra
+  // are the explicit higher-priority sources documented by this module.
+  if (args.forceDocument === true && merged.forceDocument === undefined) {
+    merged.forceDocument = true;
+  }
+  if (args.gifPlayback === true && merged.gifPlayback === undefined) merged.gifPlayback = true;
+  if (args.silent === true && merged.silent === undefined) merged.silent = true;
 
   // Marker wins over host force* when marker also set them (already via Object.assign order)
 
@@ -194,7 +203,7 @@ function resolveDispatchMediaSources(args: {
 
   const singleFromHost = hostMediaUrl || undefined;
   const multiFromHost = asTrimmedStringList(args.hostMediaUrls);
-  const mediaUrls = multiFromHost || markerPaths;
+  const mediaUrls = multiFromHost || (args.forceMedia === false ? undefined : markerPaths);
   let mediaUrl = singleFromHost || (useMarkerPath ? markerPath : undefined);
 
   // If mediaUrl is already in mediaUrls, drop single to avoid double-send.
@@ -276,6 +285,7 @@ export async function normalizeOutboundSend(
     hasMedia: media.hasMedia,
     extra: Object.keys(remaining).length > 0 ? remaining : undefined,
     consumedType,
+    suppressMediaArrays: forceMedia === false,
   });
 
   return {

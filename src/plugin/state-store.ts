@@ -955,12 +955,14 @@ export function createBncrStateStore(runtime: {
    * these rows back. JSON-only stores have nothing to purge here: the next
    * flush rewrites the JSON snapshot from the cleared maps.
    */
-  async function purgeSessionArtifacts(args: BncrPurgeSessionArtifactsArgs): Promise<void> {
+  async function purgeSessionArtifacts(args: BncrPurgeSessionArtifactsArgs): Promise<boolean> {
+    if (args.guard && !args.guard()) return false;
     const state = await resolveSqliteState(runtime.getStatePath());
-    if (!state) return;
+    if (!state) return !args.guard || args.guard();
     const mode = state.getStoreMode();
-    if (mode !== 'dual' && mode !== 'sqlite') return;
-    state.purgeSessionArtifacts(args);
+    if (mode !== 'dual' && mode !== 'sqlite') return !args.guard || args.guard();
+    const performed = state.purgeSessionArtifacts(args);
+    return performed && (!args.guard || args.guard());
   }
 
   function loadPersistedAccountTimestampMap(target: Map<string, number>, persisted: unknown): void {

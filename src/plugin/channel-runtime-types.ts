@@ -173,7 +173,7 @@ export type BncrHistoryMediaDownloadInput = {
 export type BncrHistoryMediaDownload = {
   mediaRef?: string;
   mediaUri: string;
-  hostPath: string;
+  localPath: string;
   contentType?: string;
   kind?: 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'unknown';
   fileName?: string;

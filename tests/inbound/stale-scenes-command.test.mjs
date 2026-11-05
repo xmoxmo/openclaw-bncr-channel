@@ -61,8 +61,8 @@ function buildDeps(args) {
       reads.push({ agentId, sessionKey });
       return sessions.get(`${agentId}|${sessionKey}`) ?? null;
     },
-    deleteSession: async ({ agentId, sessionKey, archiveTranscript }) => {
-      deleted.push({ agentId, sessionKey, archiveTranscript });
+    deleteSession: async (args) => {
+      deleted.push(args);
       return true;
     },
     purgeSessionState: async ({ sceneKey, agentId, sessionKey }) => {
@@ -232,6 +232,7 @@ test('prune: deletes the host session first and then the scene row', async () =>
       agentId: 'public',
       sessionKey: buildStaleSceneSessionKey(row, 'public'),
       archiveTranscript: true,
+      expectedUpdatedAt: NOW - 94 * DAY,
     },
   ]);
   assert.deepEqual(purged, [
@@ -242,6 +243,39 @@ test('prune: deletes the host session first and then the scene row', async () =>
     },
   ]);
   assert.equal(registry.size, 0);
+});
+
+test('prune: conditional delete carries the exact host session snapshot', async () => {
+  const row = groupRow();
+  const sessionKey = buildStaleSceneSessionKey(row, 'public');
+  const { deps, deleted } = buildDeps({
+    rows: [row],
+    nodes: {
+      [`public|${sessionKey}`]: {
+        exists: true,
+        sessionId: 'session-generation-1',
+        archivedAt: null,
+        updatedAt: NOW - 94 * DAY,
+        lastInteractionAt: NOW - 95 * DAY,
+      },
+    },
+  });
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: row.sceneKey, agentId: 'public', force: false },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(deleted, [
+    {
+      agentId: 'public',
+      sessionKey,
+      archiveTranscript: true,
+      expectedSessionId: 'session-generation-1',
+      expectedUpdatedAt: NOW - 94 * DAY,
+    },
+  ]);
 });
 
 test('prune: refuses an active scene unless force is given', async () => {
@@ -291,10 +325,11 @@ test('prune: unknown scene and unknown agent both answer instead of deleting', a
   assert.equal(registry.size, 1);
 });
 
-test('prune: a failing session delete still removes the row', async () => {
+test('prune: a failed session delete keeps the row for a safe retry', async () => {
   const row = groupRow();
   const registry = new Map();
   setSceneRecord(registry, row);
+  const purged = [];
   const result = await executeStaleScenesCommand({
     command: { action: 'prune', sceneKey: row.sceneKey, force: false },
     sceneRegistry: registry,
@@ -303,9 +338,63 @@ test('prune: a failing session delete still removes the row', async () => {
     deleteSession: async () => {
       throw new Error('store missing');
     },
+    purgeSessionState: async (args) => {
+      purged.push(args);
+    },
   });
   assert.equal(result.ok, true);
-  assert.equal(registry.size, 0);
+  assert.match(result.text, /Nothing pruned/);
+  assert.match(result.text, /Skipped \(delete failed\)/);
+  assert.doesNotMatch(result.text, /active again/);
+  assert.equal(registry.size, 1);
+  assert.equal(purged.length, 0);
+});
+
+test('prune: a conditional delete rejection keeps the scene row', async () => {
+  const row = groupRow();
+  const registry = new Map();
+  setSceneRecord(registry, row);
+  const purged = [];
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: row.sceneKey, force: false },
+    sceneRegistry: registry,
+    now: () => NOW,
+    readSessionUpdatedAt: async () => NOW - 94 * DAY,
+    deleteSession: async () => false,
+    purgeSessionState: async (args) => {
+      purged.push(args);
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Nothing pruned/);
+  assert.match(result.text, /Skipped \(active again\)/);
+  assert.equal(registry.size, 1);
+  assert.equal(purged.length, 0);
+});
+
+test('prune: a scene revived during host delete is not purged', async () => {
+  const row = groupRow();
+  const registry = new Map();
+  setSceneRecord(registry, row);
+  let purges = 0;
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: row.sceneKey, agentId: 'public', force: false },
+    sceneRegistry: registry,
+    now: () => NOW,
+    readSessionUpdatedAt: async () => NOW - 94 * DAY,
+    deleteSession: async () => {
+      setSceneRecord(registry, { ...row, lastSeenAt: NOW });
+      return true;
+    },
+    purgeSessionState: async () => {
+      purges += 1;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Skipped \(active again\)/);
+  assert.equal(purges, 0, 'a scene that woke during delete keeps its bridge state');
+  assert.equal(registry.size, 1);
 });
 
 test('sibling: another platform on the same group is marked, and filters split the list', async () => {
@@ -460,6 +549,7 @@ test('prune of an unowned row purges by scene without a session key', async () =
   setSceneRecord(registry, row);
   const deleted = [];
   const purged = [];
+  let guardAtPurge;
   const result = await executeStaleScenesCommand({
     command: { action: 'prune', sceneKey: row.sceneKey, force: false },
     sceneRegistry: registry,
@@ -469,12 +559,14 @@ test('prune of an unowned row purges by scene without a session key', async () =
       deleted.push(args);
       return true;
     },
-    purgeSessionState: async (args) => {
+    purgeSessionState: async ({ assertCurrent, ...args }) => {
+      guardAtPurge = assertCurrent?.();
       purged.push(args);
     },
   });
   assert.equal(result.ok, true);
   assert.equal(deleted.length, 0);
+  assert.equal(guardAtPurge, true);
   assert.deepEqual(purged, [{ sceneKey: row.sceneKey, agentId: '', sessionKey: null }]);
   assert.equal(registry.size, 0);
 });
@@ -546,6 +638,74 @@ test('prune refuses while session activity cannot be read', async () => {
   assert.match(result.text, /session activity could not be read/);
   assert.match(result.text, /session=unreadable \(unknown\)/);
   assert.equal(deleted.length, 0);
+  assert.equal(registry.size, 1);
+});
+
+test('prune refuses an unknown session without a conditional-delete guard', async () => {
+  const row = groupRow();
+  const registry = new Map();
+  setSceneRecord(registry, row);
+  const deleted = [];
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: row.sceneKey, agentId: 'public', force: false },
+    sceneRegistry: registry,
+    now: () => NOW,
+    readSessionNode: async () => undefined,
+    readSessionUpdatedAt: async () => null,
+    deleteSession: async (args) => {
+      deleted.push(args);
+      return true;
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.text, /session activity could not be read/);
+  assert.equal(deleted.length, 0);
+  assert.equal(registry.size, 1);
+});
+
+test('prune force still permits an explicitly forced unknown delete', async () => {
+  const row = groupRow();
+  const registry = new Map();
+  setSceneRecord(registry, row);
+  const deleted = [];
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: row.sceneKey, agentId: 'public', force: true },
+    sceneRegistry: registry,
+    now: () => NOW,
+    readSessionNode: async () => undefined,
+    readSessionUpdatedAt: async () => null,
+    deleteSession: async (args) => {
+      deleted.push(args);
+      return true;
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Pruned 1 scene row/);
+  assert.equal(deleted.length, 1);
+  assert.equal(deleted[0].expectedSessionId, undefined);
+  assert.equal(deleted[0].expectedUpdatedAt, undefined);
+  assert.equal(registry.size, 0);
+});
+
+test('prune gives bridge-state purge the current-scene guard', async () => {
+  const row = groupRow();
+  const registry = new Map();
+  setSceneRecord(registry, row);
+  const checks = [];
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune', sceneKey: row.sceneKey, agentId: 'public', force: false },
+    sceneRegistry: registry,
+    now: () => NOW,
+    readSessionUpdatedAt: async () => NOW - 94 * DAY,
+    deleteSession: async () => true,
+    purgeSessionState: async ({ assertCurrent }) => {
+      checks.push(assertCurrent?.());
+      setSceneRecord(registry, { ...row, lastSeenAt: NOW });
+      checks.push(assertCurrent?.());
+    },
+  });
+  assert.deepEqual(checks, [true, false]);
+  assert.match(result.text, /Skipped \(active again\)/);
   assert.equal(registry.size, 1);
 });
 
@@ -827,7 +987,7 @@ test('prune: a row whose host session is gone is prunable without force', async 
   });
   assert.equal(result.ok, true);
   assert.match(result.text, /Pruned 1 scene row/);
-  assert.equal(deleted.length, 1);
+  assert.equal(deleted.length, 0, 'no host delete call when the session is already missing');
   assert.equal(registry.size, 0);
 });
 
@@ -969,6 +1129,42 @@ test('sibling: an unreadable sibling session is not evidence the chat moved ther
   assert.doesNotMatch(swapped.text, /GewePlus:90000000001/);
 });
 
+test('sibling: a store-only write does not count as recent chat activity', async () => {
+  const dead = groupRow({ sceneKey: 'GewePlus:90000000002', groupId: '90000000002' });
+  const sibling = groupRow({
+    sceneKey: 'GolemPlus:90000000002',
+    platform: 'GolemPlus',
+    groupId: '90000000002',
+    lastSeenAt: NOW - 200 * DAY,
+  });
+  const { deps } = buildDeps({
+    rows: [dead, sibling],
+    nodes: {
+      [`public|${buildStaleSceneSessionKey(dead, 'public')}`]: {
+        exists: true,
+        sessionId: 'dead-session',
+        archivedAt: null,
+        updatedAt: NOW - 200 * DAY,
+        lastInteractionAt: NOW - 200 * DAY,
+      },
+      [`public|${buildStaleSceneSessionKey(sibling, 'public')}`]: {
+        exists: true,
+        sessionId: 'sibling-session',
+        archivedAt: null,
+        // A label or maintenance write is recent; the last chat was not.
+        updatedAt: NOW - 60 * 1000,
+        lastInteractionAt: NOW - 200 * DAY,
+      },
+    },
+  });
+
+  const swapped = await executeStaleScenesCommand({
+    command: { action: 'list', filter: 'swapped' },
+    ...deps,
+  });
+  assert.doesNotMatch(swapped.text, /GewePlus:90000000002/);
+});
+
 test('list: an empty registry says there are no scene rows yet', async () => {
   const { deps } = buildDeps({ rows: [] });
   const empty = await executeStaleScenesCommand({
@@ -1066,15 +1262,11 @@ test('the 180d listing is exactly what the 180d batch would delete', async () =>
     clearClientState: async () => ({ ok: true, cleared: 2 }),
   });
   assert.match(pruned.text, /Deleted 2 scene row\(s\)/);
-  // One delete per scene row, and the live-but-anomalous chat is untouched.
-  assert.equal(deleted.length, 2);
-  assert.deepEqual(
-    deleted.map((item) => item.sessionKey).sort(),
-    [
-      buildStaleSceneSessionKey(quietAlive, 'public'),
-      buildStaleSceneSessionKey(quietGone, 'orion'),
-    ].sort(),
-  );
+  // Only the live session needs a host delete; the missing one has no entry.
+  assert.equal(deleted.length, 1);
+  assert.deepEqual(deleted.map((item) => item.sessionKey).sort(), [
+    buildStaleSceneSessionKey(quietAlive, 'public'),
+  ]);
 });
 
 test('batch prune: deletes quiet rows, hands their scene keys to the client once', async () => {
@@ -1142,6 +1334,79 @@ test('batch prune: an unreadable session is skipped unless force is set', async 
   assert.equal(deleted.length, 1);
   assert.match(forced.text, /Deleted 1 scene row/);
   void row;
+});
+
+test('batch prune: a fresh unreadable row is not reported as skipped work', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 60 * 1000 });
+  const { deps } = buildDeps({ rows: [row] });
+  deps.readSessionNode = async () => undefined;
+  deps.readSessionUpdatedAt = async () => undefined;
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.doesNotMatch(result.text, /session unreadable/);
+});
+
+test('batch prune: an unguarded unknown session is skipped without a host delete', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
+  const { deps, registry, deleted } = buildDeps({ rows: [row] });
+  deps.readSessionNode = async () => undefined;
+  deps.readSessionUpdatedAt = async () => null;
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.text, /1 row\(s\) skipped: session unreadable/);
+  assert.equal(deleted.length, 0);
+  assert.equal(registry.size, 1);
+});
+
+test('batch prune: a conditional delete rejection keeps that scene row', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
+  const { deps, registry } = buildDeps({ rows: [row] });
+  deps.readSessionUpdatedAt = async () => NOW - 401 * DAY;
+  deps.deleteSession = async () => false;
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Nothing pruned/);
+  assert.match(result.text, /Skipped \(active again\)/);
+  assert.equal(registry.size, 1);
+});
+
+test('batch prune: a delete failure is reported separately and keeps bridge state', async () => {
+  const row = groupRow({ lastSeenAt: NOW - 400 * DAY });
+  const { deps, registry } = buildDeps({ rows: [row] });
+  let purges = 0;
+  deps.readSessionUpdatedAt = async () => NOW - 401 * DAY;
+  deps.deleteSession = async () => {
+    throw new Error('store unavailable');
+  };
+  deps.purgeSessionState = async () => {
+    purges += 1;
+  };
+
+  const result = await executeStaleScenesCommand({
+    command: { action: 'prune-batch', days: 180, force: false },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Skipped \(delete failed\)/);
+  assert.doesNotMatch(result.text, /active again/);
+  assert.equal(purges, 0);
+  assert.equal(registry.size, 1);
 });
 
 test('batch prune: a scene another agent still uses keeps its client gate state', async () => {

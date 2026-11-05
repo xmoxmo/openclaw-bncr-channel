@@ -136,7 +136,7 @@ export function createBncrHistoryMediaToolFactory(args: {
                 label: downloaded.mediaRef
                   ? `BNCR media ${downloaded.mediaRef}`
                   : 'BNCR historical media',
-                path: downloaded.hostPath,
+                path: downloaded.localPath,
                 details,
               });
             }

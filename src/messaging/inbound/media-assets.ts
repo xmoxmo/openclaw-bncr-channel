@@ -175,9 +175,9 @@ async function writeBncrMaterializedMedia(args: {
   contentType?: string;
   fileName?: string;
   contentDiscriminator?: string;
-  write: (hostPath: string) => Promise<void>;
+  write: (localPath: string) => Promise<void>;
   assertCurrent?: () => void;
-}): Promise<{ mediaUri: string; hostPath: string }> {
+}): Promise<{ mediaUri: string; localPath: string }> {
   const extension =
     extensionForOpenClawMime(args.contentType || '') ||
     path.extname(args.fileName || '').replace(/[^a-zA-Z0-9.]/g, '');
@@ -200,20 +200,20 @@ async function writeBncrMaterializedMedia(args: {
   if (!isPathInsideRoot(resolvedTargetDir, resolvedWorkspaceDir)) {
     throw new Error('media output directory is outside the agent workspace');
   }
-  const hostPath = path.join(resolvedTargetDir, fileName);
-  const temporaryPath = `${hostPath}.${randomUUID()}.tmp`;
+  const localPath = path.join(resolvedTargetDir, fileName);
+  const temporaryPath = `${localPath}.${randomUUID()}.tmp`;
   try {
     args.assertCurrent?.();
     await args.write(temporaryPath);
     args.assertCurrent?.();
-    await fs.rename(temporaryPath, hostPath);
+    await fs.rename(temporaryPath, localPath);
   } catch (error) {
     await fs.rm(temporaryPath, { force: true }).catch(() => {});
     throw error;
   }
   return {
     mediaUri: `media://inbound/${encodeURIComponent(fileName)}`,
-    hostPath,
+    localPath,
   };
 }
 
@@ -224,11 +224,11 @@ export async function materializeBncrMediaBuffer(args: {
   contentType?: string;
   fileName?: string;
   assertCurrent?: () => void;
-}): Promise<{ mediaUri: string; hostPath: string }> {
+}): Promise<{ mediaUri: string; localPath: string }> {
   const contentDigest = createHash('sha256').update(args.buffer).digest('hex').slice(0, 16);
   return writeBncrMaterializedMedia({
     ...args,
     contentDiscriminator: contentDigest,
-    write: (hostPath) => fs.writeFile(hostPath, args.buffer),
+    write: (localPath) => fs.writeFile(localPath, args.buffer),
   });
 }

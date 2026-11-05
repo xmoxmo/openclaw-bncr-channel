@@ -858,6 +858,7 @@ test('executeSceneAdminCommand handles history commands', () => {
   );
   assert.match(HISTORY_HELP_TEXT, /\/bncr history-limit \[<number>\|clear\]/);
   assert.match(HISTORY_HELP_TEXT, /\/bncr history-force \[on\|off\|clear\]/);
+  assert.match(HISTORY_HELP_TEXT, /私聊非管理员只改自己/);
 
   // history-limit-get returns current value
   assert.deepEqual(
@@ -1307,6 +1308,33 @@ test('executeSceneAdminCommand: non-admin cannot change the global download defa
   assert.equal(sceneRegistry.size, 0);
 });
 
+test('executeSceneAdminCommand: non-admin can read the global download default', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: '__global__',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'bncr',
+    downloadMedia: true,
+    lastSeenAt: 1,
+  });
+  const result = executeSceneAdminCommand({
+    parsed: { isAdmin: false, userId: '10001', peer: { kind: 'direct' }, platform: 'tgBot' },
+    command: { kind: 'download-media-global-get' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 5,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    text: 'Global default download remote media is on.',
+  });
+});
+
 test('executeSceneAdminCommand: non-admin still manages the per-chat download switch', () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {
@@ -1351,6 +1379,107 @@ test('executeSceneAdminCommand: non-admin still manages the per-chat download sw
   });
   assert.equal(other.ok, false);
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:20002', 'public'), undefined);
+});
+
+test('executeSceneAdminCommand: non-admin self-admin never fans out to another agent', () => {
+  const sceneRegistry = new Map();
+  for (const agentId of ['public', 'orion']) {
+    setSceneRecord(sceneRegistry, {
+      sceneKey: 'tgBot:10001',
+      kind: 'direct',
+      status: 'allowed',
+      platform: 'tgBot',
+      userId: '10001',
+      agentId,
+      approvedAt: 1,
+      downloadMedia: false,
+      lastSeenAt: 1,
+    });
+  }
+
+  const result = executeSceneAdminCommand({
+    parsed: {
+      isAdmin: false,
+      userId: '10001',
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+    },
+    command: { kind: 'download-media-set', sceneKey: 'tgBot:10001', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.downloadMedia, true);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'orion')?.downloadMedia, false);
+});
+
+test('executeSceneAdminCommand: non-admin self-admin may update a legacy unowned row', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    downloadMedia: false,
+    lastSeenAt: 1,
+  });
+
+  const result = executeSceneAdminCommand({
+    parsed: {
+      isAdmin: false,
+      userId: '10001',
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+    },
+    command: { kind: 'download-media-set', sceneKey: 'tgBot:10001', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.downloadMedia, true);
+});
+
+test('executeSceneAdminCommand: self-admin flag cannot unlock admission commands', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    agentId: 'public',
+    lastSeenAt: 1,
+  });
+
+  const result = executeSceneAdminCommand({
+    parsed: {
+      isAdmin: false,
+      userId: '10001',
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+    },
+    command: { kind: 'allow', sceneKey: 'tgBot:10001' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+
+  assert.deepEqual(result, { ok: false, text: 'Admin permission required.' });
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.status, 'pending');
 });
 
 test('a numeric agent id is a normal agent, and an unknown one gets the shared error', () => {

@@ -114,6 +114,10 @@ export function parseSessionCleanupCommand(command: NativeCommand): ParsedSessio
 /** One host session row, already reduced to the fields cleanup needs. */
 export type BncrSessionActivity = {
   sessionKey: string;
+  /** Host session generation used for conditional deletion. */
+  sessionId: string | null;
+  /** Raw store-write timestamp used as the conditional-delete guard. */
+  updatedAt: number | null;
   /**
    * Last chat activity. Falls back to the store write time, which only means
    * "something wrote this row" — a label patch or a meta refresh, not a message.
@@ -131,8 +135,8 @@ export type SessionCleanupDeps = {
   agentIds: readonly string[];
   /** `undefined` means the store for that agent could not be read. */
   listSessions: (agentId: string) => Promise<readonly BncrSessionActivity[] | undefined>;
-  /** Fresh read of one entry, used to re-check freshness right before deleting. */
-  readSession?: (args: {
+  /** Fresh read of one entry; prune is fail-closed when this is unavailable. */
+  readSession: (args: {
     agentId: string;
     sessionKey: string;
   }) => Promise<BncrSessionActivity | undefined>;
@@ -141,6 +145,8 @@ export type SessionCleanupDeps = {
     agentId: string;
     sessionKey: string;
     archiveTranscript?: boolean;
+    expectedSessionId?: string | null;
+    expectedUpdatedAt?: number;
   }) => Promise<boolean>;
 };
 
@@ -359,35 +365,41 @@ async function pruneBatch(
   for (const row of rows.slice(0, BNCR_SESSION_CLEANUP_MAX_BATCH)) {
     // Re-read right before deleting: a message that landed since the listing
     // must keep its conversation.
-    if (deps.readSession) {
-      let current: BncrSessionActivity | undefined;
-      try {
-        current = await deps.readSession({
-          agentId: row.agentId,
-          sessionKey: row.sessionKey,
-        });
-      } catch {
-        revived.push(`${row.sceneKey} (unreadable)`);
-        continue;
-      }
-      if (!current) {
-        alreadyGone += 1;
-        continue;
-      }
-      const currentAge = ageInDays(current.lastActivityAt, now);
-      if (currentAge == null || currentAge < days) {
-        revived.push(`${row.sceneKey}/${row.agentId}`);
-        continue;
-      }
+    let current: BncrSessionActivity | undefined;
+    try {
+      current = await deps.readSession({
+        agentId: row.agentId,
+        sessionKey: row.sessionKey,
+      });
+    } catch {
+      revived.push(`${row.sceneKey} (unreadable)`);
+      continue;
+    }
+    if (!current) {
+      alreadyGone += 1;
+      continue;
+    }
+    const expectedSessionId = current.sessionId;
+    const expectedUpdatedAt = current.updatedAt ?? undefined;
+    const currentAge = ageInDays(current.lastActivityAt, now);
+    if (currentAge == null || currentAge < days) {
+      revived.push(`${row.sceneKey}/${row.agentId}`);
+      continue;
     }
     try {
       // Archive the transcript: the conversation stays recoverable on disk while
       // the sidebar entry disappears.
-      await deps.deleteSession({
+      const deletedNow = await deps.deleteSession({
         agentId: row.agentId,
         sessionKey: row.sessionKey,
         archiveTranscript: true,
+        expectedSessionId: expectedSessionId ?? null,
+        ...(expectedUpdatedAt != null ? { expectedUpdatedAt } : {}),
       });
+      if (!deletedNow) {
+        revived.push(`${row.sceneKey}/${row.agentId} (changed during delete)`);
+        continue;
+      }
       deleted.push(row);
     } catch {
       // A failed delete must not abort the batch; the row is reported instead.
@@ -400,8 +412,8 @@ async function pruneBatch(
 /**
  * Execute /bncr sessions.
  *
- * Operator driven only: nothing on the inbound path calls this, so a sweep can
- * never race a live message into losing its conversation.
+ * Operator driven only. The fresh host snapshot is handed to deleteSession so
+ * the host can reject a conversation that changed after the freshness check.
  */
 export async function executeSessionCleanupCommand(
   args: { command: SessionCleanupCommand } & SessionCleanupDeps,
@@ -433,6 +445,13 @@ export async function executeSessionCleanupCommand(
     };
   }
 
+  if (typeof deps.readSession !== 'function') {
+    return {
+      ok: false,
+      text: 'Cannot prune sessions: a fresh session read is unavailable.',
+    };
+  }
+
   const { deleted, revived, alreadyGone } = await pruneBatch(deps, rows, command.days);
   const lines: string[] = ['🧹 Session cleanup'];
   lines.push(
@@ -447,7 +466,7 @@ export async function executeSessionCleanupCommand(
     lines.push('', 'Scene rows kept: approval, mode, name and group are unchanged.');
   }
   if (revived.length > 0) {
-    lines.push('', `Skipped (active again or unreadable): ${revived.join(', ')}`);
+    lines.push('', `Skipped (active, unreadable, or delete failed): ${revived.join(', ')}`);
   }
   const remaining = rows.length - deleted.length - alreadyGone - revived.length;
   if (remaining > 0) {

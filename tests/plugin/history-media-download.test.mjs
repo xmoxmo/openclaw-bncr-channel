@@ -86,10 +86,10 @@ test('bncr_download_media downloads an explicit URL into the calling agent works
     );
 
     assert.equal(downloads, 1);
-    assert.equal((await readFile(downloaded.hostPath)).toString(), 'history-image');
+    assert.equal((await readFile(downloaded.localPath)).toString(), 'history-image');
     assert.equal(downloaded.mediaRef, 'bncr-media:history-download-1');
     assert.match(downloaded.mediaUri, /^media:\/\/inbound\//);
-    assert.match(downloaded.hostPath, /workspaces\/orion\/media\/inbound\//);
+    assert.match(downloaded.localPath, /workspaces\/orion\/media\/inbound\//);
     assert.equal(downloaded.contentType, 'image/png');
     assert.equal(downloaded.sizeBytes, 13);
   } finally {
@@ -125,8 +125,8 @@ test('bncr_download_media copies a managed local source and preserves metadata',
       }),
     );
 
-    assert.equal((await readFile(downloaded.hostPath)).toString(), 'pdf-bytes');
-    assert.match(downloaded.hostPath, /workspaces\/orion-2\/media\/inbound\//);
+    assert.equal((await readFile(downloaded.localPath)).toString(), 'pdf-bytes');
+    assert.match(downloaded.localPath, /workspaces\/orion-2\/media\/inbound\//);
     assert.equal(downloaded.contentType, 'application/pdf');
     assert.equal(downloaded.fileName, 'report.pdf');
   } finally {
@@ -161,7 +161,7 @@ test('bncr_download_media atomically replaces a pre-existing workspace symlink',
     assert.equal((await readFile(outsidePath)).toString(), 'must-not-change');
     assert.equal((await readFile(targetPath)).toString(), 'safe-image');
     assert.equal((await lstat(targetPath)).isSymbolicLink(), false);
-    assert.equal(downloaded.hostPath, targetPath);
+    assert.equal(downloaded.localPath, targetPath);
   } finally {
     await mediaStorage.restore();
   }
@@ -435,9 +435,9 @@ test('bncr_download_media keeps concurrent writes with the same mediaRef isolate
       ),
     ]);
 
-    assert.notEqual(first.hostPath, second.hostPath);
-    assert.equal((await readFile(first.hostPath)).toString(), 'first-image');
-    assert.equal((await readFile(second.hostPath)).toString(), 'second-image');
+    assert.notEqual(first.localPath, second.localPath);
+    assert.equal((await readFile(first.localPath)).toString(), 'first-image');
+    assert.equal((await readFile(second.localPath)).toString(), 'second-image');
   } finally {
     await mediaStorage.restore();
   }

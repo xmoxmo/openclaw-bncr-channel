@@ -164,6 +164,29 @@ test('[BncrParam] ismedia:false does not force remote URL to media', async () =>
   assert.equal(r.extra?.path, 'tests/media/test_img.png');
 });
 
+test('[BncrParam] ismedia:false suppresses marker path arrays in both media and extra', async () => {
+  const r = await n({
+    text: '[BncrParam:{"ismedia":false,"paths":["tests/media/a.jpg","tests/media/b.jpg"],"mediaUrls":["tests/media/c.jpg"]}] text',
+  });
+  assert.equal(r.hasMedia, false);
+  assert.equal(r.mediaUrl, undefined);
+  assert.equal(r.mediaUrls, undefined);
+  assert.equal(r.extra?.paths, undefined);
+  assert.equal(r.extra?.mediaUrls, undefined);
+});
+
+test('[BncrParam] marker false values override direct host flags', async () => {
+  const r = await n({
+    text: '[BncrParam:{"forceDocument":false,"gifPlayback":false,"silent":false}] text',
+    forceDocument: true,
+    gifPlayback: true,
+    silent: true,
+  });
+  assert.equal(r.extra?.forceDocument, false);
+  assert.equal(r.extra?.gifPlayback, false);
+  assert.equal(r.extra?.silent, false);
+});
+
 // 3d. downloadMedia tri-state
 test('[BncrParam] downloadMedia:true overrides undefined', async () => {
   const r = await n({

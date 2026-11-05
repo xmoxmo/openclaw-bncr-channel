@@ -63,7 +63,7 @@ test('history media tool passes the explicit source contract and trusted turn id
         return {
           mediaRef: args.mediaRef,
           mediaUri: 'media://inbound/history.pdf',
-          hostPath: '/host/only/history.pdf',
+          localPath: '/host/only/history.pdf',
           contentType: args.contentType,
           fileName: args.fileName,
           sizeBytes: 42,
@@ -122,7 +122,7 @@ test('history media tool returns image media as image content', async () => {
         return {
           mediaRef: args.mediaRef,
           mediaUri: 'media://inbound/history.png',
-          hostPath: imagePath,
+          localPath: imagePath,
           contentType: 'image/png',
           fileName: 'history.png',
         };

@@ -76,6 +76,8 @@ export type BncrPurgeSessionArtifactsArgs = {
   historyKeys?: readonly string[];
   bufferKeys?: readonly string[];
   sessionKeys?: readonly string[];
+  /** Rechecked inside the write transaction so a revived scene is left untouched. */
+  guard?: () => boolean;
 };
 
 export type BncrHistoryShardRow = {
@@ -156,7 +158,7 @@ export type BncrSqliteStateDatabase = {
     deadLetter: OutboxEntry[],
     scope?: { agentId?: string | null },
   ) => void;
-  purgeSessionArtifacts: (args: BncrPurgeSessionArtifactsArgs) => void;
+  purgeSessionArtifacts: (args: BncrPurgeSessionArtifactsArgs) => boolean;
   createHistoryShard: (input: BncrHistoryShardCreateInput) => BncrHistoryShardCreateResult;
   markHistoryShardProcessing: (shardId: number, owner?: string) => boolean;
   markHistoryShardFailed: (
@@ -998,8 +1000,9 @@ function replaceControlState(
     }
 
     // Scenes are identified per agent: two agents may watch the same chat, so the
-    // row identity is (agent_id, scene_key). A conflicting row of the same agent is
-    // rewritten in place (self-healing); foreign rows cannot absorb this flush.
+    // row identity is (agent_id, scene_key). Explicit cross-agent fan-out is
+    // intentional for shared scenes; newer snapshots may update a foreign row,
+    // while an older snapshot loses to the existing last_seen_at value.
     const insertScene = db.prepare(
       `INSERT INTO scenes (
          scene_key, kind, status, platform, user_id, user_name, group_id, group_name,
@@ -1917,15 +1920,20 @@ function purgeSessionArtifactsInDb(
   db: DatabaseSync,
   args: BncrPurgeSessionArtifactsArgs,
   now: () => number,
-): void {
+): boolean {
   const inputHistoryKeys = normalizeArtifactKeys(args.historyKeys);
   const inputBufferKeys = normalizeArtifactKeys(args.bufferKeys);
   const sessionKeys = normalizeArtifactKeys(args.sessionKeys);
   if (inputHistoryKeys.length === 0 && inputBufferKeys.length === 0 && sessionKeys.length === 0) {
-    return;
+    return true;
   }
   const timestamp = now();
+  let performed = true;
   runWriteTransaction(db, () => {
+    if (args.guard && !args.guard()) {
+      performed = false;
+      return;
+    }
     const historyKeySet = new Set(inputHistoryKeys);
     const bufferKeySet = new Set(inputBufferKeys);
     if (sessionKeys.length > 0) {
@@ -2025,6 +2033,7 @@ function purgeSessionArtifactsInDb(
       ).run(String(nextRevision), timestamp);
     }
   });
+  return performed;
 }
 
 function loadOutboundState(db: DatabaseSync, agentId?: string | null): BncrSqliteOutboundState {
@@ -3132,7 +3141,7 @@ export function createBncrSqliteStateDatabase(
     purgeSessionArtifacts: (args) => {
       const mode = getStoreMode();
       assertWritable(mode);
-      purgeSessionArtifactsInDb(db, args, now);
+      return purgeSessionArtifactsInDb(db, args, now);
     },
     createHistoryShard,
     markHistoryShardProcessing,

@@ -49,21 +49,28 @@ function buildDeps(args = {}) {
     bucket.push(entry);
     stored.set(entry.agentId, bucket);
   }
+  const toActivity = (entry) => ({
+    sessionKey: entry.sessionKey,
+    ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+    ...(entry.updatedAt !== undefined ? { updatedAt: entry.updatedAt } : {}),
+    lastActivityAt: entry.lastActivityAt,
+    ...(entry.hasInteractionAt === false ? { hasInteractionAt: false } : {}),
+    archivedAt: entry.archivedAt ?? null,
+  });
   const deps = {
     now: () => NOW,
     agentIds: args.agentIds ?? ['orion', 'public'],
     sceneRegistry: registry,
     listSessions: async (agentId) => {
       if ((args.unreadable ?? []).includes(agentId)) return undefined;
-      return (stored.get(agentId) ?? []).map((entry) => ({
-        sessionKey: entry.sessionKey,
-        lastActivityAt: entry.lastActivityAt,
-        ...(entry.hasInteractionAt === false ? { hasInteractionAt: false } : {}),
-        archivedAt: entry.archivedAt ?? null,
-      }));
+      return (stored.get(agentId) ?? []).map(toActivity);
     },
-    deleteSession: async ({ agentId, sessionKey, archiveTranscript }) => {
-      deleted.push({ agentId, sessionKey, archiveTranscript });
+    readSession: async ({ agentId, sessionKey }) => {
+      const entry = (stored.get(agentId) ?? []).find((item) => item.sessionKey === sessionKey);
+      return entry ? toActivity(entry) : undefined;
+    },
+    deleteSession: async (args) => {
+      deleted.push(args);
       return true;
     },
   };
@@ -212,6 +219,107 @@ test('execute: prune re-reads the entry and skips one that woke up', async () =>
   });
   assert.equal(deleted.length, 1);
   assert.match(result.text, /skipped/);
+});
+
+test('execute: prune passes the fresh session generation and store timestamp to conditional delete', async () => {
+  const sessionKey = groupKey('orion', '-1001');
+  const { deps, deleted } = buildDeps({
+    sessions: [{ agentId: 'orion', sessionKey, lastActivityAt: NOW - 121 * DAY }],
+    readSession: async () => ({
+      sessionKey,
+      sessionId: 'session-generation-7',
+      updatedAt: NOW - 120 * DAY,
+      lastActivityAt: NOW - 121 * DAY,
+      archivedAt: null,
+    }),
+  });
+
+  const result = await executeSessionCleanupCommand({
+    command: { action: 'prune', days: 30 },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(deleted, [
+    {
+      agentId: 'orion',
+      sessionKey,
+      archiveTranscript: true,
+      expectedSessionId: 'session-generation-7',
+      expectedUpdatedAt: NOW - 120 * DAY,
+    },
+  ]);
+});
+
+test('execute: a conditional delete rejection keeps the session out of the deleted list', async () => {
+  const sessionKey = groupKey('orion', '-1001');
+  const { deps } = buildDeps({
+    sessions: [{ agentId: 'orion', sessionKey, lastActivityAt: NOW - 121 * DAY }],
+    readSession: async () => ({
+      sessionKey,
+      sessionId: 'session-generation-8',
+      updatedAt: NOW - 120 * DAY,
+      lastActivityAt: NOW - 121 * DAY,
+      archivedAt: null,
+    }),
+  });
+  deps.deleteSession = async () => false;
+
+  const result = await executeSessionCleanupCommand({
+    command: { action: 'prune', days: 30 },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Deleted 0 session\(s\)/);
+  assert.match(result.text, /changed during delete/);
+});
+
+test('execute: a null session generation is still passed as an exact-delete guard', async () => {
+  const sessionKey = groupKey('orion', '-1001');
+  const { deps, deleted } = buildDeps({
+    sessions: [{ agentId: 'orion', sessionKey, lastActivityAt: NOW - 121 * DAY }],
+    readSession: async () => ({
+      sessionKey,
+      sessionId: null,
+      updatedAt: NOW - 120 * DAY,
+      lastActivityAt: NOW - 121 * DAY,
+      archivedAt: null,
+    }),
+  });
+
+  const result = await executeSessionCleanupCommand({
+    command: { action: 'prune', days: 30 },
+    ...deps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(deleted, [
+    {
+      agentId: 'orion',
+      sessionKey,
+      archiveTranscript: true,
+      expectedSessionId: null,
+      expectedUpdatedAt: NOW - 120 * DAY,
+    },
+  ]);
+});
+
+test('execute: prune fails closed when fresh session reads are unavailable', async () => {
+  const sessionKey = groupKey('orion', '-1001');
+  const { deps, deleted } = buildDeps({
+    sessions: [{ agentId: 'orion', sessionKey, lastActivityAt: NOW - 121 * DAY }],
+  });
+  delete deps.readSession;
+
+  const result = await executeSessionCleanupCommand({
+    command: { action: 'prune', days: 30 },
+    ...deps,
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.text, /fresh session read is unavailable/);
+  assert.equal(deleted.length, 0);
 });
 
 test('execute: batch is capped and the remainder is announced', async () => {

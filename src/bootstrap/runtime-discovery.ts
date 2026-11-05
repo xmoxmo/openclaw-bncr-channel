@@ -27,26 +27,6 @@ export function resolveBncrPluginRoot(filePath: string) {
   }
 }
 
-function findExecutableOnPath(command: string): string {
-  const extensions =
-    process.platform === 'win32'
-      ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
-      : [''];
-  for (const entry of (process.env.PATH || '').split(path.delimiter)) {
-    const dir = entry.trim();
-    if (!dir) continue;
-    for (const extension of extensions) {
-      const candidate = path.join(dir, `${command}${extension.toLowerCase()}`);
-      try {
-        if (fs.existsSync(candidate)) return candidate;
-      } catch {
-        // keep scanning the remaining PATH entries
-      }
-    }
-  }
-  return '';
-}
-
 function resolveGlobalNodeModulesRoots(): string[] {
   let execPath = process.execPath;
   try {
@@ -72,6 +52,20 @@ function readOpenClawPackageName(pkgPath: string) {
     return typeof parsed?.name === 'string' ? parsed.name : '';
   } catch {
     return '';
+  }
+}
+
+function readOpenClawPackageMetadata(pkgPath: string): { name: string; version: string } | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
+    const version = typeof parsed.version === 'string' ? parsed.version.trim() : '';
+    return name && version ? { name, version } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -111,6 +105,15 @@ function findOpenClawPackageRoot(startPath: string) {
 }
 
 function collectOpenClawCandidates(pluginDir: string) {
+  // The running CLI is the strongest trust anchor. If it points into an
+  // OpenClaw package, repair only from that exact installation.
+  const runtimeCandidates = unique(
+    [process.argv[1] || '', process.execPath]
+      .map((candidate) => findOpenClawPackageRoot(candidate))
+      .filter(Boolean),
+  );
+  if (runtimeCandidates.length > 0) return runtimeCandidates;
+
   const directCandidates = [
     path.join(pluginDir, 'node_modules', 'openclaw'),
     path.join('/usr/lib/node_modules', 'openclaw'),
@@ -123,27 +126,13 @@ function collectOpenClawCandidates(pluginDir: string) {
     directCandidates.push(path.join(root, 'openclaw'));
   }
 
-  const nodePathEntries = (process.env.NODE_PATH || '')
-    .split(path.delimiter)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  for (const entry of nodePathEntries) {
-    directCandidates.push(path.join(entry, 'openclaw'));
-  }
-
-  const openclawBin = findExecutableOnPath('openclaw');
-  if (openclawBin) {
-    directCandidates.push(openclawBin);
-    directCandidates.push(path.dirname(openclawBin));
-  }
-
   const packageRoots = unique(
     directCandidates.map((candidate) => findOpenClawPackageRoot(candidate)).filter(Boolean),
   );
 
   return packageRoots.filter((candidate) => {
     const pkgJson = path.join(candidate, 'package.json');
-    return fs.existsSync(pkgJson) && readOpenClawPackageName(pkgJson) === 'openclaw';
+    return Boolean(readOpenClawPackageMetadata(pkgJson)?.name === 'openclaw');
   });
 }
 
@@ -161,22 +150,31 @@ function ensurePluginNodeModulesLink(pluginDir: string, targetRoot: string) {
   const linkPath = path.join(nodeModulesDir, 'openclaw');
   fs.mkdirSync(nodeModulesDir, { recursive: true });
 
+  let stat: fs.Stats;
   try {
-    const stat = fs.lstatSync(linkPath);
-    if (stat.isSymbolicLink()) {
-      const existingTarget = fs.realpathSync(linkPath);
-      const normalizedExisting = path.normalize(existingTarget);
-      const normalizedTarget = path.normalize(fs.realpathSync(targetRoot));
-      if (normalizedExisting === normalizedTarget) return;
-      fs.unlinkSync(linkPath);
-    } else {
-      return;
-    }
-  } catch {
-    // missing link is fine
+    stat = fs.lstatSync(linkPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== 'ENOENT') throw error;
+    fs.symlinkSync(targetRoot, linkPath, linkType as fs.symlink.Type);
+    return;
   }
 
-  fs.symlinkSync(targetRoot, linkPath, linkType as fs.symlink.Type);
+  if (!stat.isSymbolicLink()) return;
+
+  let existingTarget: string;
+  try {
+    existingTarget = fs.realpathSync(linkPath);
+  } catch {
+    const declaredTarget = fs.readlinkSync(linkPath);
+    throw new Error(
+      `refusing to replace broken existing OpenClaw symlink ${linkPath} -> ${declaredTarget}`,
+    );
+  }
+  const normalizedExisting = path.normalize(existingTarget);
+  const normalizedTarget = path.normalize(fs.realpathSync(targetRoot));
+  if (normalizedExisting === normalizedTarget) return;
+  throw new Error(`refusing to replace existing OpenClaw symlink ${linkPath} -> ${existingTarget}`);
 }
 
 export function resolveBncrRuntimeSourceDir(pluginDir: string) {
@@ -209,10 +207,10 @@ export function ensureBncrOpenClawSdkResolution(pluginDir: string, pluginRequire
 
   const suffix = candidates.length
     ? ` Tried candidates: ${candidates.join(', ')}.`
-    : ' No openclaw package root candidates were found from npm root, NODE_PATH, common global paths, or the openclaw binary path.';
+    : ' No trusted OpenClaw package root was found from the running CLI, plugin path, or global npm roots.';
   const extra = lastError ? ` Last repair error: ${lastError}.` : '';
   throw new Error(
     `bncr failed to resolve ${sdkCoreSpecifier} from ${pluginDir}.${suffix}${extra} ` +
-      `You can repair manually with: mkdir -p ${path.join(pluginDir, 'node_modules')} && ln -s "$(npm root -g)/openclaw" ${path.join(pluginDir, 'node_modules', 'openclaw')}`,
+      `Repair manually by inspecting ${path.join(pluginDir, 'node_modules', 'openclaw')}; if it is a stale bncr-owned link, remove it and recreate the symlink to "$(npm root -g)/openclaw".`,
   );
 }

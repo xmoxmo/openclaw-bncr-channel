@@ -805,21 +805,6 @@ function resolveBncrPluginRoot(filePath) {
     current = parent;
   }
 }
-function findExecutableOnPath(command) {
-  const extensions = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean) : [""];
-  for (const entry of (process.env.PATH || "").split(path.delimiter)) {
-    const dir = entry.trim();
-    if (!dir) continue;
-    for (const extension of extensions) {
-      const candidate = path.join(dir, `${command}${extension.toLowerCase()}`);
-      try {
-        if (fs.existsSync(candidate)) return candidate;
-      } catch {
-      }
-    }
-  }
-  return "";
-}
 function resolveGlobalNodeModulesRoots() {
   let execPath = process.execPath;
   try {
@@ -843,6 +828,16 @@ function readOpenClawPackageName(pkgPath) {
     return typeof parsed?.name === "string" ? parsed.name : "";
   } catch {
     return "";
+  }
+}
+function readOpenClawPackageMetadata(pkgPath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
+    const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
+    return name && version ? { name, version } : null;
+  } catch {
+    return null;
   }
 }
 function unique(items) {
@@ -877,6 +872,10 @@ function findOpenClawPackageRoot(startPath) {
   return "";
 }
 function collectOpenClawCandidates(pluginDir2) {
+  const runtimeCandidates = unique(
+    [process.argv[1] || "", process.execPath].map((candidate) => findOpenClawPackageRoot(candidate)).filter(Boolean)
+  );
+  if (runtimeCandidates.length > 0) return runtimeCandidates;
   const directCandidates = [
     path.join(pluginDir2, "node_modules", "openclaw"),
     path.join("/usr/lib/node_modules", "openclaw"),
@@ -887,21 +886,12 @@ function collectOpenClawCandidates(pluginDir2) {
   for (const root of resolveGlobalNodeModulesRoots()) {
     directCandidates.push(path.join(root, "openclaw"));
   }
-  const nodePathEntries = (process.env.NODE_PATH || "").split(path.delimiter).map((entry) => entry.trim()).filter(Boolean);
-  for (const entry of nodePathEntries) {
-    directCandidates.push(path.join(entry, "openclaw"));
-  }
-  const openclawBin = findExecutableOnPath("openclaw");
-  if (openclawBin) {
-    directCandidates.push(openclawBin);
-    directCandidates.push(path.dirname(openclawBin));
-  }
   const packageRoots = unique(
     directCandidates.map((candidate) => findOpenClawPackageRoot(candidate)).filter(Boolean)
   );
   return packageRoots.filter((candidate) => {
     const pkgJson = path.join(candidate, "package.json");
-    return fs.existsSync(pkgJson) && readOpenClawPackageName(pkgJson) === "openclaw";
+    return Boolean(readOpenClawPackageMetadata(pkgJson)?.name === "openclaw");
   });
 }
 function canResolveSdkCore(pluginRequire2) {
@@ -916,20 +906,29 @@ function ensurePluginNodeModulesLink(pluginDir2, targetRoot) {
   const nodeModulesDir = path.join(pluginDir2, "node_modules");
   const linkPath = path.join(nodeModulesDir, "openclaw");
   fs.mkdirSync(nodeModulesDir, { recursive: true });
+  let stat;
   try {
-    const stat = fs.lstatSync(linkPath);
-    if (stat.isSymbolicLink()) {
-      const existingTarget = fs.realpathSync(linkPath);
-      const normalizedExisting = path.normalize(existingTarget);
-      const normalizedTarget = path.normalize(fs.realpathSync(targetRoot));
-      if (normalizedExisting === normalizedTarget) return;
-      fs.unlinkSync(linkPath);
-    } else {
-      return;
-    }
-  } catch {
+    stat = fs.lstatSync(linkPath);
+  } catch (error) {
+    const code = error?.code;
+    if (code !== "ENOENT") throw error;
+    fs.symlinkSync(targetRoot, linkPath, linkType);
+    return;
   }
-  fs.symlinkSync(targetRoot, linkPath, linkType);
+  if (!stat.isSymbolicLink()) return;
+  let existingTarget;
+  try {
+    existingTarget = fs.realpathSync(linkPath);
+  } catch {
+    const declaredTarget = fs.readlinkSync(linkPath);
+    throw new Error(
+      `refusing to replace broken existing OpenClaw symlink ${linkPath} -> ${declaredTarget}`
+    );
+  }
+  const normalizedExisting = path.normalize(existingTarget);
+  const normalizedTarget = path.normalize(fs.realpathSync(targetRoot));
+  if (normalizedExisting === normalizedTarget) return;
+  throw new Error(`refusing to replace existing OpenClaw symlink ${linkPath} -> ${existingTarget}`);
 }
 function resolveBncrRuntimeSourceDir(pluginDir2) {
   const pluginRoot2 = resolveBncrPluginRoot(pluginDir2);
@@ -953,10 +952,10 @@ function ensureBncrOpenClawSdkResolution(pluginDir2, pluginRequire2) {
       lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     }
   }
-  const suffix = candidates.length ? ` Tried candidates: ${candidates.join(", ")}.` : " No openclaw package root candidates were found from npm root, NODE_PATH, common global paths, or the openclaw binary path.";
+  const suffix = candidates.length ? ` Tried candidates: ${candidates.join(", ")}.` : " No trusted OpenClaw package root was found from the running CLI, plugin path, or global npm roots.";
   const extra = lastError ? ` Last repair error: ${lastError}.` : "";
   throw new Error(
-    `bncr failed to resolve ${sdkCoreSpecifier} from ${pluginDir2}.${suffix}${extra} You can repair manually with: mkdir -p ${path.join(pluginDir2, "node_modules")} && ln -s "$(npm root -g)/openclaw" ${path.join(pluginDir2, "node_modules", "openclaw")}`
+    `bncr failed to resolve ${sdkCoreSpecifier} from ${pluginDir2}.${suffix}${extra} Repair manually by inspecting ${path.join(pluginDir2, "node_modules", "openclaw")}; if it is a stale bncr-owned link, remove it and recreate the symlink to "$(npm root -g)/openclaw".`
   );
 }
 
@@ -2010,7 +2009,7 @@ function createBncrHistoryMediaToolFactory(args) {
             if (downloaded.contentType?.startsWith("image/")) {
               return imageResultFromFile({
                 label: downloaded.mediaRef ? `BNCR media ${downloaded.mediaRef}` : "BNCR historical media",
-                path: downloaded.hostPath,
+                path: downloaded.localPath,
                 details
               });
             }

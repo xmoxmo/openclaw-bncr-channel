@@ -70,6 +70,18 @@ const DOWNLOAD_MEDIA_USAGE_TEXT =
 
 const GLOBAL_SCENE_KEY = '__global__';
 
+/** Self-service commands: own direct-chat writes plus read-only global media state. */
+const NON_ADMIN_SELF_ADMIN_KINDS = new Set<BncrSceneAdminCommand['kind']>([
+  'history-help',
+  'history-limit-get',
+  'history-limit-set',
+  'history-force-get',
+  'history-force-set',
+  'download-media-get',
+  'download-media-set',
+  'download-media-global-get',
+]);
+
 export const MODE_HELP_TEXT = [
   '💬 Bncr Group Reply Mode Configuration',
   '',
@@ -110,7 +122,8 @@ export const HISTORY_HELP_TEXT = [
   '    溢出时是否自动整理上下文；缺省 on，off 则直接丢掉最早的消息',
   '',
   'Format:',
-  '  • <agentId> — 只改盯这个场景的某个 agent；省略就是该场景下所有 agent',
+  '  • <agentId> — 管理员可指定任意 agent；非管理员只能指定自己',
+  '  • 省略 <agentId> — 管理员改该场景所有 agent；私聊非管理员只改自己',
   '  • <SceneId> — 平台:群id 或 平台:用户id；省略就是当前会话',
 ].join('\n');
 
@@ -551,6 +564,13 @@ export function executeSceneAdminCommand(args: {
     return { ok: false, text: ADMIN_REQUIRED_TEXT };
   }
 
+  // The command registry is the primary gate. Keep the same allow-list here as
+  // a second boundary so another caller cannot reuse the self-admin flag to
+  // reach admission, mode or registry-listing commands.
+  if (!parsed.isAdmin && allowNonAdminSelfAdmin && !NON_ADMIN_SELF_ADMIN_KINDS.has(command.kind)) {
+    return { ok: false, text: ADMIN_REQUIRED_TEXT };
+  }
+
   // Non-admin self-admin: enforce that sceneId targets only the caller's own session.
   if (allowNonAdminSelfAdmin && !parsed.isAdmin) {
     const currentSceneKey = resolveCurrentSceneKey(parsed);
@@ -646,10 +666,23 @@ export function executeSceneAdminCommand(args: {
   const resolveTargets = (targetSceneKey: string, agentId?: string) => {
     const rows = listSceneRows(sceneRegistry, targetSceneKey);
     const wanted = normalizeToken(agentId || '');
+    const selfAdminAgent = normalizeToken(sceneAgentId || '');
+    let scopedRows = rows;
+    if (!parsed.isAdmin && allowNonAdminSelfAdmin && selfAdminAgent) {
+      const ownRows = rows.filter((row) => normalizeToken(row.agentId || '') === selfAdminAgent);
+      // A legacy row has no owner. Scoped lookup treats it as the fallback for
+      // the serving agent, so self-admin settings must do the same. Never widen
+      // this fallback to a row owned by a different agent.
+      scopedRows = ownRows.length
+        ? ownRows
+        : rows.filter((row) => !normalizeToken(row.agentId || ''));
+    }
     return {
       rows,
       wanted,
-      targets: wanted ? rows.filter((row) => normalizeToken(row.agentId || '') === wanted) : rows,
+      targets: wanted
+        ? rows.filter((row) => normalizeToken(row.agentId || '') === wanted)
+        : scopedRows,
     };
   };
 
