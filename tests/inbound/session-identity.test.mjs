@@ -8,6 +8,7 @@ import {
   BNCR_DIRECT_SESSION_CATEGORY,
   formatBncrSceneLabel,
   resolveBncrSceneIdentity,
+  resolveBncrSceneName,
   resolveBncrSessionCategory,
   sanitizeBncrDisplayName,
 } from '../../src/messaging/inbound/session-identity.ts';
@@ -148,6 +149,26 @@ test('scene identity is shared across agent rows, newest field wins', () => {
     customName: '甲',
     category: 'Ops',
   });
+});
+
+test('stored scene names survive events that omit the platform name', () => {
+  const registry = new Map();
+  setSceneRecord(registry, groupRow({ agentId: 'orion', groupName: 'wind_logs' }));
+
+  const storedName = resolveBncrSceneName(registry, 'tgBot:-1001', 'orion', 'group');
+  assert.equal(storedName, 'wind_logs');
+  assert.equal(resolveBncrSceneName(registry, 'tgBot:-1001', 'public', 'group'), 'wind_logs');
+  assert.equal(resolveBncrSceneName(registry, 'tgBot:-1002', 'orion', 'group'), undefined);
+
+  const patch = buildBncrInboundSessionIdentityPatch({
+    channelId: 'bncr',
+    accountId: 'Primary',
+    chatType: 'group',
+    displayTo: 'Bncr:tgBot:-1001:0',
+    senderId: '9',
+    scene: { platform: 'tgBot', id: '-1001', name: storedName },
+  });
+  assert.equal(patch.label, 'tgBot · wind_logs · -1001');
 });
 
 test('direct chats default to 私聊 and groups clear to the host default', () => {

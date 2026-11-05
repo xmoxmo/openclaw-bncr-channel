@@ -138,6 +138,34 @@ export function resolveBncrSceneIdentity(
 }
 
 /**
+ * Resolve the platform-provided chat name stored on a scene row.
+ *
+ * Some bridge events omit the name even though the same scene has reported it
+ * before. Session labels must keep that known name instead of treating a
+ * transiently missing field as proof that the chat has no name.
+ */
+export function resolveBncrSceneName(
+  registry: ReadonlyMap<string, BncrSceneRecord>,
+  sceneKey: string,
+  agentId: string | null | undefined,
+  kind: 'direct' | 'group',
+): string | undefined {
+  const key = String(sceneKey ?? '').trim();
+  if (!key) return undefined;
+  const agent = String(agentId ?? '').trim();
+  let agentName = '';
+  let newest: { value: string; at: number } | null = null;
+  for (const record of registry.values()) {
+    if (String(record.sceneKey ?? '').trim() !== key) continue;
+    const value = String(kind === 'group' ? record.groupName : record.userName).trim();
+    if (agent && String(record.agentId ?? '').trim() === agent && value) agentName = value;
+    const at = Number.isFinite(record.lastSeenAt) ? record.lastSeenAt : 0;
+    if (value && (!newest || at >= newest.at)) newest = { value, at };
+  }
+  return agentName || newest?.value || undefined;
+}
+
+/**
  * A scene id is 平台:id. The platform half is ASCII by construction, which keeps
  * free-text names such as 项目:二期 from being mistaken for a target.
  */

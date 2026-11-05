@@ -29,7 +29,11 @@ import {
 } from './native-command.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import { runBncrReplyDispatchSerial } from './reply-dispatch-serial.ts';
-import { resolveBncrSceneIdentity, resolveBncrSessionCategory } from './session-identity.ts';
+import {
+  resolveBncrSceneIdentity,
+  resolveBncrSceneName,
+  resolveBncrSessionCategory,
+} from './session-identity.ts';
 import {
   buildBncrInboundSessionIdentityPatch,
   correctBncrInboundSessionLabel,
@@ -141,25 +145,40 @@ export async function runBncrInboundReplyDispatch(args: {
   const sceneIdentity = sceneRegistry
     ? resolveBncrSceneIdentity(sceneRegistry, sceneKey, resolution.resolvedRoute.agentId)
     : undefined;
+  const persistedSceneName = sceneRegistry
+    ? resolveBncrSceneName(
+        sceneRegistry,
+        sceneKey,
+        resolution.resolvedRoute.agentId,
+        resolution.chatType,
+      )
+    : undefined;
   // The sidebar group rides on the same session patch as the label, so a direct
   // chat is filed under 私聊 in the same atomic write that names it.
   const sceneCategory = sceneRegistry
     ? resolveBncrSessionCategory({ kind: resolution.chatType, identity: sceneIdentity })
     : undefined;
-  const sessionIdentityPatch = buildBncrInboundSessionIdentityPatch({
-    channelId,
-    accountId: resolution.accountId,
-    chatType: resolution.chatType,
-    displayTo: resolution.canonicalTo,
-    senderId: senderIdForContext,
-    category: sceneCategory,
-    scene: {
-      platform: parsed.platform,
-      id: resolution.chatType === 'group' ? parsed.groupId : parsed.userId,
-      name: resolution.chatType === 'group' ? parsed.groupName : parsed.userName,
-      ...(sceneIdentity?.customName ? { customName: sceneIdentity.customName } : {}),
-    },
-  });
+  // Internal history carriers exist to hand a backlog to the agent. They are
+  // not platform identity events, so they must not rewrite an existing session
+  // label or sidebar category with fields the synthetic carrier does not have.
+  const sessionIdentityPatch = silentHistoryFlush
+    ? null
+    : buildBncrInboundSessionIdentityPatch({
+        channelId,
+        accountId: resolution.accountId,
+        chatType: resolution.chatType,
+        displayTo: resolution.canonicalTo,
+        senderId: senderIdForContext,
+        category: sceneCategory,
+        scene: {
+          platform: parsed.platform,
+          id: resolution.chatType === 'group' ? parsed.groupId : parsed.userId,
+          name:
+            (resolution.chatType === 'group' ? parsed.groupName : parsed.userName) ||
+            persistedSceneName,
+          ...(sceneIdentity?.customName ? { customName: sceneIdentity.customName } : {}),
+        },
+      });
 
   const channelPolicy = resolveBncrChannelPolicy(cfg?.channels?.bncr || {});
   const pinnedMainDmOwner =
@@ -170,16 +189,18 @@ export async function runBncrInboundReplyDispatch(args: {
           normalizeEntry: (entry: string) => String(entry || '').trim(),
         })
       : null;
-  const updateLastRoute = buildBncrInboundRecordUpdateLastRoute({
-    channelId,
-    peerKind: peer.kind,
-    senderIdForContext,
-    accountId: resolution.accountId,
-    to: resolution.canonicalTo,
-    resolvedRoute: resolution.resolvedRoute,
-    sessionKey: resolution.dispatchSessionKey,
-    pinnedMainDmOwner,
-  });
+  const updateLastRoute = silentHistoryFlush
+    ? undefined
+    : buildBncrInboundRecordUpdateLastRoute({
+        channelId,
+        peerKind: peer.kind,
+        senderIdForContext,
+        accountId: resolution.accountId,
+        to: resolution.canonicalTo,
+        resolvedRoute: resolution.resolvedRoute,
+        sessionKey: resolution.dispatchSessionKey,
+        pinnedMainDmOwner,
+      });
   const isBncrNativeCommand =
     parseBncrNativeCommand(
       rawBody,
@@ -194,20 +215,22 @@ export async function runBncrInboundReplyDispatch(args: {
       : cfg;
 
   if (!shouldDispatch) {
-    await wrapBncrInboundRecordSessionLabelCorrection({
-      recordInboundSession: recordBncrInboundSession as (
-        ...args: unknown[]
-      ) => Promise<unknown> | unknown,
-      expectedPatch: sessionIdentityPatch,
-    })({
-      storePath,
-      sessionKey: resolution.resolvedRoute.sessionKey,
-      ctx: ctxPayload,
-      updateLastRoute,
-      onRecordError: (err: unknown) => {
-        emitBncrLogLine('warn', `[bncr] inbound record session failed: ${String(err)}`);
-      },
-    });
+    if (sessionIdentityPatch) {
+      await wrapBncrInboundRecordSessionLabelCorrection({
+        recordInboundSession: recordBncrInboundSession as (
+          ...args: unknown[]
+        ) => Promise<unknown> | unknown,
+        expectedPatch: sessionIdentityPatch,
+      })({
+        storePath,
+        sessionKey: resolution.resolvedRoute.sessionKey,
+        ctx: ctxPayload,
+        updateLastRoute,
+        onRecordError: (err: unknown) => {
+          emitBncrLogLine('warn', `[bncr] inbound record session failed: ${String(err)}`);
+        },
+      });
+    }
 
     const inboundAt = Date.now();
     setInboundActivity(resolution.accountId, inboundAt);
@@ -254,12 +277,14 @@ export async function runBncrInboundReplyDispatch(args: {
                 routeSessionKey: resolution.resolvedRoute.sessionKey,
                 storePath,
                 ctxPayload,
-                recordInboundSession: wrapBncrInboundRecordSessionLabelCorrection({
-                  recordInboundSession: recordBncrInboundSession as (
-                    ...args: unknown[]
-                  ) => Promise<unknown> | unknown,
-                  expectedPatch: sessionIdentityPatch,
-                }),
+                recordInboundSession: sessionIdentityPatch
+                  ? wrapBncrInboundRecordSessionLabelCorrection({
+                      recordInboundSession: recordBncrInboundSession as (
+                        ...args: unknown[]
+                      ) => Promise<unknown> | unknown,
+                      expectedPatch: sessionIdentityPatch,
+                    })
+                  : async () => {},
                 record: {
                   updateLastRoute,
                   onRecordError: (err: unknown) => {
@@ -279,11 +304,13 @@ export async function runBncrInboundReplyDispatch(args: {
                 },
                 runDispatch: async () => {
                   await sessionMetaBarrier.wait();
-                  await correctBncrInboundSessionLabel({
-                    storePath,
-                    sessionKey: dispatchSessionKey,
-                    expectedPatch: sessionIdentityPatch,
-                  });
+                  if (sessionIdentityPatch) {
+                    await correctBncrInboundSessionLabel({
+                      storePath,
+                      sessionKey: dispatchSessionKey,
+                      expectedPatch: sessionIdentityPatch,
+                    });
+                  }
                   return Promise.resolve(
                     dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
                       ctx: ctxPayload,
@@ -352,11 +379,13 @@ export async function runBncrInboundReplyDispatch(args: {
           to: resolution.canonicalTo,
           debugEnabled: cfg?.channels?.bncr?.debug?.verbose === true,
         });
-        await correctBncrInboundSessionLabel({
-          storePath,
-          sessionKey: dispatchSessionKey,
-          expectedPatch: sessionIdentityPatch,
-        });
+        if (sessionIdentityPatch) {
+          await correctBncrInboundSessionLabel({
+            storePath,
+            sessionKey: dispatchSessionKey,
+            expectedPatch: sessionIdentityPatch,
+          });
+        }
       });
 
     if (isStopCommand) {

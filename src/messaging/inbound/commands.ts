@@ -55,7 +55,11 @@ import {
 } from './native-command-runtime.ts';
 import { buildBncrReplyConfig } from './reply-config.ts';
 import type { BncrSessionActivity } from './session-cleanup-command.ts';
-import { resolveBncrSceneIdentity, resolveBncrSessionCategory } from './session-identity.ts';
+import {
+  resolveBncrSceneIdentity,
+  resolveBncrSceneName,
+  resolveBncrSessionCategory,
+} from './session-identity.ts';
 import {
   buildBncrInboundSessionIdentityPatch,
   recordAndPatchBncrInboundSessionEntry,
@@ -398,14 +402,18 @@ export async function handleBncrNativeCommand(params: {
   // The readable label depends on operator-set scene identity, which this very
   // command may just have changed, so it is rebuilt on demand.
   const buildSessionIdentityPatch = () => {
-    const identity = resolveBncrSceneIdentity(
+    const sceneKey = buildSceneKey(parsed);
+    const sceneAgentId = resolveSceneAgentId(
       sceneRegistry,
-      buildSceneKey(parsed),
-      resolveSceneAgentId(
-        sceneRegistry,
-        buildSceneKey(parsed),
-        resolvedAgentId || canonicalAgentId,
-      ),
+      sceneKey,
+      resolvedAgentId || canonicalAgentId,
+    );
+    const identity = resolveBncrSceneIdentity(sceneRegistry, sceneKey, sceneAgentId);
+    const persistedSceneName = resolveBncrSceneName(
+      sceneRegistry,
+      sceneKey,
+      sceneAgentId,
+      peer.kind,
     );
     return buildBncrInboundSessionIdentityPatch({
       channelId,
@@ -417,7 +425,7 @@ export async function handleBncrNativeCommand(params: {
       scene: {
         platform: parsed.platform,
         id: peer.kind === 'group' ? parsed.groupId : parsed.userId,
-        name: peer.kind === 'group' ? parsed.groupName : parsed.userName,
+        name: (peer.kind === 'group' ? parsed.groupName : parsed.userName) || persistedSceneName,
         ...(identity.customName ? { customName: identity.customName } : {}),
       },
     });

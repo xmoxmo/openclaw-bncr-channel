@@ -312,6 +312,112 @@ test('dispatchBncrInbound carries parsed mimeType and peer kind into built inbou
   assert.equal(calls.builtContexts[0].ChatType, 'group');
 });
 
+test('dispatchBncrInbound restores a stored group name when a later event omits it', async () => {
+  const { api, calls, storePath } = createInboundApiStub();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'wind_logs',
+        agentId: 'orion',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '-1001',
+    userId: '10001',
+    userName: 'xmo',
+    isGroup: true,
+    type: 'text',
+    msg: 'name omitted by bridge',
+    mimeType: 'text/plain',
+    msgId: 'inbound-missing-group-name',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    sceneRegistry,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.recorded.length, 1);
+  assert.ok(calls.sessionPatches.length > 0);
+  const store = JSON.parse(await readFile(storePath, 'utf8'));
+  assert.equal(
+    store['agent:orion:bncr:group:7467426f743a2d31303031'].label,
+    'tgBot · wind_logs · -1001',
+  );
+});
+
+test('dispatchBncrInbound restores a stored direct-chat name when an event omits it', async () => {
+  const { api, calls, storePath } = createInboundApiStub();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:10001',
+      {
+        sceneKey: 'tgBot:10001',
+        kind: 'direct',
+        status: 'allowed',
+        platform: 'tgBot',
+        userId: '10001',
+        userName: 'xmo',
+        agentId: 'orion',
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '10001',
+    isGroup: false,
+    isAdmin: true,
+    type: 'text',
+    msg: 'name omitted by bridge',
+    mimeType: 'text/plain',
+    msgId: 'inbound-missing-direct-name',
+  });
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'orion',
+    sceneRegistry,
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.recorded.length, 1);
+  assert.ok(calls.sessionPatches.length > 0);
+  const store = JSON.parse(await readFile(storePath, 'utf8'));
+  assert.equal(
+    store['agent:orion:bncr:direct:7467426f743a3130303031'].label,
+    'tgBot · xmo · 10001',
+  );
+});
+
 test('dispatchBncrInbound routes non-admin direct sessions to public when resolvedAgentId is public', async () => {
   const { api, calls } = createInboundApiStub();
   const parsed = parseBncrInboundParams({
@@ -1565,6 +1671,7 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
       },
     ],
   ]);
+  const sessionPatchCounts = [];
 
   for (const [index, text] of ['测试1', '测试2', '测试3', '测试4', '测试5'].entries()) {
     const parsed = parseBncrInboundParams({
@@ -1599,9 +1706,11 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
       setInboundActivity() {},
       scheduleSave() {},
     });
+    sessionPatchCounts.push(calls.sessionPatches.length);
   }
 
   assert.equal(calls.turnRuns.length, 1);
+  assert.equal(sessionPatchCounts[2], sessionPatchCounts[1]);
   assert.equal(enqueueCalls.length, 0);
   assert.equal(conversationHistories.get('Primary:tgBot:-1001')?.length, 2);
   assert.deepEqual(
@@ -1852,6 +1961,7 @@ test('dispatchBncrInbound flushes pending direct history at the direct scene his
       },
     ],
   ]);
+  const sessionPatchCounts = [];
 
   for (const [index, text] of ['私聊1', '私聊2', '私聊3', '私聊4', '私聊5'].entries()) {
     await dispatchBncrInbound({
@@ -1882,9 +1992,11 @@ test('dispatchBncrInbound flushes pending direct history at the direct scene his
       setInboundActivity() {},
       scheduleSave() {},
     });
+    sessionPatchCounts.push(calls.sessionPatches.length);
   }
 
   assert.equal(calls.turnRuns.length, 1);
+  assert.equal(sessionPatchCounts[2], sessionPatchCounts[1]);
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
   assert.deepEqual(
     calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
@@ -2587,6 +2699,8 @@ test('dispatchBncrOutboundHistoryFlush force-flushes bot-only history when an ou
 
   assert.equal(calls.turnRuns.length, 1);
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.equal(calls.recorded.length, 0);
+  assert.equal(calls.sessionPatches.length, 0);
   assert.deepEqual(
     calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
       (entry) => entry.messageId,
@@ -2595,6 +2709,71 @@ test('dispatchBncrOutboundHistoryFlush force-flushes bot-only history when an ou
   );
   assert.deepEqual(conversationHistories.get('Primary:tgBot:10001'), []);
   assert.equal(outboundReplayCache.has('Primary:tgBot:10001'), false);
+});
+
+test('group history flush never rewrites the stored scene identity', async () => {
+  const { api, calls, storePath } = createInboundApiStub();
+  const conversationHistories = new Map();
+  const outboundReplayCache = new Map();
+  const sceneRegistry = new Map([
+    [
+      'tgBot:-1001',
+      {
+        sceneKey: 'tgBot:-1001',
+        kind: 'group',
+        status: 'allowed',
+        platform: 'tgBot',
+        groupId: '-1001',
+        groupName: 'wind_logs',
+        agentId: 'public',
+        historyLimit: 3,
+        historyForce: true,
+        lastSeenAt: 1,
+      },
+    ],
+  ]);
+  const route = { platform: 'tgBot', groupId: '-1001', userId: '0' };
+
+  for (let index = 1; index <= 3; index += 1) {
+    recordBncrOutboundReplay({
+      cache: outboundReplayCache,
+      conversationHistories,
+      historyLimit: 3,
+      entry: makeOutboundReplayEntry(`group-flush-${index}`, route, {
+        lastPushAt: 1000 + index,
+      }),
+      sender: 'OpenClaw',
+      senderId: 'Primary',
+    });
+  }
+
+  await dispatchBncrOutboundHistoryFlush({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    entry: makeOutboundReplayEntry('group-flush-3', route),
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    conversationHistories,
+    outboundReplayCache,
+    defaultAdminAgentId: 'public',
+    defaultPublicAgentId: 'public',
+    now: () => Date.now(),
+    rememberSessionRoute() {},
+    enqueueFromReply: async () => {},
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 1);
+  assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  assert.equal(calls.recorded.length, 0);
+  assert.equal(calls.sessionPatches.length, 0);
+  assert.equal(
+    calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversation.label,
+    'Bncr:tgBot:-1001:0',
+  );
+  await assert.rejects(readFile(storePath, 'utf8'), /ENOENT/);
 });
 
 test('dispatchBncrOutboundHistoryFlush does not run an empty system flush', async () => {
