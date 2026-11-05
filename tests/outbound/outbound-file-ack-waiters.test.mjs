@@ -20,6 +20,7 @@ test('waitChunkAck uses file ack waiter instead of polling transfer state', asyn
       fileSha256: 'sha',
       ackedChunks: new Set(),
       failedChunks: new Map(),
+      ownerConnId: 'conn-1',
       status: 'init',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -69,6 +70,7 @@ test('waitCompleteAck uses file ack waiter instead of polling transfer state', a
       fileSha256: 'sha',
       ackedChunks: new Set(),
       failedChunks: new Map(),
+      ownerConnId: 'conn-1',
       status: 'transferring',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -104,6 +106,24 @@ test('waitForFileAck falls back to bounded timeout for invalid timeout input', a
   const bridge = createBridge();
 
   try {
+    bridge.fileSendTransfers.set('transfer-invalid-timeout', {
+      transferId: 'transfer-invalid-timeout',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set(),
+      failedChunks: new Map(),
+      ownerConnId: 'conn-1',
+      status: 'transferring',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
     const waiter = bridge.waitForFileAck({
       transferId: 'transfer-invalid-timeout',
       stage: 'chunk',
@@ -137,6 +157,24 @@ test('file ack keys treat non-integer chunk indexes as stage-level acks', async 
   const bridge = createBridge();
 
   try {
+    bridge.fileSendTransfers.set('transfer-decimal-chunk', {
+      transferId: 'transfer-decimal-chunk',
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      fileName: 'demo.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set(),
+      failedChunks: new Map(),
+      ownerConnId: 'conn-1',
+      status: 'transferring',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
     const waiter = bridge.waitForFileAck({
       transferId: 'transfer-decimal-chunk',
       stage: 'chunk',
@@ -184,6 +222,7 @@ test('waitForFileAck reuses duplicate waiter for the same transfer stage key', a
       fileSha256: 'sha',
       ackedChunks: new Set(),
       failedChunks: new Map(),
+      ownerConnId: 'conn-1',
       status: 'transferring',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -300,6 +339,7 @@ test('handleFileAck failure rejects waiter and clears file ack waiter state', as
       fileSha256: 'sha',
       ackedChunks: new Set(),
       failedChunks: new Map(),
+      ownerConnId: 'conn-1',
       status: 'transferring',
       createdAt: Date.now(),
       updatedAt: Date.now(),

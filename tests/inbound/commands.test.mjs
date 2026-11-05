@@ -1418,6 +1418,42 @@ test('executeSceneAdminCommand: non-admin self-admin never fans out to another a
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'orion')?.downloadMedia, false);
 });
 
+test('executeSceneAdminCommand: non-admin self-admin fails closed without an agent identity', () => {
+  const sceneRegistry = new Map();
+  for (const agentId of ['public', 'orion']) {
+    setSceneRecord(sceneRegistry, {
+      sceneKey: 'tgBot:10001',
+      kind: 'direct',
+      status: 'allowed',
+      platform: 'tgBot',
+      userId: '10001',
+      agentId,
+      approvedAt: 1,
+      downloadMedia: false,
+      lastSeenAt: 1,
+    });
+  }
+
+  const result = executeSceneAdminCommand({
+    parsed: {
+      isAdmin: false,
+      userId: '10001',
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+    },
+    command: { kind: 'download-media-set', sceneKey: 'tgBot:10001', enabled: true },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.downloadMedia, false);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'orion')?.downloadMedia, false);
+});
+
 test('executeSceneAdminCommand: non-admin self-admin may update a legacy unowned row', () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {

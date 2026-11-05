@@ -115,8 +115,6 @@ export function createBncrBridgeSurfaceHandlersGroup(runtime: {
     } & NonNullable<ReturnType<ConnectionComponentRuntime['prepareAckHandling']>>,
   ) => void;
   fileSendTransfers: Map<string, FileSendTransferState>;
-  hasFileAckWaiter: (key: string) => boolean;
-  fileAckKey: (transferId: string, stage: string, chunkIndex?: number) => string;
   observeLease: (
     kind:
       | 'connect'
@@ -202,8 +200,6 @@ export function createBncrBridgeSurfaceHandlersGroup(runtime: {
     prepareAckHandling: runtime.prepareAckHandling,
     handleAckOutcome: runtime.handleAckOutcome,
     fileSendTransfers: runtime.fileSendTransfers,
-    hasFileAckWaiter: runtime.hasFileAckWaiter,
-    fileAckKey: runtime.fileAckKey,
     observeLease: runtime.observeLease,
     tryAdoptTransferOwner: runtime.tryAdoptTransferOwner,
     refreshAcceptedFileTransferLiveState: runtime.refreshAcceptedFileTransferLiveState,

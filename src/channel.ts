@@ -2898,10 +2898,6 @@ class BncrBridgeRuntime {
 
   // File ACK surface helpers ------------------------------------------------
 
-  private fileAckKey(transferId: string, stage: string, chunkIndex?: number): string {
-    return this.bridgeAckFacade.fileAckKey(transferId, stage, chunkIndex);
-  }
-
   // File ACK waiter/read-model facade --------------------------------------
   // Keep file ACK keying, waiter wakeup, and transfer owner projection close
   // together because they form one debugging and lifecycle boundary.
@@ -3394,8 +3390,6 @@ class BncrBridgeRuntime {
       prepareAckHandling: (args) => this.prepareAckHandling(args),
       handleAckOutcome: (args) => this.handleAckOutcome(args),
       fileSendTransfers: this.fileSendTransfers,
-      hasFileAckWaiter: (key) => this.fileAckWaiters.has(key),
-      fileAckKey: (transferId, stage, chunkIndex) => this.fileAckKey(transferId, stage, chunkIndex),
       observeLease: (kind, payload) => this.observeLease(kind, payload),
       tryAdoptTransferOwner: (args) => this.tryAdoptTransferOwner(args),
       refreshAcceptedFileTransferLiveState: (args) =>

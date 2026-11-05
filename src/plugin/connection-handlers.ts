@@ -99,8 +99,6 @@ export type BncrConnectionHandlersRuntime = {
     } & PreparedAckHandling,
   ) => void;
   fileSendTransfers: Map<string, FileSendTransferState>;
-  hasFileAckWaiter: (key: string) => boolean;
-  fileAckKey: (transferId: string, stage: string, chunkIndex?: number) => string;
   observeLease: (kind: LeaseEventKind, payload: LeaseEventPayload) => { stale: boolean };
   tryAdoptTransferOwner: (args: {
     accountId: string;
@@ -331,12 +329,10 @@ export function createBncrConnectionHandlers(runtime: BncrConnectionHandlersRunt
       }
 
       const transferState = runtime.fileSendTransfers.get(transferId);
-      const fileAckWaiterKey = runtime.fileAckKey(
-        transferId,
-        stage,
-        chunkIndex != null ? chunkIndex : undefined,
-      );
-      if (!transferState && !runtime.hasFileAckWaiter(fileAckWaiterKey)) {
+      // Every valid waiter is backed by transfer state. Without the state there
+      // is no account or owner identity to authorize, so an otherwise matching
+      // waiter key must not become a way to wake an unowned transfer.
+      if (!transferState) {
         respond(false, { error: 'unknown transferId' });
         return;
       }
@@ -361,6 +357,19 @@ export function createBncrConnectionHandlers(runtime: BncrConnectionHandlersRunt
       const transferOwnerConnId = activeTransfer?.ownerConnId;
       const transferOwnerClientId = activeTransfer?.ownerClientId;
       let resolvedState = activeTransfer?.status ?? 'late';
+
+      if (
+        runtime.normalizeAccountId(activeTransfer.accountId) !==
+        runtime.normalizeAccountId(accountId)
+      ) {
+        runtime.logWarn(
+          'file-ack',
+          `ignore kind=file.ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} stage=${stage} reason=account-mismatch transferAccountId=${activeTransfer.accountId || '-'}`,
+          { debugOnly: true },
+        );
+        respond(false, { error: 'file ack account mismatch' });
+        return;
+      }
 
       if (staleObserved.stale) {
         const sameOwner = matchesTransferOwner({
@@ -387,6 +396,21 @@ export function createBncrConnectionHandlers(runtime: BncrConnectionHandlersRunt
           return;
         }
       } else {
+        const sameOwner = matchesTransferOwner({
+          ownerConnId: transferOwnerConnId,
+          ownerClientId: transferOwnerClientId,
+          connId,
+          clientId,
+        });
+        if (!sameOwner) {
+          runtime.logWarn(
+            'file-ack',
+            `ignore kind=file.ack accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} stage=${stage} reason=owner-mismatch ownerConnId=${transferOwnerConnId || '-'} ownerClientId=${transferOwnerClientId || '-'}`,
+            { debugOnly: true },
+          );
+          respond(true, { ok: true, ignored: true });
+          return;
+        }
         runtime.refreshAcceptedFileTransferLiveState({
           accountId,
           connId,

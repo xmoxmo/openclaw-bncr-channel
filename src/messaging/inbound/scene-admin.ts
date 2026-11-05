@@ -571,6 +571,19 @@ export function executeSceneAdminCommand(args: {
     return { ok: false, text: ADMIN_REQUIRED_TEXT };
   }
 
+  // Self-admin commands are scoped to the agent serving the current session.
+  // Without that identity, a missing caller field would otherwise widen the
+  // operation to every row for the scene. Fail closed before any lookup.
+  if (
+    !parsed.isAdmin &&
+    allowNonAdminSelfAdmin &&
+    !normalizeToken(sceneAgentId || '') &&
+    command.kind !== 'history-help' &&
+    command.kind !== 'download-media-global-get'
+  ) {
+    return { ok: false, text: ADMIN_REQUIRED_TEXT };
+  }
+
   // Non-admin self-admin: enforce that sceneId targets only the caller's own session.
   if (allowNonAdminSelfAdmin && !parsed.isAdmin) {
     const currentSceneKey = resolveCurrentSceneKey(parsed);

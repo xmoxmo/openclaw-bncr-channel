@@ -122,7 +122,7 @@ export function createBncrFileTransferSetup(runtime: BncrFileTransferSetupRuntim
       };
     }
 
-    const owner = runtime.resolveOutboxPushOwner(args.accountId);
+    const resolvedOwner = runtime.resolveOutboxPushOwner(args.accountId);
     const recentInboundReachable = runtime.hasRecentInboundReachability(args.accountId);
     const normalizedAccountId = runtime.normalizeAccountId(args.accountId);
     const routeDiagnostics = runtime.buildTransferRouteDiagnostics({
@@ -135,8 +135,8 @@ export function createBncrFileTransferSetup(runtime: BncrFileTransferSetupRuntim
       mediaUrl: args.mediaUrl,
       hasGatewayContext: args.hasGatewayContext,
       activeConnectionKey: routeDiagnostics.activeConnectionKey,
-      ownerConnId: owner?.connId,
-      ownerClientId: owner?.clientId,
+      ownerConnId: resolvedOwner?.connId,
+      ownerClientId: resolvedOwner?.clientId,
       directConnIds: routeDiagnostics.directConnIds,
       recentInboundReachable,
       recentConnIds: routeDiagnostics.recentConnIds,
@@ -148,6 +148,16 @@ export function createBncrFileTransferSetup(runtime: BncrFileTransferSetupRuntim
       recentConnIds: routeDiagnostics.recentConnIds,
       recentInboundReachable,
     });
+    // File ACKs are authorized by transfer owner. The normal route selection
+    // provides that owner; if it did not, bind the first recipient selected by
+    // the same route decision instead of leaving the transfer unowned and
+    // therefore unverifiable at ACK time.
+    const fallbackOwnerConnId = resolvedOwner?.connId || Array.from(connIds)[0];
+    const owner = resolvedOwner
+      ? resolvedOwner
+      : fallbackOwnerConnId
+        ? { connId: fallbackOwnerConnId, clientId: undefined }
+        : null;
     const transferId = randomUUID();
     const chunkSize = 256 * 1024;
     const totalChunks = Math.ceil(size / chunkSize);

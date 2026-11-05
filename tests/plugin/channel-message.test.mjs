@@ -472,6 +472,25 @@ test('channel.message media enqueue can be settled through file ack and message 
 
     const messageId = result.results[0].messageId;
     const [entry] = bridge.outbox.values();
+    bridge.fileSendTransfers.set(messageId, {
+      transferId: messageId,
+      accountId: 'Primary',
+      sessionKey: entry.sessionKey,
+      route: entry.route,
+      fileName: 'file-ack-chain.png',
+      mimeType: 'image/png',
+      fileSize: 1,
+      chunkSize: 1,
+      totalChunks: 1,
+      fileSha256: 'sha',
+      ackedChunks: new Set(),
+      failedChunks: new Map(),
+      ownerConnId: entry.lastPushConnId || 'conn-1',
+      ...(entry.lastPushClientId ? { ownerClientId: entry.lastPushClientId } : {}),
+      status: 'transferring',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
     const fileAck = bridge.waitForFileAck({
       transferId: messageId,
       stage: 'complete',

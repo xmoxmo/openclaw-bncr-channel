@@ -118,8 +118,6 @@ export function buildBncrBridgeSurfaceHandlersRuntime(deps: {
     } & PreparedAckHandling,
   ) => void;
   fileSendTransfers: Map<string, FileSendTransferState>;
-  hasFileAckWaiter: (key: string) => boolean;
-  fileAckKey: (transferId: string, stage: string, chunkIndex?: number) => string;
   observeLease: (
     kind:
       | 'connect'
