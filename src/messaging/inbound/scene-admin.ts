@@ -690,7 +690,6 @@ export function executeSceneAdminCommand(args: {
       isAdmin: parsed.isAdmin === true,
       requestedAgentId: wanted,
       callerAgentId: sceneAgentId,
-      allowLegacyUnowned: allowNonAdminSelfAdmin === true,
     });
     if (!scope.ok) return scope;
     return {

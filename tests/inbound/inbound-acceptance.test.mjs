@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { executeSessionIdentityCommand } from '../../src/messaging/inbound/session-identity-command.ts';
 import { prepareBncrInboundAcceptance } from '../../src/plugin/inbound-acceptance.ts';
 import { resolveSceneRecord, setSceneRecord } from '../../src/plugin/scene-registry.ts';
 
@@ -647,6 +648,58 @@ test('prepareBncrInboundAcceptance sends legacy unapproved direct scenes with em
     historyForce: true,
     lastSeenAt: 123,
   });
+});
+
+test('accepted legacy unowned direct scenes belong to the serving agent before command handling', async () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'legacy-user',
+    approvedAt: 90,
+    lastSeenAt: 100,
+  });
+  const parsed = buildParsed({
+    groupId: '0',
+    route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+    peer: { kind: 'direct', id: '10001' },
+    isAdmin: false,
+    userName: 'xmo',
+  });
+
+  const accepted = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed,
+      sceneRegistry,
+      resolveAgentRoute: () => ({
+        sessionKey: 'agent:orion:bncr:direct:7467426f743a3130303031',
+        agentId: 'orion',
+      }),
+    }),
+  );
+
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.resolvedAgentId, 'public');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.agentId, 'public');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.agentId, 'public');
+
+  const outcome = executeSessionIdentityCommand({
+    parsed,
+    command: { target: 'name', action: 'set', value: 'Mine' },
+    sceneRegistry,
+    sceneAgentId: accepted.resolvedAgentId,
+    now: () => 124,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.customName, 'Mine');
+  assert.equal(
+    Array.from(sceneRegistry.values()).filter((row) => !String(row.agentId || '').trim()).length,
+    0,
+  );
 });
 
 test('prepareBncrInboundAcceptance keeps custom agent but pends legacy unapproved direct scenes', async () => {

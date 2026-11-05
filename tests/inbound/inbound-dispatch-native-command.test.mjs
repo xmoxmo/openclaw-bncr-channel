@@ -3199,7 +3199,9 @@ test('non-admin /bncr history-limit with own sceneId in direct chat is allowed',
     kind: 'direct',
     userId: '20002',
     platform: 'tgBot',
-    status: 'active',
+    status: 'allowed',
+    agentId: 'public',
+    approvedAt: 1,
     lastSeenAt: 1,
   });
 
@@ -3287,7 +3289,9 @@ test('non-admin /bncr history-limit without sceneId in direct chat defaults to c
     kind: 'direct',
     userId: '20002',
     platform: 'tgBot',
-    status: 'active',
+    status: 'allowed',
+    agentId: 'public',
+    approvedAt: 1,
     lastSeenAt: 1,
   });
 
@@ -3329,6 +3333,59 @@ test('non-admin /bncr history-limit without sceneId in direct chat defaults to c
   assert.equal(calls.turnRuns.length, 0);
   assert.equal(enqueueCalls.length, 1);
   assert.match(enqueueCalls[0].payload.text, /history limit/);
+});
+
+test('non-admin direct self-service rejects a legacy unowned scene row', async () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:20002',
+    kind: 'direct',
+    userId: '20002',
+    platform: 'tgBot',
+    status: 'allowed',
+    approvedAt: 1,
+    lastSeenAt: 1,
+  });
+
+  const { api, calls } = createInboundApiStub({ nativeCommandProducesReply: false });
+  const parsed = parseBncrInboundParams({
+    accountId: 'Primary',
+    clientId: 'client-1',
+    platform: 'tgBot',
+    groupId: '0',
+    userId: '20002',
+    isAdmin: false,
+    isGroup: false,
+    shouldRespond: true,
+    type: 'text',
+    msg: '/bncr history-limit 100',
+    mimeType: 'text/plain',
+    msgId: 'nonadmin-history-limit-unowned',
+  });
+  const enqueueCalls = [];
+
+  await dispatchBncrInbound({
+    api,
+    channelId: 'bncr',
+    cfg: {},
+    parsed,
+    canonicalAgentId: 'public',
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 100,
+    rememberSessionRoute() {},
+    enqueueFromReply: async (args) => {
+      enqueueCalls.push(args);
+    },
+    setInboundActivity() {},
+    scheduleSave() {},
+  });
+
+  assert.equal(calls.turnRuns.length, 0);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(enqueueCalls[0].payload.text, 'Admin permission required.');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:20002')?.historyLimit, undefined);
 });
 
 test('non-admin /bncr allow in direct chat is rejected (not a self-admin command)', async () => {

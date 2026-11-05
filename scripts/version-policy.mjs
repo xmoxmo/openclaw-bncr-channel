@@ -41,6 +41,8 @@ export const validateReleaseVersionPolicy = (version, latestVersion) => {
     };
   }
 
+  const latestMajor = Number.parseInt(latestMatch[1], 10);
+  const latestMinor = Number.parseInt(latestMatch[2], 10);
   const latestPatch = Number.parseInt(latestMatch[3], 10);
   if (latestPatch > 9) {
     return {
@@ -50,20 +52,23 @@ export const validateReleaseVersionPolicy = (version, latestVersion) => {
     };
   }
 
-  if (latestPatch === 9) {
+  if (latestPatch === 9 && latestMinor === 9) {
     return {
       ok: false,
-      reason: `npm latest version has no legal next release under the patch-only policy: ${latestVersion}`,
+      reason: `npm latest version has no legal next release without a major rollover: ${latestVersion}`,
       version,
     };
   }
 
-  const expected = `${latestMatch[1]}.${latestMatch[2]}.${latestPatch + 1}`;
+  const expected =
+    latestPatch < 9
+      ? `${latestMajor}.${latestMinor}.${latestPatch + 1}`
+      : `${latestMajor}.${latestMinor + 1}.0`;
 
   if (version !== expected) {
     return {
       ok: false,
-      reason: `release version must be exactly one patch step after ${latestVersion}: expected ${expected}, got ${version}`,
+      reason: `release version must be exactly one version step after ${latestVersion}: expected ${expected}, got ${version}`,
       version,
     };
   }

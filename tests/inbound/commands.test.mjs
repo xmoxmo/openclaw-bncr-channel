@@ -1556,7 +1556,7 @@ test('executeSceneAdminCommand: non-admin self-admin fails closed without an age
   assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'orion')?.downloadMedia, false);
 });
 
-test('executeSceneAdminCommand: non-admin self-admin may update a legacy unowned row', () => {
+test('executeSceneAdminCommand: non-admin self-admin refuses a legacy unowned row', () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {
     sceneKey: 'tgBot:10001',
@@ -1584,8 +1584,43 @@ test('executeSceneAdminCommand: non-admin self-admin may update a legacy unowned
     agentId: 'public',
   });
 
-  assert.equal(result.ok, true);
-  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'public')?.downloadMedia, true);
+  assert.deepEqual(result, { ok: false, text: 'Admin permission required.' });
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001')?.downloadMedia, false);
+});
+
+test('executeSceneAdminCommand: non-admin cannot mutate a legacy unowned group row', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    groupReplyMode: 'mention',
+    lastSeenAt: 1,
+  });
+
+  const result = executeSceneAdminCommand({
+    parsed: {
+      isAdmin: false,
+      userId: '10001',
+      groupId: '-1001',
+      peer: { kind: 'group', id: '-1001' },
+      platform: 'tgBot',
+    },
+    command: { kind: 'mode', sceneKey: 'tgBot:-1001', mode: 'all' },
+    sceneRegistry,
+    defaultAdminAgentId: 'main',
+    defaultPublicAgentId: 'public',
+    now: () => 2,
+    allowNonAdminSelfAdmin: true,
+    agentId: 'public',
+  });
+
+  assert.deepEqual(result, { ok: false, text: 'Admin permission required.' });
+  const row = resolveSceneRecord(sceneRegistry, 'tgBot:-1001');
+  assert.equal(row?.agentId, undefined);
+  assert.equal(row?.groupReplyMode, 'mention');
 });
 
 test('executeSceneAdminCommand: self-admin flag cannot unlock admission commands', () => {

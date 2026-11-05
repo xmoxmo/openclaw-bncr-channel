@@ -32,7 +32,7 @@ test('release version policy accepts exactly the next patch version', () => {
 test('release version policy rejects a skipped version', () => {
   const result = validateReleaseVersionPolicy('0.8.7', '0.8.5');
   assert.equal(result.ok, false);
-  assert.match(result.reason, /exactly one patch step/);
+  assert.match(result.reason, /exactly one version step/);
 });
 
 test('release version policy rejects the current released version', () => {
@@ -49,8 +49,22 @@ test('release version policy rejects minor and major rollover', () => {
   }
 });
 
-test('release version policy rejects a release after patch nine', () => {
-  const result = validateReleaseVersionPolicy('0.9.0', '0.8.9');
+test('release version policy rolls patch nine into the next minor', () => {
+  assert.deepEqual(validateReleaseVersionPolicy('0.9.0', '0.8.9'), {
+    ok: true,
+    mode: 'release',
+    version: '0.9.0',
+  });
+});
+
+test('release version policy rejects a skipped minor rollover', () => {
+  const result = validateReleaseVersionPolicy('0.9.1', '0.8.9');
   assert.equal(result.ok, false);
-  assert.match(result.reason, /no legal next release/);
+  assert.match(result.reason, /expected 0\.9\.0/);
+});
+
+test('release version policy rejects a major rollover when minor nine is full', () => {
+  const result = validateReleaseVersionPolicy('1.0.0', '0.9.9');
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /without a major rollover/);
 });

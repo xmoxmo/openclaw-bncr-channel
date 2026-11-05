@@ -56,24 +56,14 @@ test('non-admin explicit sibling and missing caller identity fail closed', () =>
   assert.equal(noCaller.ok, false);
 });
 
-test('legacy unowned row is a caller fallback only when explicitly allowed', () => {
+test('legacy unowned rows are never a non-admin caller fallback', () => {
   const legacy = row(undefined);
-  const allowed = resolveBncrSceneAgentScope({
+  const result = resolveBncrSceneAgentScope({
     rows: [legacy, row('orion')],
     isAdmin: false,
     callerAgentId: 'main',
-    allowLegacyUnowned: true,
   });
-  assert.equal(allowed.ok, true);
-  assert.deepEqual(allowed.targets, [legacy]);
-
-  const denied = resolveBncrSceneAgentScope({
-    rows: [legacy, row('orion')],
-    isAdmin: false,
-    callerAgentId: 'main',
-    allowLegacyUnowned: false,
-  });
-  assert.equal(denied.ok, false);
+  assert.equal(result.ok, false);
 });
 
 test('an owned caller row wins over a legacy row', () => {
@@ -83,7 +73,6 @@ test('an owned caller row wins over a legacy row', () => {
     rows: [legacy, owned],
     isAdmin: false,
     callerAgentId: 'public',
-    allowLegacyUnowned: true,
   });
   assert.equal(result.ok, true);
   assert.deepEqual(result.targets, [owned]);

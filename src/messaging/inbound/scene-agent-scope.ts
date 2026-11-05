@@ -19,14 +19,15 @@ export type BncrSceneAgentScopeResult =
  * Administrators retain the documented fan-out when agentId is omitted. A
  * non-admin caller is always pinned to the agent serving the current request;
  * omitting agentId must never widen that scope. Missing caller identity fails
- * closed before a caller can touch a registry row.
+ * closed before a caller can touch a registry row. Legacy unowned rows are
+ * administrator migration targets only; a non-admin caller must already have
+ * an exact owned row after admission.
  */
 export function resolveBncrSceneAgentScope(args: {
   rows: readonly BncrSceneRecord[];
   isAdmin: boolean;
   requestedAgentId?: string | null;
   callerAgentId?: string | null;
-  allowLegacyUnowned?: boolean;
 }): BncrSceneAgentScopeResult {
   const rows = Array.from(args.rows);
   const requestedAgentId = normalizeAgentId(args.requestedAgentId);
@@ -54,11 +55,5 @@ export function resolveBncrSceneAgentScope(args: {
     };
   }
 
-  const legacyRows =
-    args.allowLegacyUnowned === false ? [] : rows.filter((row) => !normalizeAgentId(row.agentId));
-  if (legacyRows.length === 0) return { ok: false, text: ADMIN_REQUIRED_TEXT };
-  return {
-    ok: true,
-    targets: legacyRows,
-  };
+  return { ok: false, text: ADMIN_REQUIRED_TEXT };
 }
