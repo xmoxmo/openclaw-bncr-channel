@@ -9,7 +9,10 @@ import {
 import { dispatchOpenClawReplyWithBufferedBlockDispatcher } from '../../openclaw/reply-runtime.ts';
 import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
 import { buildSceneKey } from '../../plugin/scene-registry.ts';
-import { mergeBncrOwnerAllowFromIntoConfig } from './command-owner.ts';
+import {
+  mergeBncrOwnerAllowFromIntoConfig,
+  resolveBncrHostOwnerConfigOverride,
+} from './command-owner.ts';
 import type {
   BncrEnqueueFromReply,
   BncrInboundApi,
@@ -213,6 +216,11 @@ export async function runBncrInboundReplyDispatch(args: {
     parsed.isAdmin === true && !isBncrNativeCommand
       ? mergeBncrOwnerAllowFromIntoConfig({ cfg, senderIdForContext })
       : cfg;
+  const hostDispatchConfig = resolveBncrHostOwnerConfigOverride({
+    cfg,
+    isAdmin: parsed.isAdmin === true && !isBncrNativeCommand && !silentHistoryFlush,
+    senderId: senderIdForContext,
+  });
 
   if (!shouldDispatch) {
     if (sessionIdentityPatch) {
@@ -315,6 +323,7 @@ export async function runBncrInboundReplyDispatch(args: {
                     dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
                       ctx: ctxPayload,
                       cfg: buildBncrReplyConfig(commandDispatchCfg).replyCfg,
+                      ...(hostDispatchConfig ? { hostDispatchConfig } : {}),
                       dispatcherOptions: {
                         deliver: async (
                           payload: {

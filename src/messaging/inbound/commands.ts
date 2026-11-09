@@ -22,7 +22,10 @@ import {
 } from '../../openclaw/session-node-status.ts';
 import { addNativeElevation, removeNativeElevation } from '../../plugin/config.ts';
 import { buildSceneKey, resolveSceneAgentId } from '../../plugin/scene-registry.ts';
-import { mergeBncrOwnerAllowFromIntoConfig } from './command-owner.ts';
+import {
+  mergeBncrOwnerAllowFromIntoConfig,
+  resolveBncrHostOwnerConfigOverride,
+} from './command-owner.ts';
 import { dispatchLocalCommand } from './command-registry.ts';
 import type {
   BncrEnqueueFromReply,
@@ -623,6 +626,11 @@ export async function handleBncrNativeCommand(params: {
     dispatchToOpenClaw && senderIdForContext
       ? mergeBncrOwnerAllowFromIntoConfig({ cfg, senderIdForContext })
       : cfg;
+  const hostDispatchConfig = resolveBncrHostOwnerConfigOverride({
+    cfg,
+    isAdmin: parsed.isAdmin === true && dispatchToOpenClaw,
+    senderId: senderIdForContext,
+  });
   const effectiveReply = buildBncrReplyConfig(dispatchCfgForElevated);
   const channelPolicy = resolveBncrChannelPolicy(cfg?.channels?.bncr || {});
   const pinnedMainDmOwner =
@@ -701,6 +709,7 @@ export async function handleBncrNativeCommand(params: {
               return dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
                 ctx: ctxPayload,
                 cfg: effectiveReply.replyCfg,
+                ...(hostDispatchConfig ? { hostDispatchConfig } : {}),
                 dispatcherOptions: {
                   deliver: createNativeCommandReplyDeliverer({
                     command: command.command,

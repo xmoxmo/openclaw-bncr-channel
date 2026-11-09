@@ -31,3 +31,28 @@ export function mergeBncrOwnerAllowFromIntoConfig(args: {
     },
   } satisfies BncrInboundConfig;
 }
+
+/**
+ * Build the one-turn config patch that lets the host's standard resolver recognize
+ * a BNCR administrator from the same per-turn owner injection used by command dispatch.
+ * The caller owns authorization: only an explicit platform admin identity may pass.
+ */
+export function resolveBncrHostOwnerConfigOverride(args: {
+  cfg: BncrInboundConfig;
+  isAdmin: boolean;
+  senderId: string;
+}): { commands: { ownerAllowFrom: string[] } } | undefined {
+  const senderId = String(args.senderId || '').trim();
+  if (args.isAdmin !== true || !senderId) return undefined;
+  const merged = mergeBncrOwnerAllowFromIntoConfig({
+    cfg: args.cfg,
+    senderIdForContext: senderId,
+  });
+  const commands: unknown = merged?.commands;
+  const ownerAllowFrom =
+    commands !== null && typeof commands === 'object' && !Array.isArray(commands)
+      ? (commands as { ownerAllowFrom?: unknown }).ownerAllowFrom
+      : undefined;
+  if (!Array.isArray(ownerAllowFrom)) return undefined;
+  return { commands: { ownerAllowFrom: [...ownerAllowFrom] } };
+}

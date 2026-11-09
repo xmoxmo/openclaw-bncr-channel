@@ -86,6 +86,9 @@ export function createRegisterApiStub(overrides = {}) {
           formatAgentEnvelope(params) {
             return params.body;
           },
+          async dispatchReplyFromConfig() {
+            return undefined;
+          },
           async dispatchReplyWithBufferedBlockDispatcher() {
             return undefined;
           },

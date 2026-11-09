@@ -20,6 +20,7 @@ export function createInboundApiStub(options = {}) {
     sessionPatches: [],
     savedMediaBuffers: [],
     replyDispatchStarts: [],
+    hostConfigOverrides: [],
     replyDispatchCompletions: [],
     requests: [],
     ingested: [],
@@ -144,18 +145,37 @@ export function createInboundApiStub(options = {}) {
           },
         },
         reply: {
+          async dispatchReplyFromConfig(request) {
+            calls.hostConfigOverrides.push(request?.configOverride);
+            return [];
+          },
           resolveEnvelopeFormatOptions() {
             return {};
           },
           formatAgentEnvelope({ body }) {
             return `ENV:${body}`;
           },
-          async dispatchReplyWithBufferedBlockDispatcher({ ctx, dispatcherOptions }) {
+          async dispatchReplyWithBufferedBlockDispatcher({
+            ctx,
+            cfg,
+            dispatcherOptions,
+            replyOptions,
+            dispatchReplyFromConfig,
+          }) {
             calls.replyDispatchStarts.push({
               sessionKey: ctx?.SessionKey,
               to: ctx?.To,
               messageSid: ctx?.MessageSid,
+              cfg,
             });
+            if (typeof dispatchReplyFromConfig === 'function') {
+              await dispatchReplyFromConfig({
+                ctx,
+                cfg,
+                dispatcher: {},
+                replyOptions,
+              });
+            }
             if (typeof options.onReplyDispatchStart === 'function') {
               await options.onReplyDispatchStart({ ctx, dispatcherOptions, calls });
             }

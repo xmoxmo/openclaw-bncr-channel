@@ -91,6 +91,12 @@ export const OPENCLAW_RUNTIME_SURFACE_CONTRACTS = [
     path: ['runtime', 'channel', 'reply', 'dispatchReplyWithBufferedBlockDispatcher'],
     parent: ['runtime', 'channel', 'reply'],
   },
+  {
+    key: 'runtime.channel.reply.dispatchReplyFromConfig',
+    kind: 'function',
+    path: ['runtime', 'channel', 'reply', 'dispatchReplyFromConfig'],
+    parent: ['runtime', 'channel', 'reply'],
+  },
   { key: 'runtime.channel.routing', kind: 'object', path: ['runtime', 'channel', 'routing'] },
   {
     key: 'runtime.channel.routing.resolveAgentRoute',

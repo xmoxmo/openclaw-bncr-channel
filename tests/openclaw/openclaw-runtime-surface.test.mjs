@@ -34,6 +34,7 @@ function createCompleteRuntimeApi() {
         reply: {
           resolveEnvelopeFormatOptions() {},
           formatAgentEnvelope() {},
+          dispatchReplyFromConfig() {},
           dispatchReplyWithBufferedBlockDispatcher() {},
         },
         routing: {
@@ -52,6 +53,7 @@ test('OpenClaw runtime surface contract list has stable unique keys', () => {
   assert.ok(keys.includes('runtime.channel.media.readRemoteMediaBuffer'));
   assert.ok(keys.includes('runtime.channel.session.recordInboundSession'));
   assert.ok(keys.includes('runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher'));
+  assert.ok(keys.includes('runtime.channel.reply.dispatchReplyFromConfig'));
 });
 
 test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contract', () => {
@@ -83,6 +85,7 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports complete host contra
     diagnostics.contract['runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher'],
     true,
   );
+  assert.equal(diagnostics.contract['runtime.channel.reply.dispatchReplyFromConfig'], true);
   assert.deepEqual(diagnostics.missing, []);
 });
 
@@ -91,6 +94,7 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports method-level host dr
   delete api.runtime.channel.media.readRemoteMediaBuffer;
   delete api.runtime.channel.session.recordInboundSession;
   delete api.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher;
+  delete api.runtime.channel.reply.dispatchReplyFromConfig;
 
   const diagnostics = buildOpenClawChannelRuntimeSurfaceDiagnostics(api);
 
@@ -104,6 +108,7 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics reports method-level host dr
     'runtime.channel.media.readRemoteMediaBuffer',
     'runtime.channel.session.recordInboundSession',
     'runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher',
+    'runtime.channel.reply.dispatchReplyFromConfig',
   ]);
 });
 
@@ -128,6 +133,7 @@ test('buildOpenClawChannelRuntimeSurfaceDiagnostics tracks parent-object contrac
       'runtime.channel.reply.resolveEnvelopeFormatOptions',
       'runtime.channel.reply.formatAgentEnvelope',
       'runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher',
+      'runtime.channel.reply.dispatchReplyFromConfig',
     ],
   );
 });
