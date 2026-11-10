@@ -1,4 +1,6 @@
-import type { BncrConnection } from '../core/types.ts';
+import type { BncrConnection, FileRecvTransferState } from '../core/types.ts';
+import { BNCR_INBOUND_IDLE_TIMEOUT_MS, isActiveInboundTransfer } from './file-inbound-state.ts';
+import { discardInboundStagingFileSync } from './file-inbound-storage.ts';
 
 export function createBncrTransientStateRuntime(runtime: {
   now: () => number;
@@ -10,7 +12,7 @@ export function createBncrTransientStateRuntime(runtime: {
   activeConnectionByAccount: Map<string, string>;
   recentInbound: Map<string, number>;
   fileSendTransfers: Map<string, { status: string; startedAt: number; terminalAt?: number }>;
-  fileRecvTransfers: Map<string, { status: string; startedAt: number; terminalAt?: number }>;
+  fileRecvTransfers: Map<string, FileRecvTransferState>;
   earlyFileAcks: Map<string, { at: number }>;
   logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) => void;
   bridgeId: string;
@@ -33,6 +35,26 @@ export function createBncrTransientStateRuntime(runtime: {
       if (t - keep.since > keep.keepMs) runtime.fileSendTransfers.delete(id);
     }
     for (const [id, st] of runtime.fileRecvTransfers.entries()) {
+      if (isActiveInboundTransfer(st)) {
+        const startedAt = Number.isFinite(st.startedAt) ? st.startedAt : t;
+        const lastChunkAt = Number.isFinite(st.lastChunkAt) ? st.lastChunkAt : startedAt;
+        const hasPendingOperation = (st.pendingOperations ?? 0) > 0;
+        const expiredByHardTtl = !hasPendingOperation && t - startedAt > runtime.fileTransferKeepMs;
+        const expiredByIdle =
+          !hasPendingOperation && t - lastChunkAt > BNCR_INBOUND_IDLE_TIMEOUT_MS;
+        if (expiredByIdle || expiredByHardTtl) {
+          try {
+            discardInboundStagingFileSync(st.stagingPath);
+          } catch (error) {
+            runtime.logInfo(
+              'file',
+              `expired transfer staging cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          runtime.fileRecvTransfers.delete(id);
+        }
+        continue;
+      }
       const keep = keepMsForTransfer(st);
       if (t - keep.since > keep.keepMs) runtime.fileRecvTransfers.delete(id);
     }

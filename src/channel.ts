@@ -205,6 +205,10 @@ import { createBncrClientRpcRuntime } from './plugin/client-rpc-runtime.ts';
 import { BNCR_CONFIG_SURFACE } from './plugin/config.ts';
 import { createBncrConnectionStateRuntimeGroup } from './plugin/connection-state-runtime-group.ts';
 import type { FileAckPayloadState } from './plugin/file-ack-runtime.ts';
+import {
+  discardInboundStagingFileSync,
+  pruneInboundStagingFiles,
+} from './plugin/file-inbound-storage.ts';
 import { createBncrFileTransferRuntimeGroup } from './plugin/file-transfer-runtime-group.ts';
 import { BNCR_GATEWAY_METHODS } from './plugin/gateway-methods.ts';
 import { prepareBncrInboundAcceptance } from './plugin/inbound-acceptance.ts';
@@ -948,6 +952,14 @@ class BncrBridgeRuntime {
         await this.stateStore.closeSqliteLifecycle(sqliteLifecycle);
         return false;
       }
+      try {
+        await pruneInboundStagingFiles(0);
+      } catch (error) {
+        this.logWarn(
+          'file',
+          `inbound staging startup cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
 
       const started = await startBncrBridgeService(
         {
@@ -1024,6 +1036,17 @@ class BncrBridgeRuntime {
     this.serviceStarted = false;
     this.stopHistoryShardWorker(reason);
     this.clientRpcRuntime.shutdown();
+    for (const state of this.fileRecvTransfers.values()) {
+      try {
+        discardInboundStagingFileSync(state.stagingPath);
+      } catch (error) {
+        this.logWarn(
+          'file',
+          `inbound staging cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    this.fileRecvTransfers.clear();
     cleanupBncrBridgeRuntime(
       {
         bridgeId: this.bridgeId,

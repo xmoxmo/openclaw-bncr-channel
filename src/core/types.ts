@@ -33,8 +33,13 @@ type FileRecvTransferBase = {
   totalChunks: number;
   fileSha256: string;
   startedAt: number;
-  bufferByChunk: Map<number, Buffer>;
   receivedChunks: Set<number>;
+  receivedChunkDigests: Map<number, string>;
+  receivedBytes: number;
+  lastChunkAt: number;
+  stagingPath?: string;
+  operationTail?: Promise<void>;
+  pendingOperations?: number;
   ownerConnId?: string;
   ownerClientId?: string;
 };

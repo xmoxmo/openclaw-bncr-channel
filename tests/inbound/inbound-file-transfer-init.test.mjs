@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { fallbackBncrMediaMaxBytes } from '../../src/openclaw/media-limit-runtime.ts';
-import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
+import { cleanupBridge, createBridge, recvKey } from '../helpers/bncr-bridge.mjs';
 
 test('handleFileInit rejects oversized and inconsistent transfer declarations without creating state', async () => {
   const bridge = createBridge();
@@ -62,14 +62,18 @@ test('handleFileInit rejects oversized and inconsistent transfer declarations wi
 
       assert.equal(respondPayload.ok, false, item.name);
       assert.match(respondPayload.payload.error, item.error, item.name);
-      assert.equal(bridge.fileRecvTransfers.has(item.transferId), false, item.name);
+      assert.equal(
+        bridge.fileRecvTransfers.has(recvKey('Primary', item.transferId)),
+        false,
+        item.name,
+      );
     }
   } finally {
     cleanupBridge(bridge);
   }
 });
 
-test('handleFileInit accepts declarations above the former 50 MiB and chunk caps', async () => {
+test('handleFileInit accepts declarations above the former 50 MiB and chunk-count caps', async () => {
   const bridge = createBridge();
   const validSessionKey = `agent:orion:bncr:direct:${Buffer.from('tgBot:0:10001').toString('hex')}`;
 
@@ -112,7 +116,11 @@ test('handleFileInit accepts declarations above the former 50 MiB and chunk caps
 
       assert.equal(respondPayload.ok, true, item.transferId);
       assert.equal(respondPayload.payload.ok, true, item.transferId);
-      assert.equal(bridge.fileRecvTransfers.has(item.transferId), true, item.transferId);
+      assert.equal(
+        bridge.fileRecvTransfers.has(recvKey('Primary', item.transferId)),
+        true,
+        item.transferId,
+      );
     }
   } finally {
     cleanupBridge(bridge);
@@ -148,7 +156,7 @@ test('handleFileInit accepts hex-only sessionKey when route fields are present a
 
     assert.equal(respondPayload.ok, true);
     assert.equal(respondPayload.payload.ok, true);
-    const state = bridge.fileRecvTransfers.get('recv-init-hex-only');
+    const state = bridge.fileRecvTransfers.get(recvKey('Primary', 'recv-init-hex-only'));
     assert.ok(state);
     assert.equal(state.route.platform, 'tgBot');
     assert.equal(state.route.groupId, '-5212885824');

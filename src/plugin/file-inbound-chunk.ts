@@ -1,13 +1,22 @@
 import { createHash } from 'node:crypto';
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import { canonicalizeBase64, estimateBase64DecodedBytes } from '../core/base64.ts';
 import { getErrorMessage } from './error-message.ts';
+import { authorizeInboundTransfer } from './file-inbound-auth.ts';
 import type { BncrFileInboundRuntime } from './file-inbound-runtime.ts';
 import {
+  BNCR_INBOUND_CHUNK_SIZE_LIMIT,
+  BNCR_INBOUND_TRANSFER_ID_MAX_LENGTH,
+  endInboundTransferOperation,
   isAbortedInboundTransfer,
   isActiveInboundTransfer,
   isCompletedInboundTransfer,
+  isValidInboundSha256,
   markInboundTransferTransferring,
+  tryBeginInboundTransferOperation,
+  withInboundTransferLock,
 } from './file-inbound-state.ts';
+import { writeInboundChunkAtOffset } from './file-inbound-storage.ts';
 import { buildBncrGatewayEventContext } from './gateway-event-context.ts';
 
 export function createBncrFileInboundChunkHandler(runtime: BncrFileInboundRuntime) {
@@ -30,8 +39,11 @@ export function createBncrFileInboundChunkHandler(runtime: BncrFileInboundRuntim
     const transferId = runtime.asString(params?.transferId || '').trim();
     const chunkIndex = runtime.finiteNonNegativeNumberOrNull(params?.chunkIndex);
     const offset = runtime.finiteNonNegativeNumberOrNull(params?.offset ?? 0);
-    const size = runtime.finiteNonNegativeNumberOrNull(params?.size ?? 0);
-    const chunkSha256 = runtime.asString(params?.chunkSha256 || '').trim();
+    const size = runtime.finiteNonNegativeNumberOrNull(params?.size);
+    const chunkSha256 = runtime
+      .asString(params?.chunkSha256 || '')
+      .trim()
+      .toLowerCase();
     const base64 = runtime.asString(params?.base64 || '');
 
     if (!transferId || chunkIndex == null || !base64) {
@@ -39,30 +51,43 @@ export function createBncrFileInboundChunkHandler(runtime: BncrFileInboundRuntim
       return;
     }
 
-    const st = runtime.fileRecvTransfers.get(transferId);
-    if (!st) {
-      respond(false, { error: 'transfer not found' });
+    if (transferId.length > BNCR_INBOUND_TRANSFER_ID_MAX_LENGTH) {
+      respond(false, { error: `transferId too long max=${BNCR_INBOUND_TRANSFER_ID_MAX_LENGTH}` });
       return;
     }
-    if (isCompletedInboundTransfer(st)) {
+    if (!isValidInboundSha256(chunkSha256)) {
+      respond(false, { error: 'chunkSha256 must be 64 hexadecimal characters when provided' });
+      return;
+    }
+
+    if (!Number.isSafeInteger(chunkIndex) || !Number.isSafeInteger(offset)) {
+      respond(false, { error: 'chunkIndex/offset must be safe integers' });
+      return;
+    }
+
+    const authorized = authorizeInboundTransfer({
+      runtime,
+      accountId,
+      transferId,
+      connId,
+      clientId,
+      event: 'file.chunk',
+    });
+    if (!authorized.ok) {
+      respond(false, { error: authorized.error });
+      return;
+    }
+    const st = authorized.state;
+    const staleObserved = runtime.observeLease('file.chunk', params ?? {});
+    if (isCompletedInboundTransfer(st) || isAbortedInboundTransfer(st)) {
       respond(true, {
         ok: true,
         transferId,
-        status: 'completed',
-        path: st.completedPath,
+        status: st.status,
+        ...(isCompletedInboundTransfer(st) ? { path: st.completedPath } : { error: st.error }),
         ignored: true,
         terminal: true,
-      });
-      return;
-    }
-    if (isAbortedInboundTransfer(st)) {
-      respond(true, {
-        ok: true,
-        transferId,
-        status: 'aborted',
-        error: st.error,
-        ignored: true,
-        terminal: true,
+        ...(staleObserved.stale ? { stale: true, staleAccepted: true } : {}),
       });
       return;
     }
@@ -70,37 +95,7 @@ export function createBncrFileInboundChunkHandler(runtime: BncrFileInboundRuntim
       respond(false, { error: 'transfer not active' });
       return;
     }
-    if (chunkIndex >= st.totalChunks) {
-      respond(false, {
-        error: `chunkIndex out of range index=${chunkIndex} total=${st.totalChunks}`,
-      });
-      return;
-    }
-
-    const staleObserved = runtime.observeLease('file.chunk', params ?? {});
-    // #not-merged Intentionally duplicated across complete/chunk/abort.
-    // Each handler emits a distinct logWarn message with its own event-kind
-    // in the format string, and the surrounding logic diverges in more than
-    // just the event name.  Merging would add parameter-gluing boilerplate
-    // with no reduction in total LOC.  See also the sibling files.
-    if (staleObserved.stale) {
-      if (
-        !runtime.matchesTransferOwner({
-          ownerConnId: st.ownerConnId,
-          ownerClientId: st.ownerClientId,
-          connId,
-          clientId,
-        })
-      ) {
-        runtime.logWarn(
-          'stale',
-          `ignore kind=file.chunk accountId=${accountId} connId=${connId} clientId=${clientId || '-'} transferId=${transferId} reason=owner-mismatch ownerConnId=${st.ownerConnId || '-'} ownerClientId=${st.ownerClientId || '-'}`,
-          { debugOnly: true },
-        );
-        respond(true, { ok: true, stale: true, ignored: true });
-        return;
-      }
-    } else {
+    if (!staleObserved.stale) {
       runtime.refreshAcceptedFileTransferLiveState({
         accountId,
         connId,
@@ -108,44 +103,110 @@ export function createBncrFileInboundChunkHandler(runtime: BncrFileInboundRuntim
         context: gatewayContext.context,
       });
     }
+    const currentBeforeQueue = runtime.fileRecvTransfers.get(authorized.key);
+    if (!currentBeforeQueue || !Object.is(currentBeforeQueue, st)) {
+      respond(false, { error: 'transfer not found' });
+      return;
+    }
+    if (!tryBeginInboundTransferOperation(st)) {
+      respond(false, { error: 'transfer busy' });
+      return;
+    }
 
     try {
-      const buf = Buffer.from(base64, 'base64');
-      if (size != null && size > 0 && buf.length !== size) {
-        throw new Error(`chunk size mismatch expected=${size} got=${buf.length}`);
-      }
-      if (chunkSha256) {
-        const digest = createHash('sha256').update(buf).digest('hex');
-        if (digest !== chunkSha256) throw new Error('chunk sha256 mismatch');
-      }
-      st.bufferByChunk.set(chunkIndex, buf);
-      st.receivedChunks.add(chunkIndex);
-      runtime.fileRecvTransfers.set(transferId, markInboundTransferTransferring(st));
-
-      respond(
-        true,
-        staleObserved.stale
-          ? {
+      await withInboundTransferLock(st, async () => {
+        try {
+          const current = runtime.fileRecvTransfers.get(authorized.key);
+          if (!current || !Object.is(current, st)) throw new Error('transfer not found');
+          if (isCompletedInboundTransfer(current) || isAbortedInboundTransfer(current)) {
+            respond(true, {
               ok: true,
               transferId,
-              chunkIndex,
-              offset,
-              received: st.receivedChunks.size,
-              totalChunks: st.totalChunks,
-              stale: true,
-              staleAccepted: true,
+              status: current.status,
+              ...(isCompletedInboundTransfer(current)
+                ? { path: current.completedPath }
+                : { error: current.error }),
+              ignored: true,
+              terminal: true,
+              ...(staleObserved.stale ? { stale: true, staleAccepted: true } : {}),
+            });
+            return;
+          }
+          if (!isActiveInboundTransfer(current)) {
+            throw new Error('transfer not active');
+          }
+          if (chunkIndex >= current.totalChunks) {
+            throw new Error(
+              `chunkIndex out of range index=${chunkIndex} total=${current.totalChunks}`,
+            );
+          }
+          const expectedOffset = chunkIndex * current.chunkSize;
+          if (offset !== expectedOffset) {
+            throw new Error(`chunk offset mismatch expected=${expectedOffset} got=${offset}`);
+          }
+          const expectedSize =
+            chunkIndex === current.totalChunks - 1
+              ? current.fileSize - current.chunkSize * (current.totalChunks - 1)
+              : current.chunkSize;
+          if (size != null && size !== expectedSize) {
+            throw new Error(`chunk size mismatch expected=${expectedSize} got=${size}`);
+          }
+          if (expectedSize <= 0 || expectedSize > BNCR_INBOUND_CHUNK_SIZE_LIMIT) {
+            throw new Error(`invalid server chunk size expected=${expectedSize}`);
+          }
+          const maxEncodedLength = 4 * Math.ceil(expectedSize / 3) + 4096;
+          if (base64.length > maxEncodedLength) {
+            throw new Error(
+              `chunk base64 too large encoded=${base64.length} max=${maxEncodedLength}`,
+            );
+          }
+          const estimated = estimateBase64DecodedBytes(base64);
+          if (estimated > expectedSize) {
+            throw new Error(`chunk base64 too large estimated=${estimated} max=${expectedSize}`);
+          }
+          const canonical = canonicalizeBase64(base64);
+          if (!canonical) throw new Error('chunk base64 is invalid');
+          const buf = Buffer.from(canonical, 'base64');
+          if (buf.length !== expectedSize) {
+            throw new Error(`chunk size mismatch expected=${expectedSize} got=${buf.length}`);
+          }
+          const digest = createHash('sha256').update(buf).digest('hex');
+          if (chunkSha256 && digest !== chunkSha256) throw new Error('chunk sha256 mismatch');
+          const existingDigest = current.receivedChunkDigests.get(chunkIndex);
+          if (existingDigest) {
+            if (existingDigest !== digest) {
+              throw new Error(`chunk ${chunkIndex} already received with different content`);
             }
-          : {
-              ok: true,
-              transferId,
-              chunkIndex,
+          } else {
+            if (!current.stagingPath) throw new Error('transfer staging file is unavailable');
+            await writeInboundChunkAtOffset({
+              stagingPath: current.stagingPath,
               offset,
-              received: st.receivedChunks.size,
-              totalChunks: st.totalChunks,
-            },
-      );
-    } catch (error) {
-      respond(false, { error: getErrorMessage(error, 'chunk invalid') });
+              buffer: buf,
+            });
+            current.receivedChunkDigests.set(chunkIndex, digest);
+            current.receivedChunks.add(chunkIndex);
+            current.receivedBytes += buf.length;
+            current.lastChunkAt = runtime.now();
+            markInboundTransferTransferring(current);
+          }
+
+          respond(true, {
+            ok: true,
+            transferId,
+            chunkIndex,
+            offset,
+            received: current.receivedChunks.size,
+            totalChunks: current.totalChunks,
+            duplicated: Boolean(existingDigest),
+            ...(staleObserved.stale ? { stale: true, staleAccepted: true } : {}),
+          });
+        } catch (error) {
+          respond(false, { error: getErrorMessage(error, 'chunk invalid') });
+        }
+      });
+    } finally {
+      endInboundTransferOperation(st);
     }
   };
 }

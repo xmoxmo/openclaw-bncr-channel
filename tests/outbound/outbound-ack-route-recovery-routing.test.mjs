@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cleanupBridge, createBridge, makeEntry } from '../helpers/bncr-bridge.mjs';
+import { cleanupBridge, createBridge, makeEntry, recvKey } from '../helpers/bncr-bridge.mjs';
 
 test('first ack timeout fast-reroutes away from lastPushConnId when an alternative exists', async () => {
   const bridge = createBridge();
@@ -256,7 +256,7 @@ test('cleanupFileTransfers prunes terminal transfers after short ttl but keeps a
       ackedChunks: new Set(),
       failedChunks: new Map(),
     });
-    bridge.fileRecvTransfers.set('recv-aborted-old', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-aborted-old'), {
       transferId: 'recv-aborted-old',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -270,10 +270,13 @@ test('cleanupFileTransfers prunes terminal transfers after short ttl but keeps a
       startedAt: nowTs - 20 * 60_000,
       terminalAt: nowTs - 11 * 60_000,
       status: 'aborted',
-      bufferByChunk: new Map(),
       receivedChunks: new Set(),
+      receivedChunkDigests: new Map(),
+      receivedBytes: 0,
+      lastChunkAt: nowTs - 20 * 60_000,
+      operationTail: Promise.resolve(),
     });
-    bridge.fileRecvTransfers.set('recv-completed-recent', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-completed-recent'), {
       transferId: 'recv-completed-recent',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -287,8 +290,11 @@ test('cleanupFileTransfers prunes terminal transfers after short ttl but keeps a
       startedAt: nowTs - 20 * 60_000,
       terminalAt: nowTs - 9 * 60_000,
       status: 'completed',
-      bufferByChunk: new Map(),
       receivedChunks: new Set(),
+      receivedChunkDigests: new Map(),
+      receivedBytes: 0,
+      lastChunkAt: nowTs - 20 * 60_000,
+      operationTail: Promise.resolve(),
     });
     bridge.fileSendTransfers.set('send-completed-invalid-terminal-falls-back-to-started', {
       transferId: 'send-completed-invalid-terminal-falls-back-to-started',
@@ -307,7 +313,7 @@ test('cleanupFileTransfers prunes terminal transfers after short ttl but keeps a
       ackedChunks: new Set(),
       failedChunks: new Map(),
     });
-    bridge.fileRecvTransfers.set('recv-active-invalid-started-kept', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-active-invalid-started-kept'), {
       transferId: 'recv-active-invalid-started-kept',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -320,21 +326,27 @@ test('cleanupFileTransfers prunes terminal transfers after short ttl but keeps a
       fileSha256: 'sha',
       startedAt: Number.POSITIVE_INFINITY,
       status: 'receiving',
-      bufferByChunk: new Map(),
       receivedChunks: new Set(),
+      receivedChunkDigests: new Map(),
+      receivedBytes: 0,
+      lastChunkAt: nowTs - 20 * 60_000,
+      operationTail: Promise.resolve(),
     });
 
     bridge.cleanupFileTransfers();
 
     assert.equal(bridge.fileSendTransfers.has('send-completed-old'), false);
-    assert.equal(bridge.fileRecvTransfers.has('recv-aborted-old'), false);
+    assert.equal(bridge.fileRecvTransfers.has(recvKey('Primary', 'recv-aborted-old')), false);
     assert.equal(bridge.fileSendTransfers.has('send-transferring-young-for-long-ttl'), true);
-    assert.equal(bridge.fileRecvTransfers.has('recv-completed-recent'), true);
+    assert.equal(bridge.fileRecvTransfers.has(recvKey('Primary', 'recv-completed-recent')), true);
     assert.equal(
       bridge.fileSendTransfers.has('send-completed-invalid-terminal-falls-back-to-started'),
       false,
     );
-    assert.equal(bridge.fileRecvTransfers.has('recv-active-invalid-started-kept'), true);
+    assert.equal(
+      bridge.fileRecvTransfers.has(recvKey('Primary', 'recv-active-invalid-started-kept')),
+      true,
+    );
   } finally {
     Date.now = originalNow;
     cleanupBridge(bridge);

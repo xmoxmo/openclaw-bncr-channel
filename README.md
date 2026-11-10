@@ -166,7 +166,7 @@ Agent 可以使用 OpenClaw 标准消息能力发送文本或媒体。需要指�
 
 ### 媒体大小限制
 
-Bncr 的媒体与文件大小只由 OpenClaw 配置层决定，插件内不再维护独立阈值：
+入站、出站媒体和单个文件的总大小由 OpenClaw 配置层决定；分片协议另有固定安全上限：
 
 ```bash
 openclaw config set channels.bncr.mediaMaxMb 2048
@@ -174,7 +174,7 @@ openclaw config set channels.bncr.accounts.<accountId>.mediaMaxMb 1024
 openclaw config get channels.bncr.mediaMaxMb
 ```
 
-优先级为 `accounts.<accountId>.mediaMaxMb` > `channels.bncr.mediaMaxMb` > `agents.defaults.mediaMaxMb` > 默认 `2048` MiB。该值同时约束入站媒体、入站文件分片和出站媒体；未显式配置时使用 2 GiB 默认值。传输层仍受分片大小、ACK 超时和网络条件限制。
+优先级为 `accounts.<accountId>.mediaMaxMb` > `channels.bncr.mediaMaxMb` > `agents.defaults.mediaMaxMb` > 默认 `2048` MiB，未显式配置时使用 2 GiB。该值决定单个文件可声明的总大小；服务端不信任客户端声明，会按实际序号、偏移、分片长度和累计字节逐片校验。为隔离共享 Gateway，单个分片最多 1 MiB，每账户最多 4 个、整个桥最多 8 个活动入站传输，同账户活动传输的声明总大小不得超过该账户的 `mediaMaxMb`。传输超时仍受 ACK 和网络条件限制。
 
 ### 入站媒体和历史媒体
 

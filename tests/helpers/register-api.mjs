@@ -78,6 +78,17 @@ export function createRegisterApiStub(overrides = {}) {
               maxBytes,
             };
           },
+          async saveMediaStream(stream, mimeType, direction, maxBytes, fileName) {
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+            return {
+              path: `/tmp/${fileName || 'file.bin'}`,
+              size: Buffer.concat(chunks).length,
+              mimeType,
+              direction,
+              maxBytes,
+            };
+          },
         },
         reply: {
           resolveEnvelopeFormatOptions() {

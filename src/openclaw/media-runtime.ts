@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { extensionForMime } from 'openclaw/plugin-sdk/media-mime';
-import { saveMediaBuffer } from 'openclaw/plugin-sdk/media-store';
+import { saveMediaBuffer, saveMediaStream } from 'openclaw/plugin-sdk/media-store';
 import { resolveConfigPath, STATE_DIR } from 'openclaw/plugin-sdk/state-paths';
 import { canonicalizeBase64, estimateBase64DecodedBytes } from '../core/base64.ts';
 
@@ -28,6 +28,13 @@ type RuntimeChannelMediaApi = {
   }) => Promise<RuntimeMediaLoaded>;
   saveMediaBuffer?: (
     buffer: Buffer,
+    mimeType: string | undefined,
+    direction: 'inbound' | 'outbound',
+    maxBytes: number,
+    fileName?: string,
+  ) => Promise<{ path: string }>;
+  saveMediaStream?: (
+    stream: AsyncIterable<unknown>,
     mimeType: string | undefined,
     direction: 'inbound' | 'outbound',
     maxBytes: number,
@@ -60,6 +67,23 @@ export async function saveOpenClawMediaBuffer(
   fileName?: string,
 ): Promise<{ path: string }> {
   const saved = await saveMediaBuffer(buffer, contentType, subdir, maxBytes, fileName);
+  return { path: saved.path };
+}
+
+/** Stream host-managed media without materializing a second whole-file buffer. */
+export async function saveOpenClawMediaStream(
+  api: RuntimeApiHolder,
+  stream: AsyncIterable<unknown>,
+  mimeType: string | undefined,
+  direction: 'inbound' | 'outbound',
+  maxBytes: number,
+  fileName?: string,
+): Promise<{ path: string }> {
+  const injected = api?.runtime?.channel?.media?.saveMediaStream;
+  if (typeof injected === 'function') {
+    return injected(stream, mimeType, direction, maxBytes, fileName);
+  }
+  const saved = await saveMediaStream(stream, mimeType, direction, maxBytes, fileName);
   return { path: saved.path };
 }
 

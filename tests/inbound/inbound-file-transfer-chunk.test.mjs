@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
+import { cleanupBridge, createBridge, recvKey } from '../helpers/bncr-bridge.mjs';
 
 test('handleFileChunk rejects invalid numeric chunk inputs without mutating transfer state', async () => {
   const bridge = createBridge();
 
   try {
-    bridge.fileRecvTransfers.set('recv-invalid-chunk', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-invalid-chunk'), {
       transferId: 'recv-invalid-chunk',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -20,8 +20,11 @@ test('handleFileChunk rejects invalid numeric chunk inputs without mutating tran
       fileSha256: '',
       startedAt: Date.now(),
       status: 'init',
-      bufferByChunk: new Map(),
       receivedChunks: new Set(),
+      receivedChunkDigests: new Map(),
+      receivedBytes: 0,
+      lastChunkAt: Date.now(),
+      operationTail: Promise.resolve(),
       ownerConnId: 'conn-1',
       ownerClientId: 'client-a',
     });
@@ -46,9 +49,10 @@ test('handleFileChunk rejects invalid numeric chunk inputs without mutating tran
 
     assert.equal(respondPayload.ok, false);
     assert.match(respondPayload.payload.error, /chunkIndex/);
-    const st = bridge.fileRecvTransfers.get('recv-invalid-chunk');
+    const st = bridge.fileRecvTransfers.get(recvKey('Primary', 'recv-invalid-chunk'));
     assert.equal(st.receivedChunks.size, 0);
-    assert.equal(st.bufferByChunk.size, 0);
+    assert.equal(st.receivedChunkDigests.size, 0);
+    assert.equal(st.receivedBytes, 0);
     assert.equal(st.status, 'init');
   } finally {
     cleanupBridge(bridge);
@@ -59,7 +63,7 @@ test('handleFileChunk rejects out-of-range chunk indexes without mutating transf
   const bridge = createBridge();
 
   try {
-    bridge.fileRecvTransfers.set('recv-out-of-range-chunk', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-out-of-range-chunk'), {
       transferId: 'recv-out-of-range-chunk',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -72,8 +76,11 @@ test('handleFileChunk rejects out-of-range chunk indexes without mutating transf
       fileSha256: '',
       startedAt: Date.now(),
       status: 'init',
-      bufferByChunk: new Map(),
       receivedChunks: new Set(),
+      receivedChunkDigests: new Map(),
+      receivedBytes: 0,
+      lastChunkAt: Date.now(),
+      operationTail: Promise.resolve(),
       ownerConnId: 'conn-1',
       ownerClientId: 'client-a',
     });
@@ -98,9 +105,10 @@ test('handleFileChunk rejects out-of-range chunk indexes without mutating transf
 
     assert.equal(respondPayload.ok, false);
     assert.match(respondPayload.payload.error, /chunkIndex out of range/);
-    const st = bridge.fileRecvTransfers.get('recv-out-of-range-chunk');
+    const st = bridge.fileRecvTransfers.get(recvKey('Primary', 'recv-out-of-range-chunk'));
     assert.equal(st.receivedChunks.size, 0);
-    assert.equal(st.bufferByChunk.size, 0);
+    assert.equal(st.receivedChunkDigests.size, 0);
+    assert.equal(st.receivedBytes, 0);
     assert.equal(st.status, 'init');
   } finally {
     cleanupBridge(bridge);
@@ -111,7 +119,7 @@ test('handleFileChunk ignores chunks after inbound transfer is completed', async
   const bridge = createBridge();
 
   try {
-    bridge.fileRecvTransfers.set('recv-completed-late-chunk', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-completed-late-chunk'), {
       transferId: 'recv-completed-late-chunk',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -126,8 +134,11 @@ test('handleFileChunk ignores chunks after inbound transfer is completed', async
       terminalAt: Date.now() - 500,
       completedPath: '/tmp/completed-demo.txt',
       status: 'completed',
-      bufferByChunk: new Map([[0, Buffer.from('hello')]]),
       receivedChunks: new Set([0]),
+      receivedChunkDigests: new Map([[0, 'digest']]),
+      receivedBytes: 5,
+      lastChunkAt: Date.now() - 1_000,
+      operationTail: Promise.resolve(),
       ownerConnId: 'conn-1',
       ownerClientId: 'client-a',
     });
@@ -154,11 +165,11 @@ test('handleFileChunk ignores chunks after inbound transfer is completed', async
     assert.equal(respondPayload.payload.status, 'completed');
     assert.equal(respondPayload.payload.ignored, true);
     assert.equal(respondPayload.payload.terminal, true);
-    const st = bridge.fileRecvTransfers.get('recv-completed-late-chunk');
+    const st = bridge.fileRecvTransfers.get(recvKey('Primary', 'recv-completed-late-chunk'));
     assert.equal(st.status, 'completed');
     assert.equal(st.completedPath, '/tmp/completed-demo.txt');
-    assert.equal(st.bufferByChunk.get(0).toString(), 'hello');
     assert.equal(st.receivedChunks.size, 1);
+    assert.equal(st.stagingPath, undefined);
   } finally {
     cleanupBridge(bridge);
   }

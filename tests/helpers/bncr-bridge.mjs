@@ -1,8 +1,14 @@
+import { unlinkSync } from 'node:fs';
 import { createBncrBridge } from '../../src/channel.ts';
+import { buildInboundFileTransferKey } from '../../src/plugin/file-inbound-state.ts';
 
 export const TEST_SESSION_KEY = 'agent:orion:bncr:direct:demo';
 export const TEST_ACCOUNT_ID = 'Primary';
 export const TEST_ROUTE = { platform: 'tgBot', groupId: '-1001', userId: '10001' };
+
+export function recvKey(accountId, transferId) {
+  return buildInboundFileTransferKey(accountId, transferId);
+}
 
 export function createApiStub(logs = null) {
   const options = logs && typeof logs === 'object' && !Array.isArray(logs) ? logs : {};
@@ -30,6 +36,19 @@ export function createApiStub(logs = null) {
         },
       },
       channel: {
+        media: {
+          async saveMediaStream(stream, mimeType, direction, maxBytes, fileName) {
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+            return {
+              path: `/tmp/${fileName || 'file.bin'}`,
+              size: Buffer.concat(chunks).length,
+              mimeType,
+              direction,
+              maxBytes,
+            };
+          },
+        },
         routing: {
           resolveAgentRoute() {
             return options.routeResult || { sessionKey: TEST_SESSION_KEY, agentId: 'orion' };
@@ -113,6 +132,15 @@ export function cleanupBridge(bridge) {
   bridge.fileAckWaiters?.clear?.();
 
   bridge.earlyFileAckCache?.clear?.();
+  for (const state of bridge.fileRecvTransfers?.values?.() || []) {
+    if (!state.stagingPath) continue;
+    try {
+      unlinkSync(state.stagingPath);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  bridge.fileRecvTransfers?.clear?.();
   bridge.fileTransfers?.clear?.();
   bridge.sceneRegistry?.clear?.();
 }

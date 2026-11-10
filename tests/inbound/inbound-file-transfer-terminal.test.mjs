@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cleanupBridge, createBridge } from '../helpers/bncr-bridge.mjs';
+import { cleanupBridge, createBridge, recvKey } from '../helpers/bncr-bridge.mjs';
 
 test('handleFileAbort ignores abort after inbound transfer is completed', async () => {
   const bridge = createBridge();
 
   try {
-    bridge.fileRecvTransfers.set('recv-completed-late-abort', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-completed-late-abort'), {
       transferId: 'recv-completed-late-abort',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -22,8 +22,11 @@ test('handleFileAbort ignores abort after inbound transfer is completed', async 
       terminalAt: Date.now() - 500,
       completedPath: '/tmp/completed-demo.txt',
       status: 'completed',
-      bufferByChunk: new Map([[0, Buffer.from('hello')]]),
       receivedChunks: new Set([0]),
+      receivedChunkDigests: new Map([[0, 'digest']]),
+      receivedBytes: 5,
+      lastChunkAt: Date.now() - 1_000,
+      operationTail: Promise.resolve(),
       ownerConnId: 'conn-1',
       ownerClientId: 'client-a',
     });
@@ -47,7 +50,7 @@ test('handleFileAbort ignores abort after inbound transfer is completed', async 
     assert.equal(respondPayload.payload.status, 'completed');
     assert.equal(respondPayload.payload.ignored, true);
     assert.equal(respondPayload.payload.terminal, true);
-    const st = bridge.fileRecvTransfers.get('recv-completed-late-abort');
+    const st = bridge.fileRecvTransfers.get(recvKey('Primary', 'recv-completed-late-abort'));
     assert.equal(st.status, 'completed');
     assert.equal(st.completedPath, '/tmp/completed-demo.txt');
     assert.equal(st.error, undefined);
@@ -60,7 +63,7 @@ test('terminal aborted inbound transfer ignores later chunk complete and abort w
   const bridge = createBridge();
 
   try {
-    bridge.fileRecvTransfers.set('recv-aborted-terminal', {
+    bridge.fileRecvTransfers.set(recvKey('Primary', 'recv-aborted-terminal'), {
       transferId: 'recv-aborted-terminal',
       accountId: 'Primary',
       sessionKey: 'agent:orion:bncr:direct:demo',
@@ -75,8 +78,11 @@ test('terminal aborted inbound transfer ignores later chunk complete and abort w
       terminalAt: Date.now() - 500,
       status: 'aborted',
       error: 'already aborted',
-      bufferByChunk: new Map([[0, Buffer.from('hello')]]),
       receivedChunks: new Set([0]),
+      receivedChunkDigests: new Map([[0, 'digest']]),
+      receivedBytes: 5,
+      lastChunkAt: Date.now() - 1_000,
+      operationTail: Promise.resolve(),
       ownerConnId: 'conn-1',
       ownerClientId: 'client-a',
     });
@@ -146,11 +152,11 @@ test('terminal aborted inbound transfer ignores later chunk complete and abort w
     assert.equal(abortPayload.payload.ignored, true);
     assert.equal(abortPayload.payload.terminal, true);
 
-    const st = bridge.fileRecvTransfers.get('recv-aborted-terminal');
+    const st = bridge.fileRecvTransfers.get(recvKey('Primary', 'recv-aborted-terminal'));
     assert.equal(st.status, 'aborted');
     assert.equal(st.error, 'already aborted');
-    assert.equal(st.bufferByChunk.get(0).toString(), 'hello');
     assert.equal(st.receivedChunks.size, 1);
+    assert.equal(st.stagingPath, undefined);
   } finally {
     cleanupBridge(bridge);
   }

@@ -42,9 +42,10 @@ export type BncrFileInboundRuntime = {
     sessionKey: string,
   ) => { sessionKey: string; route: BncrRoute } | null;
   buildCanonicalSessionKey: (route: BncrRoute, kind?: BncrSessionKind) => string;
-  saveInboundMediaBuffer: (args: {
+  saveInboundMediaStream: (args: {
     accountId: string;
-    buffer: Buffer;
+    stagingPath: string;
+    size: number;
     mimeType: string;
     fileName: string;
   }) => Promise<{ path: string }>;

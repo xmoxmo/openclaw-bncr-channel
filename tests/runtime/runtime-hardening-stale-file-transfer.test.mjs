@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
+import { recvKey } from '../helpers/bncr-bridge.mjs';
 import {
   createGatewayRespondCapture,
   createRegisterApiStub,
@@ -112,7 +113,7 @@ test('stale file chunk and complete from owner should continue transfer without 
   assert.equal(complete.calls[0][1].ok, true);
   assert.equal(complete.calls[0][1].stale, true);
   assert.equal(complete.calls[0][1].staleAccepted, true);
-  assert.equal(bridge.fileRecvTransfers.get('tf-1').status, 'completed');
+  assert.equal(bridge.fileRecvTransfers.get(recvKey('Primary', 'tf-1')).status, 'completed');
   assert.equal(bridge.connections.get('Primary::client-a').connId, 'conn-new');
 });
 
@@ -120,7 +121,7 @@ test('file complete aborts transfer when inbound media save fails', async () => 
   resetBncrRegisterGlobals();
   const mod = await import('../../index.ts');
   const api = createRegisterApiStub();
-  api.runtime.channel.media.saveMediaBuffer = async () => {
+  api.runtime.channel.media.saveMediaStream = async () => {
     throw new Error('save failed from test');
   };
   mod.default.register(api);
@@ -203,7 +204,7 @@ test('file complete aborts transfer when inbound media save fails', async () => 
 
   assert.equal(complete.calls[0][0], false);
   assert.match(complete.calls[0][1].error, /save failed from test/);
-  const st = globalThis.__bncrBridge.fileRecvTransfers.get('tf-save-fail');
+  const st = globalThis.__bncrBridge.fileRecvTransfers.get(recvKey('Primary', 'tf-save-fail'));
   assert.equal(st.status, 'aborted');
   assert.match(st.error, /save failed from test/);
   assert.equal(typeof st.terminalAt, 'number');
@@ -263,10 +264,10 @@ test('stale file chunk from non-owner should stay ignored', async () => {
   });
 
   const bridge = globalThis.__bncrBridge;
-  const st = bridge.fileRecvTransfers.get('tf-2');
+  const st = bridge.fileRecvTransfers.get(recvKey('Primary', 'tf-2'));
   st.ownerConnId = 'conn-someone-else';
   st.ownerClientId = 'client-b';
-  bridge.fileRecvTransfers.set('tf-2', st);
+  bridge.fileRecvTransfers.set(recvKey('Primary', 'tf-2'), st);
 
   const chunk = createGatewayRespondCapture();
   await fileChunk({
@@ -287,8 +288,7 @@ test('stale file chunk from non-owner should stay ignored', async () => {
     context: { broadcastToConnIds() {} },
   });
 
-  assert.equal(chunk.calls[0][0], true);
-  assert.equal(chunk.calls[0][1].stale, true);
-  assert.equal(chunk.calls[0][1].ignored, true);
-  assert.equal(bridge.fileRecvTransfers.get('tf-2').receivedChunks.size, 0);
+  assert.equal(chunk.calls[0][0], false);
+  assert.equal(chunk.calls[0][1].error, 'transfer not found');
+  assert.equal(bridge.fileRecvTransfers.get(recvKey('Primary', 'tf-2')).receivedChunks.size, 0);
 });

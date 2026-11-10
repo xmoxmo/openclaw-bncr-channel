@@ -8,6 +8,7 @@ import {
   isOpenClawRemoteHttpMediaUrl,
   loadOpenClawWebMedia,
   saveOpenClawChannelMediaBuffer,
+  saveOpenClawMediaStream,
 } from '../../src/openclaw/media-runtime.ts';
 
 test('isOpenClawRemoteHttpMediaUrl only accepts http and https urls', () => {
@@ -61,6 +62,40 @@ test('media runtime throws when host methods are unavailable', async () => {
     () => saveOpenClawChannelMediaBuffer({}, Buffer.from('x'), 'text/plain', 'inbound', 1),
     /saveMediaBuffer API is unavailable/,
   );
+});
+
+test('saveOpenClawMediaStream forwards the stream and bounded save contract once', async () => {
+  async function* chunks() {
+    yield Buffer.from('hello');
+  }
+  const stream = chunks();
+  const calls = [];
+  const api = {
+    runtime: {
+      channel: {
+        media: {
+          async saveMediaStream(...args) {
+            calls.push(args);
+            return { path: '/tmp/saved.txt' };
+          },
+        },
+      },
+    },
+  };
+
+  const saved = await saveOpenClawMediaStream(
+    api,
+    stream,
+    'text/plain',
+    'inbound',
+    1024,
+    'hello.txt',
+  );
+
+  assert.deepEqual(saved, { path: '/tmp/saved.txt' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], stream);
+  assert.deepEqual(calls[0].slice(1), ['text/plain', 'inbound', 1024, 'hello.txt']);
 });
 
 test('loadOpenClawWebMedia resolves relative paths against localRoots', async () => {

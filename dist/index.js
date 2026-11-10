@@ -1871,7 +1871,7 @@ function normalizeAccountId(accountId) {
 
 // src/openclaw/media-runtime.ts
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { saveMediaBuffer, saveMediaStream } from "openclaw/plugin-sdk/media-store";
 import { resolveConfigPath, STATE_DIR } from "openclaw/plugin-sdk/state-paths";
 
 // src/messaging/inbound/media-assets.ts
