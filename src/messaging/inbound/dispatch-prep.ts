@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { hasControlCommand } from 'openclaw/plugin-sdk/command-detection';
 import { estimateBase64DecodedBytes } from '../../core/base64.ts';
 import {
@@ -6,6 +5,7 @@ import {
   normalizeInboundSessionKey,
   withTaskSessionKey,
 } from '../../core/targets.ts';
+import { resolveOpenClawAgentWorkspaceDir } from '../../openclaw/agent-runtime.ts';
 import {
   readBncrSessionUpdatedAt,
   resolveBncrInboundSessionStorePath,
@@ -21,8 +21,9 @@ import {
 } from '../../openclaw/routing-runtime.ts';
 import type { BncrInboundApi, BncrInboundConfig, BncrRememberSessionRoute } from './contracts.ts';
 import {
+  BncrMediaSourceError,
   createBncrMediaId,
-  readBncrMediaFile,
+  readBncrAuthorizedMediaFile,
   saveBncrHistoryMediaBuffer,
 } from './media-assets.ts';
 import { isHttpMediaUrl } from './media-url-download.ts';
@@ -203,6 +204,7 @@ function resolveBncrInboundRawBody(args: {
 
 async function saveBncrInboundMediaItem(args: {
   api: BncrInboundApi;
+  cfg: BncrInboundConfig;
   item: ParsedInbound['mediaItems'][number];
   maxBytes: number;
   originAgentId: string;
@@ -264,22 +266,38 @@ async function saveBncrInboundMediaItem(args: {
           error instanceof Error && /too large/i.test(error.message) ? 'oversize' : 'fetch_failed';
       }
     }
-  } else if (pathFromTransfer && fs.existsSync(pathFromTransfer)) {
+  } else if (pathFromTransfer) {
+    sourceKind = 'local';
     sourceRef = pathFromTransfer;
-    try {
-      const mediaBuffer = await readBncrMediaFile(pathFromTransfer, args.maxBytes);
-      sizeBytes = mediaBuffer.byteLength;
-      const saved = await saveBncrHistoryMediaBuffer({
-        buffer: mediaBuffer,
-        contentType: mimeType,
-        agentId: args.originAgentId,
-        maxBytes: args.maxBytes,
-        fileName: effectiveFileName || pathFromTransfer.split(/[\\/]/).at(-1),
-      });
-      storedPath = saved.path;
-    } catch (error) {
-      status =
-        error instanceof Error && /too large/i.test(error.message) ? 'oversize' : 'unavailable';
+    // BNCR: historical local media stays lazy so the agent tool can perform
+    // the workspace authorization at the point of use.
+    if (!args.currentTurn) {
+      status = 'deferred';
+    } else {
+      try {
+        const workspaceDir = resolveOpenClawAgentWorkspaceDir(
+          args.api,
+          args.cfg,
+          args.originAgentId,
+        );
+        const loaded = await readBncrAuthorizedMediaFile(pathFromTransfer, args.maxBytes, [
+          workspaceDir,
+        ]);
+        sizeBytes = loaded.buffer.byteLength;
+        const saved = await saveBncrHistoryMediaBuffer({
+          buffer: loaded.buffer,
+          contentType: mimeType,
+          agentId: args.originAgentId,
+          maxBytes: args.maxBytes,
+          fileName: effectiveFileName || loaded.path.split(/[\\/]/).at(-1),
+        });
+        storedPath = saved.path;
+      } catch (error) {
+        status =
+          error instanceof BncrMediaSourceError && error.code === 'SOURCE_TOO_LARGE'
+            ? 'oversize'
+            : 'unavailable';
+      }
     }
   }
   if (!storedPath && sourceKind === 'local' && !sourceRef) return null;
@@ -439,6 +457,7 @@ export async function prepareBncrInboundSessionContext(args: {
       fallbackMediaItems.map((item) =>
         saveBncrInboundMediaItem({
           api,
+          cfg,
           item,
           maxBytes: mediaMaxBytes,
           originAgentId: resolvedRoute.agentId,

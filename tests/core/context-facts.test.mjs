@@ -535,6 +535,14 @@ test('historical media normalizes legacy URL paths without overriding explicit s
             contentType: 'image/png',
             mediaId: 'explicit-local',
           },
+          {
+            kind: 'document',
+            sourceRef: '/workspace/public/report.pdf',
+            sourceKind: 'local',
+            status: 'deferred',
+            contentType: 'application/pdf',
+            mediaId: 'deferred-workspace-local',
+          },
         ],
       },
     ],
@@ -567,6 +575,11 @@ test('historical media normalizes legacy URL paths without overriding explicit s
       {
         mediaRef: 'explicit-local',
         source: 'https://explicit.example.test/local.png',
+        sourceKind: 'local',
+      },
+      {
+        mediaRef: 'deferred-workspace-local',
+        source: '/workspace/public/report.pdf',
         sourceKind: 'local',
       },
     ],

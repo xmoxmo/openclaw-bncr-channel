@@ -143,7 +143,10 @@ function resolveBncrMediaContractFields(item: {
       '',
   ).trim();
   const local = String(
-    item.storedPath || (explicitKind !== 'url' && !url ? pathValue : '') || '',
+    item.storedPath ||
+      (explicitKind === 'local' ? sourceRefValue : '') ||
+      (explicitKind !== 'url' && !url ? pathValue : '') ||
+      '',
   ).trim();
   const source = url || local;
   const sourceKind = url ? ('url' as const) : local ? ('local' as const) : undefined;

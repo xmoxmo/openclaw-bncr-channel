@@ -100,16 +100,24 @@ export async function saveBncrHistoryMediaBuffer(args: {
   return storage.saveBuffer(args);
 }
 
-export async function readBncrMediaFile(filePath: string, maxBytes: number): Promise<Buffer> {
+async function readResolvedBncrMediaFile(filePath: string, maxBytes: number): Promise<Buffer> {
   const handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const info = await handle.stat();
-    if (!info.isFile()) throw new Error(`media path is not a regular file: ${filePath}`);
+    if (!info.isFile()) {
+      throw new BncrMediaSourceError('SOURCE_NOT_FOUND', 'media source is not a regular file');
+    }
     if (info.size > maxBytes)
-      throw new Error(`media file is too large: ${info.size} > ${maxBytes}`);
+      throw new BncrMediaSourceError(
+        'SOURCE_TOO_LARGE',
+        `media source is too large: ${info.size} > ${maxBytes}`,
+      );
     const buffer = await handle.readFile();
     if (buffer.byteLength > maxBytes) {
-      throw new Error(`media file is too large: ${buffer.byteLength} > ${maxBytes}`);
+      throw new BncrMediaSourceError(
+        'SOURCE_TOO_LARGE',
+        `media source is too large: ${buffer.byteLength} > ${maxBytes}`,
+      );
     }
     return buffer;
   } finally {
@@ -117,9 +125,22 @@ export async function readBncrMediaFile(filePath: string, maxBytes: number): Pro
   }
 }
 
-export async function assertBncrManagedMediaFile(
+export async function readBncrAuthorizedMediaFile(
   filePath: string,
   maxBytes: number,
+  additionalRoots: readonly string[] = [],
+): Promise<{ path: string; buffer: Buffer }> {
+  const sourcePath = await assertBncrAuthorizedMediaFile(filePath, maxBytes, additionalRoots);
+  return {
+    path: sourcePath,
+    buffer: await readResolvedBncrMediaFile(sourcePath, maxBytes),
+  };
+}
+
+export async function assertBncrAuthorizedMediaFile(
+  filePath: string,
+  maxBytes: number,
+  additionalRoots: readonly string[] = [],
 ): Promise<string> {
   const source = String(filePath || '').trim();
   if (!source) throw new BncrMediaSourceError('SOURCE_REQUIRED', 'media source is required');
@@ -130,22 +151,29 @@ export async function assertBncrManagedMediaFile(
     );
   }
 
-  let resolvedRoot: string;
   let resolvedSource: string;
   try {
-    resolvedRoot = await fs.realpath(storage.getMediaDir());
     resolvedSource = await fs.realpath(source);
   } catch (error) {
     throw new BncrMediaSourceError('SOURCE_NOT_FOUND', 'media source is not available', {
       cause: error,
     });
   }
-  if (!isPathInsideRoot(resolvedSource, resolvedRoot)) {
-    // A path outside the managed store is indistinguishable from an
-    // unavailable path at this boundary.
+  const roots = await Promise.all(
+    [storage.getMediaDir(), ...additionalRoots].map(async (root) => {
+      try {
+        return await fs.realpath(root);
+      } catch {
+        return '';
+      }
+    }),
+  );
+  // BNCR: local media is readable only from the host media store or the
+  // calling agent's resolved workspace.
+  if (!roots.some((root) => root && isPathInsideRoot(resolvedSource, root))) {
     throw new BncrMediaSourceError(
       'SOURCE_NOT_FOUND',
-      'local media source is outside the OpenClaw media directory',
+      'local media source is outside the authorized media directories',
     );
   }
 
@@ -167,6 +195,13 @@ export async function assertBncrManagedMediaFile(
     );
   }
   return resolvedSource;
+}
+
+export async function assertBncrManagedMediaFile(
+  filePath: string,
+  maxBytes: number,
+): Promise<string> {
+  return assertBncrAuthorizedMediaFile(filePath, maxBytes);
 }
 
 async function writeBncrMaterializedMedia(args: {

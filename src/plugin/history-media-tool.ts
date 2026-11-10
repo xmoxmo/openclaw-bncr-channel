@@ -26,11 +26,12 @@ export function createBncrHistoryMediaToolFactory(args: {
           name: BNCR_HISTORY_MEDIA_TOOL_NAME,
           label: 'BNCR historical media',
           description:
-            'Download one historical BNCR media attachment into the current agent workspace. Pass source, sourceKind, mediaRef, contentType, and fileName exactly as shown in historical media metadata. Current-turn media is already attached.',
+            'Download one historical BNCR media attachment into the current agent workspace. Pass source, sourceKind, mediaRef, contentType, and fileName exactly as shown in historical media metadata. Local sources must belong to the current agent workspace or the host media store. Current-turn media is already attached.',
           parameters: Type.Object(
             {
               source: Type.String({
-                description: 'The exact URL or absolute local path from historical media metadata.',
+                description:
+                  'The exact URL or absolute local path from historical media metadata. Local paths must be in the current agent workspace or host media store.',
                 minLength: 1,
               }),
               sourceKind: Type.Union([Type.Literal('url'), Type.Literal('local')], {

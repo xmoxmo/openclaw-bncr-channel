@@ -60,11 +60,10 @@ import {
   processBncrHistoryShardSlot,
 } from './messaging/inbound/history-shard-worker.ts';
 import {
-  assertBncrManagedMediaFile,
   BncrMediaSourceError,
   createBncrMediaId,
   materializeBncrMediaBuffer,
-  readBncrMediaFile,
+  readBncrAuthorizedMediaFile,
 } from './messaging/inbound/media-assets.ts';
 import { assertFetchableMediaUrl } from './messaging/inbound/media-url-policy.ts';
 import type { BncrOutboundReplayCache } from './messaging/inbound/outbound-replay-cache.ts';
@@ -2826,6 +2825,7 @@ class BncrBridgeRuntime {
     const maxBytes = resolveBncrMediaMaxBytes(this.api, accountId);
     const cfg = getOpenClawRuntimeConfigOrDefault<BncrChannelConfigRoot>(this.api, {});
     const mediaRef = requestedMediaRef || createBncrMediaId();
+    const workspaceDir = resolveOpenClawAgentWorkspaceDir(this.api, cfg, agentId);
     let contentType = asString(args.contentType).trim() || undefined;
     let fileName = asString(args.fileName).trim() || undefined;
     let sizeBytes: number | undefined;
@@ -2857,7 +2857,7 @@ class BncrBridgeRuntime {
       fileName = loaded.fileName || fileName;
       sizeBytes = loaded.buffer.byteLength;
       materialized = await materializeBncrMediaBuffer({
-        workspaceDir: resolveOpenClawAgentWorkspaceDir(this.api, cfg, agentId),
+        workspaceDir,
         mediaRef,
         buffer: loaded.buffer,
         contentType,
@@ -2865,10 +2865,11 @@ class BncrBridgeRuntime {
         assertCurrent: args.assertCurrent,
       });
     } else {
-      const sourcePath = await assertBncrManagedMediaFile(source, maxBytes);
-      let buffer: Buffer;
+      let loaded: { path: string; buffer: Buffer };
       try {
-        buffer = await readBncrMediaFile(sourcePath, maxBytes);
+        // BNCR: authorization and the file read share one boundary; the tool
+        // may read only its resolved workspace or the host media store.
+        loaded = await readBncrAuthorizedMediaFile(source, maxBytes, [workspaceDir]);
       } catch (error) {
         throw new BncrMediaSourceError(
           error instanceof Error && /too large/i.test(error.message)
@@ -2879,12 +2880,12 @@ class BncrBridgeRuntime {
         );
       }
       args.assertCurrent?.();
-      sizeBytes = buffer.byteLength;
-      fileName = fileName || path.basename(sourcePath);
+      sizeBytes = loaded.buffer.byteLength;
+      fileName = fileName || path.basename(loaded.path);
       materialized = await materializeBncrMediaBuffer({
-        workspaceDir: resolveOpenClawAgentWorkspaceDir(this.api, cfg, agentId),
+        workspaceDir,
         mediaRef,
-        buffer,
+        buffer: loaded.buffer,
         contentType,
         fileName,
         assertCurrent: args.assertCurrent,

@@ -134,6 +134,43 @@ test('bncr_download_media copies a managed local source and preserves metadata',
   }
 });
 
+test('bncr_download_media copies a local source from the calling agent workspace', async () => {
+  const mediaStorage = await installBncrTestMediaStorage();
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'bncr-agent-workspace-'));
+  const workspaceDir = path.join(workspaceRoot, 'workspaces', 'orion');
+  const sourcePath = path.join(workspaceDir, 'agent-owned.pdf');
+  await mkdir(workspaceDir, { recursive: true });
+  await writeFile(sourcePath, 'workspace-bytes');
+  const bridge = createBncrBridge(
+    createApi(
+      async () => {
+        throw new Error('URL reader must not run for workspace media');
+      },
+      2048,
+      workspaceRoot,
+    ),
+  );
+
+  try {
+    const downloaded = await bridge.downloadHistoryMedia(
+      downloadArgs({
+        source: sourcePath,
+        sourceKind: 'local',
+        mediaRef: 'bncr-media:workspace-download-1',
+        contentType: 'application/pdf',
+        fileName: 'agent-owned.pdf',
+      }),
+    );
+
+    assert.equal((await readFile(downloaded.localPath)).toString(), 'workspace-bytes');
+    assert.match(downloaded.localPath, /workspaces\/orion\/media\/inbound\//);
+    assert.equal(downloaded.contentType, 'application/pdf');
+  } finally {
+    await mediaStorage.restore();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('bncr_download_media atomically replaces a pre-existing workspace symlink', async () => {
   const mediaStorage = await installBncrTestMediaStorage();
   const sourceDir = path.join(mediaStorage.root, 'history', 'public');
@@ -226,15 +263,24 @@ test('bncr_download_media rejects a symlinked media parent without creating outs
   }
 });
 
-test('bncr_download_media rejects local files outside the managed media directory', async () => {
+test('bncr_download_media rejects local files outside authorized roots and symlink escapes', async () => {
   const mediaStorage = await installBncrTestMediaStorage();
+  const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'bncr-agent-workspace-'));
   const outsideDir = await mkdtemp(path.join(os.tmpdir(), 'bncr-media-outside-'));
+  const workspaceDir = path.join(workspaceRoot, 'workspaces', 'orion');
+  const otherAgentDir = path.join(workspaceRoot, 'workspaces', 'public');
+  await mkdir(workspaceDir, { recursive: true });
+  await mkdir(otherAgentDir, { recursive: true });
   const outsidePath = path.join(outsideDir, 'secret.txt');
+  const otherAgentPath = path.join(otherAgentDir, 'public-only.txt');
   await writeFile(outsidePath, 'secret');
+  await writeFile(otherAgentPath, 'other-agent');
   const linkedPath = path.join(mediaStorage.root, 'linked-secret.txt');
+  const workspaceLinkedPath = path.join(workspaceDir, 'linked-secret.txt');
   await symlink(outsidePath, linkedPath);
+  await symlink(outsidePath, workspaceLinkedPath);
   const bridge = createBncrBridge(
-    createApi(async () => ({ buffer: Buffer.from('unused') }), 2048, mediaStorage.root),
+    createApi(async () => ({ buffer: Buffer.from('unused') }), 2048, workspaceRoot),
   );
 
   try {
@@ -246,8 +292,21 @@ test('bncr_download_media rejects local files outside the managed media director
       () => bridge.downloadHistoryMedia(downloadArgs({ source: linkedPath, sourceKind: 'local' })),
       (error) => error instanceof BncrMediaSourceError && error.code === 'SOURCE_NOT_FOUND',
     );
+    await assert.rejects(
+      () =>
+        bridge.downloadHistoryMedia(
+          downloadArgs({ source: workspaceLinkedPath, sourceKind: 'local' }),
+        ),
+      (error) => error instanceof BncrMediaSourceError && error.code === 'SOURCE_NOT_FOUND',
+    );
+    await assert.rejects(
+      () =>
+        bridge.downloadHistoryMedia(downloadArgs({ source: otherAgentPath, sourceKind: 'local' })),
+      (error) => error instanceof BncrMediaSourceError && error.code === 'SOURCE_NOT_FOUND',
+    );
   } finally {
     await mediaStorage.restore();
+    await rm(workspaceRoot, { recursive: true, force: true });
     await rm(outsideDir, { recursive: true, force: true });
   }
 });

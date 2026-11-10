@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -33,9 +33,14 @@ function createParsed(overrides = {}) {
   };
 }
 
-function createApi(routeResult, extra = {}) {
+function createApi(routeResult, extra = {}, workspaceRoot = '/tmp/bncr-test-workspaces') {
   return {
     runtime: {
+      agent: {
+        resolveAgentWorkspaceDir(_cfg, agentId) {
+          return path.join(workspaceRoot, agentId);
+        },
+      },
       channel: {
         routing: {
           resolveAgentRoute() {
@@ -434,75 +439,126 @@ test('current URL failure keeps the message metadata and does not block the turn
   assert.equal(prepared.mediaItems[0].path, undefined);
 });
 
-test('historical local media is copied under the origin agent and oversized files stay as metadata', async () => {
+test('historical local media stays deferred until the agent reads it', async () => {
   const mediaStorage = await installBncrTestMediaStorage();
-  const sourceDir = await mkdtemp(path.join(tmpdir(), 'bncr-local-media-'));
-  const sourcePath = path.join(sourceDir, 'old.bin');
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), 'bncr-local-workspace-'));
+  const workspaceDir = path.join(workspaceRoot, 'orion');
+  await mkdir(workspaceDir, { recursive: true });
+  const sourcePath = path.join(workspaceDir, 'old.bin');
   await writeFile(sourcePath, 'local');
-  const api = createApi({ sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' });
+  const api = createApi(
+    { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' },
+    {},
+    workspaceRoot,
+  );
   try {
-    const normalParsed = createParsed({
+    const parsed = createParsed({
       msgType: 'file',
       extracted: { text: 'old file' },
       mediaItems: [{ path: sourcePath, type: 'file' }],
-      msgId: 'historical-local-ready',
+      msgId: 'historical-local-deferred',
     });
-    const normalResolution = resolveBncrInboundConversation({
+    const resolution = resolveBncrInboundConversation({
       api,
       cfg: {},
       channelId: 'bncr',
-      parsed: normalParsed,
+      parsed,
       canonicalAgentId: 'orion',
     });
-    const normalPrepared = await prepareBncrInboundSessionContext({
+    const prepared = await prepareBncrInboundSessionContext({
       api,
       cfg: {},
-      parsed: normalParsed,
-      resolution: normalResolution,
+      parsed,
+      resolution,
       currentTurn: false,
       rememberSessionRoute() {},
     });
 
-    assert.equal(normalPrepared.mediaItems[0].status, 'ready');
-    assert.equal(normalPrepared.mediaItems[0].originAgentId, 'orion');
-    assert.match(normalPrepared.mediaItems[0].storedPath, /\/history\/orion\/.+\.bin$/);
-    assert.equal(normalPrepared.mediaItems[0].path, undefined);
-    assert.equal((await readFile(normalPrepared.mediaItems[0].storedPath)).toString(), 'local');
+    assert.equal(prepared.mediaItems[0].status, 'deferred');
+    assert.equal(prepared.mediaItems[0].originAgentId, 'orion');
+    assert.equal(prepared.mediaItems[0].sourceKind, 'local');
+    assert.equal(prepared.mediaItems[0].sourceRef, sourcePath);
+    assert.equal(prepared.mediaItems[0].storedPath, undefined);
+    assert.equal(prepared.mediaItems[0].path, undefined);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+    await mediaStorage.restore();
+  }
+});
+
+test('current local media is copied only from the origin agent workspace', async () => {
+  const mediaStorage = await installBncrTestMediaStorage();
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), 'bncr-local-workspace-'));
+  const workspaceDir = path.join(workspaceRoot, 'orion');
+  const outsideDir = await mkdtemp(path.join(tmpdir(), 'bncr-local-outside-'));
+  await mkdir(workspaceDir, { recursive: true });
+  const sourcePath = path.join(workspaceDir, 'current.bin');
+  const outsidePath = path.join(outsideDir, 'secret.bin');
+  const linkedPath = path.join(workspaceDir, 'linked.bin');
+  await writeFile(sourcePath, 'current-local');
+  await writeFile(outsidePath, 'secret');
+  await symlink(outsidePath, linkedPath);
+  const api = createApi(
+    { sessionKey: 'agent:orion:bncr:direct:demo', agentId: 'orion' },
+    {},
+    workspaceRoot,
+  );
+
+  async function prepareLocal(pathValue, msgId) {
+    const parsed = createParsed({
+      msgType: 'file',
+      extracted: { text: msgId },
+      mediaItems: [{ path: pathValue, type: 'file' }],
+      msgId,
+    });
+    const resolution = resolveBncrInboundConversation({
+      api,
+      cfg: {},
+      channelId: 'bncr',
+      parsed,
+      canonicalAgentId: 'orion',
+    });
+    return await prepareBncrInboundSessionContext({
+      api,
+      cfg: {},
+      parsed,
+      resolution,
+      currentTurn: true,
+      rememberSessionRoute() {},
+    });
+  }
+
+  try {
+    const ready = await prepareLocal(sourcePath, 'current-local-ready');
+    assert.equal(ready.mediaItems[0].status, 'ready');
+    assert.match(ready.mediaItems[0].storedPath, /\/history\/orion\/.+\.bin$/);
+    assert.equal(ready.mediaItems[0].path, ready.mediaItems[0].storedPath);
+    assert.equal((await readFile(ready.mediaItems[0].path)).toString(), 'current-local');
 
     api.runtime.config = {
       current() {
         return { channels: { bncr: { mediaMaxMb: 0.000001 } } };
       },
     };
-    const oversizedParsed = createParsed({
-      msgType: 'file',
-      extracted: { text: 'oversized file' },
-      mediaItems: [{ path: sourcePath, type: 'file' }],
-      msgId: 'historical-local-oversize',
-    });
-    const oversizedResolution = resolveBncrInboundConversation({
-      api,
-      cfg: {},
-      channelId: 'bncr',
-      parsed: oversizedParsed,
-      canonicalAgentId: 'orion',
-    });
-    const oversizedPrepared = await prepareBncrInboundSessionContext({
-      api,
-      cfg: {},
-      parsed: oversizedParsed,
-      resolution: oversizedResolution,
-      currentTurn: false,
-      rememberSessionRoute() {},
-    });
+    const oversized = await prepareLocal(sourcePath, 'current-local-oversize');
+    assert.equal(oversized.mediaItems[0].status, 'oversize');
+    assert.equal(oversized.mediaItems[0].storedPath, undefined);
 
-    assert.equal(oversizedPrepared.mediaItems.length, 1);
-    assert.equal(oversizedPrepared.mediaItems[0].status, 'oversize');
-    assert.equal(oversizedPrepared.mediaItems[0].originAgentId, 'orion');
-    assert.equal(oversizedPrepared.mediaItems[0].path, undefined);
-    assert.equal(oversizedPrepared.mediaItems[0].sourceRef, sourcePath);
+    api.runtime.config = {
+      current() {
+        return { channels: { bncr: { mediaMaxMb: 2048 } } };
+      },
+    };
+    const outside = await prepareLocal(outsidePath, 'current-local-outside');
+    assert.equal(outside.mediaItems[0].status, 'unavailable');
+    assert.equal(outside.mediaItems[0].storedPath, undefined);
+
+    const linked = await prepareLocal(linkedPath, 'current-local-linked');
+    assert.equal(linked.mediaItems[0].status, 'unavailable');
+    assert.equal(linked.mediaItems[0].storedPath, undefined);
   } finally {
-    await rm(sourceDir, { recursive: true, force: true });
+    await rm(workspaceRoot, { recursive: true, force: true });
+    await rm(outsideDir, { recursive: true, force: true });
     await mediaStorage.restore();
   }
 });
