@@ -251,6 +251,105 @@ test('a new admin scene row carries its approval mark', () => {
   assert.equal(resolveEffectiveSceneStatus(row), 'allowed');
 });
 
+test('an admitted admin direct message backfills a legacy approval mark', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    agentId: ADMIN_AGENT,
+    lastSeenAt: 1,
+  });
+
+  const decision = decideSceneAdmission({
+    parsed: {
+      isAdmin: true,
+      peer: { kind: 'direct' },
+      platform: 'tgBot',
+      userId: '10001',
+      groupId: '0',
+    },
+    now: 99,
+    sceneRegistry,
+    defaultAdminAgentId: ADMIN_AGENT,
+    defaultPublicAgentId: PUBLIC_AGENT,
+    sceneAgentId: ADMIN_AGENT,
+  });
+
+  const row = resolveSceneRecord(sceneRegistry, 'tgBot:10001', ADMIN_AGENT);
+  assert.equal(decision.allowed, true);
+  assert.equal(row?.approvedAt, 99);
+  assert.equal(resolveEffectiveSceneStatus(row), 'allowed');
+});
+
+test('the first admitted admin group message backfills a legacy approval mark', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: PUBLIC_AGENT,
+    groupReplyMode: 'admin',
+    lastSeenAt: 1,
+  });
+
+  const decision = decideSceneAdmission({
+    parsed: {
+      isAdmin: true,
+      peer: { kind: 'group' },
+      platform: 'tgBot',
+      groupId: '-1001',
+      userId: '9',
+    },
+    now: 88,
+    sceneRegistry,
+    defaultAdminAgentId: ADMIN_AGENT,
+    defaultPublicAgentId: PUBLIC_AGENT,
+    sceneAgentId: PUBLIC_AGENT,
+  });
+
+  const row = resolveSceneRecord(sceneRegistry, 'tgBot:-1001', PUBLIC_AGENT);
+  assert.equal(decision.allowed, true);
+  assert.equal(row?.approvedAt, 88);
+});
+
+test('a non-admin group pass does not fabricate an approval mark', () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:-1001',
+    kind: 'group',
+    status: 'allowed',
+    platform: 'tgBot',
+    groupId: '-1001',
+    agentId: PUBLIC_AGENT,
+    groupReplyMode: 'all',
+    lastSeenAt: 1,
+  });
+
+  const decision = decideSceneAdmission({
+    parsed: {
+      isAdmin: false,
+      peer: { kind: 'group' },
+      platform: 'tgBot',
+      groupId: '-1001',
+      userId: '9',
+    },
+    now: 77,
+    sceneRegistry,
+    defaultAdminAgentId: ADMIN_AGENT,
+    defaultPublicAgentId: PUBLIC_AGENT,
+    sceneAgentId: PUBLIC_AGENT,
+  });
+
+  const row = resolveSceneRecord(sceneRegistry, 'tgBot:-1001', PUBLIC_AGENT);
+  assert.equal(decision.allowed, true);
+  assert.equal(row?.approvedAt, undefined);
+});
+
 test('a legacy allowed direct row reads as pending until it is approved', () => {
   const legacy = {
     sceneKey: 'tgBot:10001',

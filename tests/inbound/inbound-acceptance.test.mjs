@@ -454,6 +454,50 @@ test('prepareBncrInboundAcceptance keeps unknown non-admin direct scenes pending
   });
 });
 
+test('prepareBncrInboundAcceptance does not auto-approve an explicit pending direct scene', async () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'pending',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'operator',
+    agentId: 'orion',
+    lastSeenAt: 100,
+  });
+
+  const result = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: buildParsed({
+        groupId: '0',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        peer: { kind: 'direct', id: '10001' },
+        isAdmin: true,
+      }),
+      sceneRegistry,
+      resolveAgentRoute: () => ({
+        sessionKey: 'agent:orion:bncr:direct:7467426f743a3130303031',
+        agentId: 'orion',
+      }),
+    }),
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    status: false,
+    payload: {
+      kind: 'gate-denied',
+      accountId: 'Primary',
+      msgId: 'msg-1',
+      reason: 'scene pending approval',
+    },
+  });
+  const row = resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'orion');
+  assert.equal(row?.status, 'pending');
+  assert.equal(row?.approvedAt, undefined);
+});
+
 test('prepareBncrInboundAcceptance lets admin callers recover denied group scenes', async () => {
   const sceneRegistry = new Map();
   setSceneRecord(sceneRegistry, {
@@ -648,6 +692,41 @@ test('prepareBncrInboundAcceptance sends legacy unapproved direct scenes with em
     historyForce: true,
     lastSeenAt: 123,
   });
+});
+
+test('prepareBncrInboundAcceptance backfills approval when an admin direct message passes', async () => {
+  const sceneRegistry = new Map();
+  setSceneRecord(sceneRegistry, {
+    sceneKey: 'tgBot:10001',
+    kind: 'direct',
+    status: 'allowed',
+    platform: 'tgBot',
+    userId: '10001',
+    userName: 'admin-user',
+    agentId: 'orion',
+    lastSeenAt: 100,
+  });
+
+  const result = await prepareBncrInboundAcceptance(
+    buildArgs({
+      parsed: buildParsed({
+        groupId: '0',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        peer: { kind: 'direct', id: '10001' },
+        isAdmin: true,
+        userName: 'admin-user',
+      }),
+      sceneRegistry,
+      resolveAgentRoute: () => ({
+        sessionKey: 'agent:orion:bncr:direct:7467426f743a3130303031',
+        agentId: 'orion',
+      }),
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolvedAgentId, 'orion');
+  assert.equal(resolveSceneRecord(sceneRegistry, 'tgBot:10001', 'orion')?.approvedAt, 123);
 });
 
 test('accepted legacy unowned direct scenes belong to the serving agent before command handling', async () => {

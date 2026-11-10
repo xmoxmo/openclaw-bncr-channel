@@ -277,6 +277,15 @@ export function decideSceneAdmission(args: {
       nextScene.status = 'pending';
     }
 
+    // Authorization is resolved before this gate. When that upstream fact marks
+    // the sender as an administrator and this admission succeeds, persist the
+    // approval fact that the old auto-admission rows never recorded. This covers
+    // direct chats and the first administrator-triggered admission of a group;
+    // the scene gate never derives administrator identity on its own.
+    if (nextScene.status === 'allowed' && parsed.isAdmin === true && !isSceneApproved(nextScene)) {
+      nextScene.approvedAt = now;
+    }
+
     setSceneRecord(sceneRegistry, nextScene, { previousAgentId: existing.agentId });
 
     if (nextScene.status === 'allowed') {
