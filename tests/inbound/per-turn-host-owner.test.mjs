@@ -3,7 +3,7 @@ import test from 'node:test';
 import { resolveCommandAuthorizationAsync } from 'openclaw/plugin-sdk/command-auth-native';
 import {
   mergeBncrOwnerAllowFromIntoConfig,
-  resolveBncrHostOwnerConfigOverride,
+  resolveBncrAgentTurnOwnerConfigOverride,
 } from '../../src/messaging/inbound/command-owner.ts';
 import { dispatchBncrInbound } from '../../src/messaging/inbound/dispatch.ts';
 import { parseBncrInboundParams } from '../../src/messaging/inbound/parse.ts';
@@ -134,17 +134,18 @@ test('admin ordinary turn exposes a one-turn owner override to the host dispatch
   assert.deepEqual(cfg.commands.ownerAllowFrom, ['existing-owner']);
 });
 
-test('admin native command exposes a one-turn owner override to the host dispatch', async () => {
+test('admin native command authorizes through cfg without replacing the host runtime config', async () => {
   const calls = await dispatchText({ isAdmin: true, msg: '/status' });
   assert.equal(calls.replyDispatches.length, 1);
   assert.deepEqual(calls.replyDispatches[0].cfg.commands.ownerAllowFrom, ['kvictor']);
-  assert.deepEqual(calls.hostConfigOverrides, [{ commands: { ownerAllowFrom: ['kvictor'] } }]);
+  assert.deepEqual(calls.hostConfigOverrides, []);
 });
 
-test('admin /stop fast path exposes the same one-turn owner override', async () => {
+test('admin /stop fast path authorizes through cfg without replacing the host runtime config', async () => {
   const calls = await dispatchText({ isAdmin: true, msg: '/stop' });
   assert.equal(calls.replyDispatches.length, 1);
-  assert.deepEqual(calls.hostConfigOverrides, [{ commands: { ownerAllowFrom: ['kvictor'] } }]);
+  assert.deepEqual(calls.replyDispatches[0].cfg.commands.ownerAllowFrom, ['kvictor']);
+  assert.deepEqual(calls.hostConfigOverrides, []);
 });
 
 test('a synthesized history flush never inherits the carrier sender admin identity', async () => {
@@ -216,7 +217,7 @@ test('non-admin temporary native command never exposes a host owner override', a
 
 test('host standard authorization accepts the merged per-turn owner list', async () => {
   const cfg = { commands: { ownerAllowFrom: ['existing-owner'] } };
-  const patch = resolveBncrHostOwnerConfigOverride({
+  const patch = resolveBncrAgentTurnOwnerConfigOverride({
     cfg,
     isAdmin: true,
     senderId: 'kvictor',
@@ -233,7 +234,7 @@ test('host standard authorization accepts the merged per-turn owner list', async
 
 test('admin identity is not inferred from untrusted prompt owner facts', () => {
   assert.equal(
-    resolveBncrHostOwnerConfigOverride({
+    resolveBncrAgentTurnOwnerConfigOverride({
       cfg: { commands: { ownerAllowFrom: [] } },
       isAdmin: false,
       senderId: 'kvictor',
@@ -244,7 +245,7 @@ test('admin identity is not inferred from untrusted prompt owner facts', () => {
 
 test('an empty sender never creates a per-turn owner patch', () => {
   assert.equal(
-    resolveBncrHostOwnerConfigOverride({
+    resolveBncrAgentTurnOwnerConfigOverride({
       cfg: { commands: { ownerAllowFrom: [] } },
       isAdmin: true,
       senderId: '   ',
@@ -286,7 +287,7 @@ test('reply runtime forwards the per-turn owner merge patch unchanged', async ()
     await dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
       ctx: { SenderId: 'kvictor' },
       cfg: { commands: { ownerAllowFrom: [] } },
-      hostDispatchConfig: { commands: { ownerAllowFrom: ['kvictor'] } },
+      agentTurnOwnerConfigOverride: { commands: { ownerAllowFrom: ['kvictor'] } },
       dispatcherOptions: { async deliver() {} },
     }),
     'ok',
@@ -333,13 +334,13 @@ test('reply runtime preserves an existing host config override and other dispatc
       cfg,
       dispatcherOptions,
       replyOptions,
-      hostDispatchConfig: { commands: { ownerAllowFrom: ['kvictor'] } },
+      agentTurnOwnerConfigOverride: { commands: { ownerAllowFrom: ['kvictor'] } },
       extraField: 'preserved',
     }),
     'ok',
   );
   assert.equal(calls[0].dispatcher, existingShared);
-  assert.equal('hostDispatchConfig' in calls[0], false);
+  assert.equal('agentTurnOwnerConfigOverride' in calls[0], false);
   assert.deepEqual(calls[0].configOverride, {
     agents: { defaults: { timeoutSeconds: 30 } },
     commands: { ownerAllowFrom: ['kvictor'] },
@@ -381,7 +382,7 @@ test('reply runtime keeps sibling command overrides when the host already has co
       ctx: { SenderId: 'kvictor' },
       cfg,
       dispatcherOptions: { async deliver() {} },
-      hostDispatchConfig: { commands: { ownerAllowFrom: ['kvictor'] } },
+      agentTurnOwnerConfigOverride: { commands: { ownerAllowFrom: ['kvictor'] } },
     }),
     'ok',
   );
@@ -425,7 +426,7 @@ test('reply runtime rejects a host configOverride shape that conflicts with the 
         ctx: { SenderId: 'kvictor' },
         cfg: {},
         dispatcherOptions: { async deliver() {} },
-        hostDispatchConfig: { commands: { ownerAllowFrom: ['kvictor'] } },
+        agentTurnOwnerConfigOverride: { commands: { ownerAllowFrom: ['kvictor'] } },
       }),
       item.reason,
     );
@@ -477,7 +478,7 @@ test('an owner turn fails clearly when the host config patch API is unavailable'
     dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
       ctx: { SenderId: 'kvictor' },
       cfg: {},
-      hostDispatchConfig: { commands: { ownerAllowFrom: ['kvictor'] } },
+      agentTurnOwnerConfigOverride: { commands: { ownerAllowFrom: ['kvictor'] } },
       dispatcherOptions: { async deliver() {} },
     }),
     /dispatchReplyFromConfig API is unavailable/,

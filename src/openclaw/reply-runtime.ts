@@ -134,20 +134,20 @@ export async function dispatchOpenClawReplyWithBufferedBlockDispatcher(
       disableBlockStreaming?: boolean;
       shouldEmitToolResult?: () => boolean;
     };
-    /** Per-turn RFC 7396 merge patch for the host's published runtime config. */
-    hostDispatchConfig?: Record<string, unknown>;
+    /** Owner-only configOverride for one ordinary agent turn, never command dispatch. */
+    agentTurnOwnerConfigOverride?: Record<string, unknown>;
   },
 ): Promise<unknown> {
   const reply = resolveReplyApi(api);
-  const { hostDispatchConfig: hostConfig, ...dispatchParams } = params;
-  const typedHostConfig = hostConfig as Record<string, unknown> | undefined;
+  const { agentTurnOwnerConfigOverride, ...dispatchParams } = params;
+  const ownerConfigOverride = agentTurnOwnerConfigOverride as Record<string, unknown> | undefined;
   const dispatchReplyFromConfig = reply.dispatchReplyFromConfig as
     | ((request: Record<string, unknown>) => Promise<unknown> | unknown)
     | undefined;
   const dispatchReplyWithBufferedBlockDispatcher = reply.dispatchReplyWithBufferedBlockDispatcher as
     | ((params: BufferedBlockDispatcherParams) => Promise<unknown> | unknown)
     | undefined;
-  if (hostConfig && typeof dispatchReplyFromConfig !== 'function') {
+  if (ownerConfigOverride && typeof dispatchReplyFromConfig !== 'function') {
     throw new Error('OpenClaw channel reply dispatchReplyFromConfig API is unavailable');
   }
   if (typeof dispatchReplyWithBufferedBlockDispatcher !== 'function') {
@@ -155,7 +155,7 @@ export async function dispatchOpenClawReplyWithBufferedBlockDispatcher(
       'OpenClaw channel reply dispatchReplyWithBufferedBlockDispatcher API is unavailable',
     );
   }
-  if (!hostConfig) {
+  if (!ownerConfigOverride) {
     return dispatchReplyWithBufferedBlockDispatcher(dispatchParams);
   }
   const ownerAwareDispatchReplyFromConfig = dispatchReplyFromConfig as (
@@ -168,7 +168,7 @@ export async function dispatchOpenClawReplyWithBufferedBlockDispatcher(
         ...request,
         configOverride: mergeOwnerPatchIntoHostConfigOverride({
           existingOverride: request.configOverride,
-          ownerPatch: typedHostConfig as Record<string, unknown>,
+          ownerPatch: ownerConfigOverride,
         }),
       }),
   } as BufferedBlockDispatcherParams);

@@ -33,11 +33,12 @@ export function mergeBncrOwnerAllowFromIntoConfig(args: {
 }
 
 /**
- * Build the one-turn config patch that lets the host's standard resolver recognize
- * a BNCR administrator from the same per-turn owner injection used by command dispatch.
+ * Build the owner patch for one ordinary agent turn. This must not be attached to
+ * native command dispatch: commands authorize against cloned cfg, while replacing
+ * the agent runtime config can invalidate the host's prepared model catalog.
  * The caller owns authorization: only an explicit platform admin identity may pass.
  */
-export function resolveBncrHostOwnerConfigOverride(args: {
+export function resolveBncrAgentTurnOwnerConfigOverride(args: {
   cfg: BncrInboundConfig;
   isAdmin: boolean;
   senderId: string;

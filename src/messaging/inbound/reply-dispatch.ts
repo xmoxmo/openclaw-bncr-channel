@@ -11,7 +11,7 @@ import type { BncrSceneRecord } from '../../plugin/channel-runtime-types.ts';
 import { buildSceneKey } from '../../plugin/scene-registry.ts';
 import {
   mergeBncrOwnerAllowFromIntoConfig,
-  resolveBncrHostOwnerConfigOverride,
+  resolveBncrAgentTurnOwnerConfigOverride,
 } from './command-owner.ts';
 import type {
   BncrEnqueueFromReply,
@@ -216,9 +216,13 @@ export async function runBncrInboundReplyDispatch(args: {
     parsed.isAdmin === true && !isBncrNativeCommand
       ? mergeBncrOwnerAllowFromIntoConfig({ cfg, senderIdForContext })
       : cfg;
-  const hostDispatchConfig = resolveBncrHostOwnerConfigOverride({
+  const isStopCommand = isBncrStopCommandText(rawBody);
+  // Commands authorize against the cloned cfg above. Only a real agent turn
+  // needs a configOverride so the host can expose senderIsOwner to plugins.
+  const agentTurnOwnerConfigOverride = resolveBncrAgentTurnOwnerConfigOverride({
     cfg,
-    isAdmin: parsed.isAdmin === true && !isBncrNativeCommand && !silentHistoryFlush,
+    isAdmin:
+      parsed.isAdmin === true && !isBncrNativeCommand && !isStopCommand && !silentHistoryFlush,
     senderId: senderIdForContext,
   });
 
@@ -248,7 +252,6 @@ export async function runBncrInboundReplyDispatch(args: {
 
   // Stop commands also bypass the reply serial chain; the inbound history serial
   // bypass is handled before this function runs so they can interrupt an agent.
-  const isStopCommand = isBncrStopCommandText(rawBody);
   const dispatchSessionKey = resolution.dispatchSessionKey;
 
   const runStopOrSerial = () => {
@@ -323,7 +326,7 @@ export async function runBncrInboundReplyDispatch(args: {
                     dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
                       ctx: ctxPayload,
                       cfg: buildBncrReplyConfig(commandDispatchCfg).replyCfg,
-                      ...(hostDispatchConfig ? { hostDispatchConfig } : {}),
+                      ...(agentTurnOwnerConfigOverride ? { agentTurnOwnerConfigOverride } : {}),
                       dispatcherOptions: {
                         deliver: async (
                           payload: {
