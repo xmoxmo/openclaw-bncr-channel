@@ -101,7 +101,9 @@ test('gcTransientState keeps the only live active connection even after push fai
     const conn = bridge.connections.get(key);
     conn.lastSeenAt = nowTs - 1_000;
     conn.lastPushTimeoutAt = nowTs - 500;
-    conn.pushFailureScore = 5;
+    conn.outboundFailureCount = 5;
+    conn.lastOutboundFailureAt = nowTs - 500;
+    conn.lastOutboundFailureKind = 'ack-timeout';
     bridge.connections.set(key, conn);
     bridge.activeConnectionByAccount.set('Primary', key);
 
@@ -211,8 +213,14 @@ test('resolveOutboxPushOwner can recover to a live connection after gc removes s
     );
 
     const owner = bridge.resolveOutboxPushOwner('Primary');
-    assert.ok(owner, 'expected live owner after stale active pointer cleanup');
+    assert.ok(owner, 'expected live owner candidate after stale active pointer cleanup');
     assert.equal(owner.clientId, 'client-b');
+    assert.equal(
+      bridge.activeConnectionByAccount.get('Primary'),
+      undefined,
+      'owner lookup must not mutate active state before dispatch',
+    );
+    assert.equal(bridge.commitOutboxPushOwner('Primary', 'conn-b'), true);
     assert.equal(bridge.activeConnectionByAccount.get('Primary'), liveKey);
   } finally {
     Date.now = originalNow;

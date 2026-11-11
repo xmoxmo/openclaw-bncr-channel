@@ -50,6 +50,11 @@ test('first ack timeout fast-reroutes away from lastPushConnId when an alternati
     assert.deepEqual(updated.routeAttemptConnIds, ['conn-a']);
     assert.equal(updated.fastReroutePending, true);
     assert.equal(updated.nextAttemptAt - updated.lastAttemptAt <= 1_100, true);
+    const degraded = bridge.connections.get('Primary:client-a');
+    assert.equal(degraded.outboundFailureCount, 1);
+    assert.equal(degraded.lastOutboundFailureKind, 'ack-timeout');
+    assert.equal(degraded.outboundReadyUntil, undefined);
+    assert.equal(degraded.preferredForOutboundUntil, undefined);
 
     const pushedEntry = makeEntry('msg-fast-reroute-next', 'fast reroute next');
     pushedEntry.routeAttemptConnIds = ['conn-a'];
@@ -211,6 +216,14 @@ test('route owner ignores stale active and inboundOnly candidates when outbound-
 
     assert.equal(ownerFromInboundOnlyActive?.connId, 'conn-outbound-ready');
     assert.deepEqual(connIdsFromInboundOnlyActive, ['conn-outbound-ready']);
+
+    const transferTargets = bridge.selectTransferConnIds({
+      directConnIds: new Set(['conn-stale-active', 'conn-outbound-ready']),
+      recentConnIds: new Set(['conn-stale-active', 'conn-outbound-ready']),
+      recentInboundReachable: true,
+      ownerConnId: 'conn-outbound-ready',
+    });
+    assert.deepEqual(Array.from(transferTargets), ['conn-outbound-ready']);
   } finally {
     cleanupBridge(bridge);
   }

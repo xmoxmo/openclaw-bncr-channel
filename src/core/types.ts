@@ -13,6 +13,16 @@ export type BncrConnection = {
   inboundOnly?: boolean;
   outboundReady?: boolean;
   preferredForOutbound?: boolean;
+  lastAckOkAt?: number;
+  lastPushTimeoutAt?: number;
+  outboundFailureCount?: number;
+  lastOutboundFailureAt?: number;
+  lastOutboundFailureKind?:
+    | 'pre-push-absence'
+    | 'broadcast-failure'
+    | 'ack-timeout'
+    | 'business-error'
+    | 'rpc-transport-timeout';
 };
 
 export type BncrGatewayCapabilityFlags = {

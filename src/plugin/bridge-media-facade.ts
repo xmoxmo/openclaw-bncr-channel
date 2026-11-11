@@ -26,6 +26,7 @@ export function createBncrBridgeMediaFacade(runtime: {
       directConnIds: Set<string>;
       recentConnIds: Set<string>;
       recentInboundReachable: boolean;
+      ownerConnId?: string;
     }) => ReadonlySet<string>;
   };
   fileTransferOrchestrator: {
@@ -205,6 +206,7 @@ export function createBncrBridgeMediaFacade(runtime: {
       directConnIds: Set<string>;
       recentConnIds: Set<string>;
       recentInboundReachable: boolean;
+      ownerConnId?: string;
     }) => runtime.outboxRoute.selectTransferConnIds(args),
     waitChunkAck: runtime.fileTransferOrchestrator.waitChunkAck,
     waitCompleteAck: runtime.fileTransferOrchestrator.waitCompleteAck,

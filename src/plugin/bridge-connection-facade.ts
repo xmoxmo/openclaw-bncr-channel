@@ -40,6 +40,7 @@ export function createBncrBridgeConnectionFacade(runtime: {
   };
   outboxRoute: {
     resolveOutboxPushOwner: (accountId: string) => BncrConnection | null;
+    commitOutboxPushOwner: (accountId: string, connId: string) => boolean;
     resolvePushConnIds: (accountId: string) => Set<string>;
   };
   rememberGatewayContext: (context: GatewayRequestHandlerOptions['context']) => void;
@@ -75,6 +76,8 @@ export function createBncrBridgeConnectionFacade(runtime: {
     rememberGatewayContext,
     resolveOutboxPushOwner: (accountId: string) =>
       runtime.outboxRoute.resolveOutboxPushOwner(accountId),
+    commitOutboxPushOwner: (accountId: string, connId: string) =>
+      runtime.outboxRoute.commitOutboxPushOwner(accountId, connId),
     resolvePushConnIds: (accountId: string) => runtime.outboxRoute.resolvePushConnIds(accountId),
     hasRecentInboundReachability: (accountId: string) =>
       runtime.connectionState.hasRecentInboundReachability(accountId),

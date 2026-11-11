@@ -40,6 +40,11 @@ export function resolveTextPushGuard(args: {
       recentInboundReachable: args.routeSelection.recentInboundReachable,
     };
   }
+  if (connIds.size !== 1) {
+    throw new Error(
+      `outbound text delivery requires exactly one target connection; got ${connIds.size}`,
+    );
+  }
 
   return {
     ok: true,

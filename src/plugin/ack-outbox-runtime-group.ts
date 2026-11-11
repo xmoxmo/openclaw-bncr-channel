@@ -1,4 +1,5 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import type { OutboundFailureKind } from '../core/outbound-connection-health.ts';
 import type { OutboxEntry } from '../core/types.ts';
 import { createBncrMessageAckRuntime } from './message-ack-runtime.ts';
 import { createBncrOutboxAckLogs } from './outbox-ack-logs.ts';
@@ -41,7 +42,14 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
     preferredForOutboundUntil?: number;
     lastAckOkAt?: number;
     lastPushTimeoutAt?: number;
-    pushFailureScore?: number;
+    outboundFailureCount?: number;
+    lastOutboundFailureAt?: number;
+    lastOutboundFailureKind?:
+      | 'pre-push-absence'
+      | 'broadcast-failure'
+      | 'ack-timeout'
+      | 'business-error'
+      | 'rpc-transport-timeout';
   }>;
   gatewayContextAvailable: () => boolean;
   messageAckWaiters: Map<
@@ -95,6 +103,12 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
     outboundReady: boolean;
     preferredForOutbound: boolean;
   }) => void;
+  markOutboundAckSuccess: (args: {
+    accountId: string;
+    connId: string;
+    clientId?: string;
+    at?: number;
+  }) => void;
   recordAckOkTelemetry: (args: {
     accountId: string;
     entry: OutboxEntry;
@@ -106,11 +120,10 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
   moveToDeadLetter: (entry: OutboxEntry, reason: string) => void;
   markRecentOutboundAcked?: (entry: OutboxEntry) => void;
   recordAckTimeoutTelemetry: (accountId: string) => void;
-  degradeOutboundCapability: (args: {
+  recordOutboundFailure: (args: {
     accountId: string;
-    connId?: string;
-    clientId?: string;
-    reason: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
   }) => void;
   flushPushQueueBestEffort: (args?: {
     accountId?: string;
@@ -146,6 +159,7 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
     now: runtime.now,
     defaultAckTimeoutMs: runtime.defaultAckTimeoutMs,
     markOutboundCapability: runtime.markOutboundCapability,
+    markOutboundAckSuccess: runtime.markOutboundAckSuccess,
     recordAckOkTelemetry: runtime.recordAckOkTelemetry,
     deleteOutboxEntry: runtime.deleteOutboxEntry,
     setOutboxEntry: runtime.setOutboxEntry,
@@ -228,7 +242,7 @@ export function createBncrAckOutboxRuntimeGroup(runtime: {
     resolveMessageAckTimeoutMs: runtime.resolveMessageAckTimeoutMs,
     waitForMessageAck: runtime.waitForMessageAck,
     logOutboxAckWait: outboxAckLogs.logOutboxAckWait,
-    degradeOutboundCapability: runtime.degradeOutboundCapability,
+    recordOutboundFailure: runtime.recordOutboundFailure,
     resolvePushConnIds: runtime.resolvePushConnIds,
     sleepMs: runtime.sleepMs,
     schedulePushDrain: runtime.schedulePushDrain,

@@ -26,6 +26,7 @@ import {
   emitBncrLog,
   summarizeBncrTextPreview,
 } from './core/logging.ts';
+import type { OutboundFailureKind } from './core/outbound-connection-health.ts';
 import { buildOutboxEntry as buildOutboxEntryFromRuntime } from './core/outbox-entry-builders.ts';
 import { summarizeOutboxEntry } from './core/outbox-summary.ts';
 import { normalizePersistedOutboxEntry as normalizePersistedOutboxEntryFromRuntime } from './core/persisted-outbox-entry.ts';
@@ -77,7 +78,11 @@ import {
   type MediaDedupeCacheEntry,
   normalizeReplyToId,
 } from './messaging/outbound/media-dedupe.ts';
-import { OUTBOUND_FLUSH_REASON, OUTBOUND_FLUSH_TRIGGER } from './messaging/outbound/reasons.ts';
+import {
+  OUTBOUND_DEGRADE_REASON,
+  OUTBOUND_FLUSH_REASON,
+  OUTBOUND_FLUSH_TRIGGER,
+} from './messaging/outbound/reasons.ts';
 import type {
   NormalizedReplyPayload,
   OutboundReplyTargetPolicy,
@@ -483,10 +488,13 @@ class BncrBridgeRuntime {
   private earlyFileAcks = new Map<string, FileAckPayloadState>();
 
   private readonly clientRpcRuntime = createBncrClientRpcRuntime({
-    resolvePushConnIds: (accountId) => this.resolvePushConnIds(accountId),
+    resolvePushOwnerConnId: (accountId) => this.resolveOutboxPushOwner(accountId)?.connId,
     broadcastToConnIds: (event, payload, connIds) =>
       this.gatewayContext?.broadcastToConnIds(event, payload, connIds),
-    now,
+    commitOutboundOwner: (accountId, connId) =>
+      this.bridgeConnectionFacade.commitOutboxPushOwner(accountId, connId),
+    markOutboundAckSuccess: (args) => this.connectionState.markOutboundAckSuccess(args),
+    recordOutboundFailure: (args) => this.recordOutboundFailure(args),
     logInfo: (scope, message, options) => this.logInfo(scope, message, options),
   });
 
@@ -1364,6 +1372,10 @@ class BncrBridgeRuntime {
     return this.bridgeConnectionFacade.resolveOutboxPushOwner(accountId);
   }
 
+  private commitOutboxPushOwner(accountId: string, connId: string): boolean {
+    return this.bridgeConnectionFacade.commitOutboxPushOwner(accountId, connId);
+  }
+
   private resolvePushConnIds(accountId: string): Set<string> {
     return this.bridgeConnectionFacade.resolvePushConnIds(accountId);
   }
@@ -1576,6 +1588,7 @@ class BncrBridgeRuntime {
         this.handleFileTransferPushGuardFailure(flowArgs),
       handleTextPushFailure: (flowArgs) => this.handleTextPushFailure(flowArgs),
       handleFileTransferPushFailure: (flowArgs) => this.handleFileTransferPushFailure(flowArgs),
+      recordOutboundFailure: (args) => this.recordOutboundFailure(args),
       // Unified push deps
       pushEvent: BNCR_PUSH_EVENT,
       gatewayBroadcastToConnIds: (event, payload, connIds) =>
@@ -1913,6 +1926,10 @@ class BncrBridgeRuntime {
     clearLastError?: boolean;
   }) {
     this.bridgeOutboxFacade.recordOutboxPushSuccess(args);
+    const targetConnId = String(args.ownerConnId || args.entry.lastPushConnId || '').trim();
+    if (targetConnId) {
+      this.bridgeConnectionFacade.commitOutboxPushOwner(args.entry.accountId, targetConnId);
+    }
   }
 
   private schedulePushDrain(delayMs = 0) {
@@ -2031,6 +2048,7 @@ class BncrBridgeRuntime {
     rememberGatewayContext: (context) => this.rememberGatewayContext(context),
     markSeen: (accountId, connId, clientId) => this.markSeen(accountId, connId, clientId),
     markOutboundCapability: (args) => this.markOutboundCapability(args),
+    markOutboundAckSuccess: (args) => this.connectionState.markOutboundAckSuccess(args),
     recordAckOkTelemetry: (args) => this.recordAckOkTelemetry(args),
     deleteOutboxEntry: (messageId) => this.outbox.delete(messageId),
     setOutboxEntry: (messageId, entry) => this.outbox.set(messageId, entry),
@@ -2038,7 +2056,7 @@ class BncrBridgeRuntime {
     moveToDeadLetter: (entry, reason) => this.moveToDeadLetter(entry, reason),
     markRecentOutboundAcked: (entry) => this.markRecentOutboundAcked(entry),
     recordAckTimeoutTelemetry: (accountId) => this.recordAckTimeoutTelemetry(accountId),
-    degradeOutboundCapability: (args) => this.degradeOutboundCapability(args),
+    recordOutboundFailure: (args) => this.recordOutboundFailure(args),
     flushPushQueueBestEffort: (args) => this.flushPushQueueBestEffort(args),
     flushTriggerTimer: OUTBOUND_FLUSH_TRIGGER.TIMER,
     flushReasonScheduledDrain: OUTBOUND_FLUSH_REASON.SCHEDULED_DRAIN,
@@ -2588,6 +2606,30 @@ class BncrBridgeRuntime {
     this.connectionState.markOutboundCapability(args);
   }
 
+  private recordOutboundFailure(args: {
+    accountId: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
+  }) {
+    // Health accounting owns the decision about whether this event says
+    // anything about the connection. Business rejections and pre-push absence
+    // are deliberately excluded; capability degradation must follow that same
+    // decision instead of reinterpreting the error kind here.
+    const recordsConnectionHealth = this.connectionState.recordOutboundFailure(args);
+    if (!recordsConnectionHealth) return;
+    const reason =
+      args.kind === 'ack-timeout'
+        ? OUTBOUND_DEGRADE_REASON.ACK_TIMEOUT
+        : OUTBOUND_DEGRADE_REASON.PUSH_UNCONFIRMED;
+    for (const connId of new Set(args.connIds)) {
+      this.connectionState.degradeOutboundCapability({
+        accountId: args.accountId,
+        connId,
+        reason,
+      });
+    }
+  }
+
   private hasAlternativeLiveConnection(
     accountId: string,
     currentConnId?: string,
@@ -3101,6 +3143,7 @@ class BncrBridgeRuntime {
     directConnIds: Set<string>;
     recentConnIds: Set<string>;
     recentInboundReachable: boolean;
+    ownerConnId?: string;
   }) {
     return this.bridgeMediaFacade.selectTransferConnIds(args);
   }
@@ -3228,6 +3271,7 @@ class BncrBridgeRuntime {
     logFileTransferChunkAck: (args) => this.logFileTransferChunkAck(args),
     logFileTransferChunkAckFail: (args) => this.logFileTransferChunkAckFail(args),
     logFileTransferCompleteAck: (args) => this.logFileTransferCompleteAck(args),
+    recordOutboundFailure: (args) => this.recordOutboundFailure(args),
     logInfo: (scope, message, options) => this.logInfo(scope, message, options),
     logEnqueueFromReply: (args) => this.logEnqueueFromReply(args),
     enqueueOutbound: (entry) => this.enqueueOutbound(entry),

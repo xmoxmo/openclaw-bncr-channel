@@ -1,4 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import {
+  classifyOutboundFailure,
+  OUTBOUND_FAILURE_KIND,
+  type OutboundFailureKind,
+} from '../core/outbound-connection-health.ts';
 
 export const BNCR_CLIENT_RPC_REQUEST_EVENT = 'plugin.bncr.rpc.request';
 export const BNCR_CLIENT_RPC_RESPONSE_METHOD = 'bncr.rpc.response';
@@ -6,6 +12,8 @@ export const BNCR_CLIENT_RPC_TIMEOUT_MS = 15000;
 
 type BncrClientRpcPending = {
   method: string;
+  accountId: string;
+  connId: string;
   resolve: (result: Record<string, unknown>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
@@ -23,14 +31,19 @@ export type BncrClientRpcRuntime = {
 };
 
 export function createBncrClientRpcRuntime(runtime: {
-  resolvePushConnIds: (accountId: string) => ReadonlySet<string>;
+  resolvePushOwnerConnId: (accountId: string) => string | null | undefined;
   broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => void;
-  now: () => number;
+  commitOutboundOwner?: (accountId: string, connId: string) => unknown;
+  markOutboundAckSuccess?: (args: { accountId: string; connId: string }) => unknown;
+  recordOutboundFailure?: (args: {
+    accountId: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
+  }) => unknown;
   logInfo: (scope: string, message: string, options?: { debugOnly?: boolean }) => void;
   timeoutMs?: number;
 }): BncrClientRpcRuntime {
   const pending = new Map<string, BncrClientRpcPending>();
-  let requestSeq = 0;
   const timeoutMs = Math.max(Number(runtime.timeoutMs ?? BNCR_CLIENT_RPC_TIMEOUT_MS), 1);
 
   const cleanup = (requestId: string) => {
@@ -46,16 +59,23 @@ export function createBncrClientRpcRuntime(runtime: {
       return Promise.reject(new Error('bncr client RPC requires a method name'));
     }
 
-    const connIds = runtime.resolvePushConnIds(accountId);
-    if (!connIds.size) {
+    const targetConnId = String(runtime.resolvePushOwnerConnId(accountId) || '').trim();
+    if (!targetConnId) {
       return Promise.reject(new Error(`no active bncr client connection for account ${accountId}`));
     }
-    const targetConnIds = new Set([Array.from(connIds)[0]]);
+    const targetConnIds = new Set([targetConnId]);
 
-    const requestId = `rpc_${runtime.now().toString(36)}_${String(process.pid)}_${++requestSeq}`;
+    // A BNCR result may return after a reconnect, so connId is only the current
+    // transport route. The unguessable requestId is this RPC's delivery proof.
+    const requestId = `rpc_${randomUUID()}`;
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup(requestId);
+        runtime.recordOutboundFailure?.({
+          accountId,
+          connIds: targetConnIds,
+          kind: OUTBOUND_FAILURE_KIND.RPC_TRANSPORT_TIMEOUT,
+        });
         reject(
           new Error(
             `bncr client RPC timeout method=${normalizedMethod}|accountId=${accountId}|timeoutMs=${timeoutMs}`,
@@ -64,19 +84,32 @@ export function createBncrClientRpcRuntime(runtime: {
       }, timeoutMs);
       pending.set(requestId, {
         method: normalizedMethod,
+        accountId,
+        connId: targetConnId,
         resolve,
         reject,
         timer,
       });
-      runtime.broadcastToConnIds(
-        BNCR_CLIENT_RPC_REQUEST_EVENT,
-        {
-          requestId,
-          method: normalizedMethod,
-          args: args ?? {},
-        },
-        targetConnIds,
-      );
+      try {
+        runtime.broadcastToConnIds(
+          BNCR_CLIENT_RPC_REQUEST_EVENT,
+          {
+            requestId,
+            method: normalizedMethod,
+            args: args ?? {},
+          },
+          targetConnIds,
+        );
+        runtime.commitOutboundOwner?.(accountId, targetConnId);
+      } catch (error) {
+        cleanup(requestId);
+        runtime.recordOutboundFailure?.({
+          accountId,
+          connIds: targetConnIds,
+          kind: classifyOutboundFailure({ error, stage: 'rpc' }),
+        });
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   };
 
@@ -95,6 +128,13 @@ export function createBncrClientRpcRuntime(runtime: {
 
     cleanup(requestId);
     if (params.ok === true) {
+      // A successful result is outbound evidence. A business rejection is not:
+      // it proves the client answered, but must not erase transport-failure
+      // history that may still affect route selection.
+      runtime.markOutboundAckSuccess?.({
+        accountId: entry.accountId,
+        connId: entry.connId,
+      });
       const result =
         params.result && typeof params.result === 'object'
           ? (params.result as Record<string, unknown>)

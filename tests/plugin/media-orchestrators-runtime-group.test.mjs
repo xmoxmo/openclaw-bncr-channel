@@ -86,6 +86,51 @@ test('media orchestrators runtime group exposes base64 transfer and reply enqueu
   assert.equal(calls.rememberRecentMediaSend.length, 1);
 });
 
+test('chunk completion send failure records outbound health exactly once', async () => {
+  const { runtime } = createRuntime();
+  const failures = [];
+  runtime.prepareOutboundTransfer = async () => ({
+    mode: 'chunk',
+    loaded: { buffer: Buffer.from('abc') },
+    size: 3,
+    mimeType: 'text/plain',
+    fileName: 'a.txt',
+    accountId: 'Primary',
+    connIds: new Set(['conn-a']),
+    transferId: 'transfer-1',
+    chunkSize: 262144,
+    totalChunks: 1,
+    fileSha256: 'sha',
+    state: {
+      transferId: 'transfer-1',
+      status: 'pending',
+      ackedChunks: new Set(),
+      failedChunks: new Map(),
+    },
+  });
+  runtime.getGatewayContext = () => ({ broadcastToConnIds() {} });
+  runtime.waitForFileAck = async (params) =>
+    params.stage === 'chunk' ? {} : { path: '/tmp/a.txt' };
+  runtime.sendComplete = () => {
+    throw new Error('socket hang up');
+  };
+  runtime.recordOutboundFailure = (args) => failures.push(args);
+
+  const group = createBncrMediaOrchestratorsRuntimeGroup(runtime);
+  await assert.rejects(
+    () =>
+      group.fileTransferOrchestrator.transferMediaToBncrClient({
+        accountId: 'Primary',
+        sessionKey: 'session-1',
+        route: { platform: 'tgBot', groupId: '0', userId: '10001' },
+        mediaUrl: '/tmp/a.png',
+      }),
+    /socket hang up/,
+  );
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].kind, 'broadcast-failure');
+});
+
 test('reply media orchestrator forwards extra metadata into file-transfer entry without retaining caller object', async () => {
   const { runtime, calls } = createRuntime();
   const group = createBncrMediaOrchestratorsRuntimeGroup(runtime);

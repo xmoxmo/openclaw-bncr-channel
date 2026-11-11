@@ -1,4 +1,5 @@
 import { formatDeadLetterTopReasons } from '../core/dead-letter-diagnostics.ts';
+import type { OutboundFailureKind } from '../core/outbound-connection-health.ts';
 import type {
   RegisterDriftSnapshot,
   RegisterTraceEntry,
@@ -22,6 +23,11 @@ export function buildBncrActiveConnectionDebugList(args: {
     outboundReadyUntil?: number;
     preferredForOutboundUntil?: number;
     inboundOnly?: boolean;
+    lastAckOkAt?: number;
+    lastPushTimeoutAt?: number;
+    outboundFailureCount?: number;
+    lastOutboundFailureAt?: number;
+    lastOutboundFailureKind?: OutboundFailureKind;
   }>;
   options?: { includeOutboundState?: boolean };
 }) {
@@ -38,6 +44,11 @@ export function buildBncrActiveConnectionDebugList(args: {
             outboundReadyUntil: conn.outboundReadyUntil || null,
             preferredForOutboundUntil: conn.preferredForOutboundUntil || null,
             inboundOnly: conn.inboundOnly === true,
+            lastAckOkAt: conn.lastAckOkAt,
+            lastPushTimeoutAt: conn.lastPushTimeoutAt,
+            outboundFailureCount: conn.outboundFailureCount || 0,
+            lastOutboundFailureAt: conn.lastOutboundFailureAt,
+            lastOutboundFailureKind: conn.lastOutboundFailureKind,
           }
         : {}),
     }));

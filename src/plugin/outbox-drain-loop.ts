@@ -126,7 +126,14 @@ type BncrOutboxDrainLoopRuntime = {
     preferredForOutboundUntil?: number;
     lastAckOkAt?: number;
     lastPushTimeoutAt?: number;
-    pushFailureScore?: number;
+    outboundFailureCount?: number;
+    lastOutboundFailureAt?: number;
+    lastOutboundFailureKind?:
+      | 'pre-push-absence'
+      | 'broadcast-failure'
+      | 'ack-timeout'
+      | 'business-error'
+      | 'rpc-transport-timeout';
   }>;
   gatewayContextAvailable: () => boolean;
   messageAckWaiterCount: () => number;

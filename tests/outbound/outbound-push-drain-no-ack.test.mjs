@@ -5,7 +5,7 @@ import { cleanupBridge, createBridge, makeEntry } from '../helpers/bncr-bridge.m
 test('flushPushQueue does not degrade or reroute when pushed entry leaves outbox before ack handling', async () => {
   const bridge = createBridge();
   const scheduled = [];
-  let degraded = false;
+  let failed = false;
   let waited = false;
 
   try {
@@ -23,8 +23,8 @@ test('flushPushQueue does not degrade or reroute when pushed entry leaves outbox
       waited = true;
       return 'timeout';
     };
-    bridge.degradeOutboundCapability = () => {
-      degraded = true;
+    bridge.recordOutboundFailure = () => {
+      failed = true;
     };
     bridge.schedulePushDrain = (delayMs = 0) => {
       scheduled.push(delayMs);
@@ -40,7 +40,7 @@ test('flushPushQueue does not degrade or reroute when pushed entry leaves outbox
     });
 
     assert.equal(waited, true);
-    assert.equal(degraded, false);
+    assert.equal(failed, false);
     assert.equal(bridge.outbox.has(entry.messageId), false);
     assert.deepEqual(scheduled, []);
   } finally {
@@ -51,7 +51,7 @@ test('flushPushQueue does not degrade or reroute when pushed entry leaves outbox
 test('flushPushQueue does not wait for ack or degrade when no-ack pushed entry leaves outbox', async () => {
   const bridge = createBridge();
   let waited = false;
-  let degraded = false;
+  let failed = false;
 
   try {
     const entry = makeEntry('msg-no-ack-removed-after-push', 'no ack removed after push');
@@ -68,8 +68,8 @@ test('flushPushQueue does not wait for ack or degrade when no-ack pushed entry l
       waited = true;
       return 'timeout';
     };
-    bridge.degradeOutboundCapability = () => {
-      degraded = true;
+    bridge.recordOutboundFailure = () => {
+      failed = true;
     };
     bridge.sleepMs = async () => {};
     bridge.isOnline = () => true;
@@ -82,7 +82,7 @@ test('flushPushQueue does not wait for ack or degrade when no-ack pushed entry l
     });
 
     assert.equal(waited, false);
-    assert.equal(degraded, false);
+    assert.equal(failed, false);
     assert.equal(bridge.messageAckWaiters.size, 0);
     assert.equal(bridge.outbox.has(entry.messageId), false);
   } finally {
@@ -138,7 +138,7 @@ test('flushPushQueue marks no-ack offline pushes as unconfirmed retry without wa
   const bridge = createBridge();
   const scheduled = [];
   let waited = false;
-  let degraded = null;
+  let failed = null;
   let saveCount = 0;
   const before = Date.now();
 
@@ -157,8 +157,8 @@ test('flushPushQueue marks no-ack offline pushes as unconfirmed retry without wa
       waited = true;
       return 'timeout';
     };
-    bridge.degradeOutboundCapability = (args) => {
-      degraded = args;
+    bridge.recordOutboundFailure = (args) => {
+      failed = args;
     };
     bridge.sleepMs = async () => {};
     bridge.isOnline = () => false;
@@ -180,9 +180,8 @@ test('flushPushQueue marks no-ack offline pushes as unconfirmed retry without wa
     assert.ok(updated, 'offline no-ack push should remain queued for retry');
     assert.equal(waited, false);
     assert.equal(bridge.messageAckWaiters.size, 0);
-    assert.equal(degraded?.reason, 'push-unconfirmed');
-    assert.equal(degraded?.connId, 'conn-no-ack-offline');
-    assert.equal(degraded?.clientId, 'client-no-ack-offline');
+    assert.equal(failed?.kind, 'broadcast-failure');
+    assert.deepEqual(Array.from(failed?.connIds || []), ['conn-no-ack-offline']);
     assert.equal(updated.retryCount, 1);
     assert.equal(updated.lastError, 'push-delivery-unconfirmed');
     assert.ok(updated.lastAttemptAt >= before);

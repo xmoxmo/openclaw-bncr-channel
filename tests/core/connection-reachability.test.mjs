@@ -208,13 +208,15 @@ test('selectOrderedOutboundPushConnections preserves outbound candidate priority
         connId: 'penalized-preferred',
         clientId: 'penalized-preferred',
         preferredForOutboundUntil: now + 10_000,
-        lastPushTimeoutAt: now - 100,
+        outboundFailureCount: 1,
+        lastOutboundFailureAt: now - 100,
+        lastOutboundFailureKind: 'ack-timeout',
       }),
       conn({
         connId: 'preferred',
         clientId: 'preferred',
         preferredForOutboundUntil: now + 10_000,
-        lastPushTimeoutAt: now - 40_000,
+        outboundFailureCount: 0,
       }),
       conn({
         connId: 'recent-inbound',

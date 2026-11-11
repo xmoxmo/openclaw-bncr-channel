@@ -7,7 +7,9 @@ type BncrConnectionDebugView = BncrConnection & {
   preferredForOutboundUntil?: number;
   lastAckOkAt?: number;
   lastPushTimeoutAt?: number;
-  pushFailureScore?: number;
+  outboundFailureCount?: number;
+  lastOutboundFailureAt?: number;
+  lastOutboundFailureKind?: string;
 };
 
 function asConnectionDebugView(connection: BncrConnection): BncrConnectionDebugView {
@@ -75,7 +77,15 @@ export function buildOutboxPushSkipDebugInfo(args: {
                 inboundOnly: view.inboundOnly,
                 lastAckOkAt: view.lastAckOkAt,
                 lastPushTimeoutAt: view.lastPushTimeoutAt,
-                pushFailureScore: view.pushFailureScore,
+                ...(view.outboundFailureCount !== undefined
+                  ? { outboundFailureCount: view.outboundFailureCount }
+                  : {}),
+                ...(view.lastOutboundFailureAt !== undefined
+                  ? { lastOutboundFailureAt: view.lastOutboundFailureAt }
+                  : {}),
+                ...(view.lastOutboundFailureKind !== undefined
+                  ? { lastOutboundFailureKind: view.lastOutboundFailureKind }
+                  : {}),
               };
             }),
         }
@@ -239,7 +249,15 @@ export function buildOutboxDrainStuckDebugInfo(args: {
                 inboundOnly: view.inboundOnly,
                 lastAckOkAt: view.lastAckOkAt,
                 lastPushTimeoutAt: view.lastPushTimeoutAt,
-                pushFailureScore: view.pushFailureScore,
+                ...(view.outboundFailureCount !== undefined
+                  ? { outboundFailureCount: view.outboundFailureCount }
+                  : {}),
+                ...(view.lastOutboundFailureAt !== undefined
+                  ? { lastOutboundFailureAt: view.lastOutboundFailureAt }
+                  : {}),
+                ...(view.lastOutboundFailureKind !== undefined
+                  ? { lastOutboundFailureKind: view.lastOutboundFailureKind }
+                  : {}),
               };
             }),
         }

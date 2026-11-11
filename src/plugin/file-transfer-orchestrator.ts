@@ -1,4 +1,8 @@
 import { buildFileTransferInitPayload } from '../core/file-transfer-payloads.ts';
+import {
+  classifyOutboundFailure,
+  type OutboundFailureKind,
+} from '../core/outbound-connection-health.ts';
 import type { BncrRoute, FileSendTransferState } from '../core/types.ts';
 import { asSanitizedString, clampFiniteNumber } from '../core/value-sanitize.ts';
 import { assertFetchableMediaUrl } from '../messaging/inbound/media-url-policy.ts';
@@ -127,6 +131,11 @@ export type BncrFileTransferOrchestratorRuntime = {
     accountId: string;
     payload: { path: string };
   }) => void;
+  recordOutboundFailure: (args: {
+    accountId: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
+  }) => void;
 };
 
 export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrchestratorRuntime) {
@@ -176,11 +185,20 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
     fileName: string;
   }): Promise<{ mode: 'chunk'; mimeType: string; fileName: string; path?: string }> => {
     const { transferId, accountId, connIds, mimeType, fileName } = params;
-    runtime.sendComplete({
-      transferId,
-      accountId,
-      connIds,
-    });
+    try {
+      runtime.sendComplete({
+        transferId,
+        accountId,
+        connIds,
+      });
+    } catch (error) {
+      runtime.recordOutboundFailure({
+        accountId,
+        connIds,
+        kind: classifyOutboundFailure({ error, stage: 'broadcast' }),
+      });
+      throw error;
+    }
 
     const done = await waitCompleteAck({ transferId, timeoutMs: 60_000 });
 
@@ -384,25 +402,39 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
     } = prepared;
     const mimeType = ensureTransferMimeType(prepared.mimeType, fileName);
     if (!connIds.size) throw new Error('no active bncr client for file chunk transfer');
+    if (connIds.size !== 1) {
+      throw new Error(
+        `outbound file transfer requires exactly one target connection; got ${connIds.size}`,
+      );
+    }
     const st = state as FileSendTransferState;
     runtime.fileSendTransfers.set(transferId, st);
 
-    ctx.broadcastToConnIds(
-      runtime.fileInitEvent,
-      buildFileTransferInitPayload({
-        transferId,
-        sessionKey: params.sessionKey,
-        route: params.route,
-        fileName,
-        mimeType,
-        fileSize: size,
-        chunkSize,
-        totalChunks,
-        fileSha256,
-        ts: runtime.now(),
-      }),
-      connIds,
-    );
+    try {
+      ctx.broadcastToConnIds(
+        runtime.fileInitEvent,
+        buildFileTransferInitPayload({
+          transferId,
+          sessionKey: params.sessionKey,
+          route: params.route,
+          fileName,
+          mimeType,
+          fileSize: size,
+          chunkSize,
+          totalChunks,
+          fileSha256,
+          ts: runtime.now(),
+        }),
+        connIds,
+      );
+    } catch (error) {
+      runtime.recordOutboundFailure({
+        accountId,
+        connIds,
+        kind: classifyOutboundFailure({ error, stage: 'broadcast' }),
+      });
+      throw error;
+    }
 
     for (let idx = 0; idx < totalChunks; idx++) {
       const start = idx * chunkSize;
@@ -423,6 +455,11 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
           logFileTransferChunkAckFail: runtime.logFileTransferChunkAckFail,
         });
       } catch (err) {
+        runtime.recordOutboundFailure({
+          accountId,
+          connIds,
+          kind: classifyOutboundFailure({ error: err, stage: 'broadcast' }),
+        });
         abortChunkTransfer({
           state: st,
           transferId,
@@ -437,6 +474,9 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
       }
     }
 
+    // finalizeChunkTransfer owns the completion-send failure accounting. Its
+    // sendComplete call is synchronous, so recording again here would double
+    // the same transport failure and demote the connection prematurely.
     return finalizeChunkTransfer({
       transferId,
       accountId,

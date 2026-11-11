@@ -152,7 +152,7 @@ test('outbox drain runtime flushes due entries through composed handlers', async
       return 'acked';
     },
     logOutboxAckWait() {},
-    degradeOutboundCapability() {},
+    recordOutboundFailure() {},
     resolvePushConnIds: () => new Set(['conn-1']),
     async sleepMs() {},
     schedulePushDrain(delayMs) {

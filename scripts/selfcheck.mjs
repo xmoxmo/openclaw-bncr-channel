@@ -41,6 +41,7 @@ const requiredSourceFiles = [
   'src/core/lease-state.ts',
   'src/core/logging.ts',
   'src/core/no-reply-marker.ts',
+  'src/core/outbound-connection-health.ts',
   'src/core/outbox-enqueue.ts',
   'src/core/outbox-entry-builders.ts',
   'src/core/outbox-file-transfer-bookkeeping.ts',

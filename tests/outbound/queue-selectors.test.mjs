@@ -197,7 +197,7 @@ test('selectOutboxRouteCandidates labels all-visible path when only attempted vi
   });
 
   assert.deepEqual(result, {
-    connIds: ['conn-a', 'conn-b'],
+    connIds: ['conn-a'],
     routeReason: 'active-connections-all-visible',
     recentInboundReachable: false,
   });
@@ -213,7 +213,7 @@ test('selectOutboxRouteCandidates labels revalidated path when attempted candida
   });
 
   assert.deepEqual(result, {
-    connIds: ['conn-a', 'conn-b'],
+    connIds: ['conn-a'],
     routeReason: 'active-connections-revalidated',
     recentInboundReachable: false,
   });

@@ -1,3 +1,7 @@
+import {
+  effectiveOutboundFailureScore,
+  type OutboundFailureKind,
+} from './outbound-connection-health.ts';
 import type { BncrConnection, OutboxEntry } from './types.ts';
 import { finiteNumberOr } from './value-sanitize.ts';
 
@@ -96,7 +100,9 @@ type OutboundPushCandidateConnection = BncrConnection & {
   outboundReadyUntil?: number;
   lastAckOkAt?: number;
   lastPushTimeoutAt?: number;
-  pushFailureScore?: number;
+  outboundFailureCount?: number;
+  lastOutboundFailureAt?: number;
+  lastOutboundFailureKind?: OutboundFailureKind;
 };
 
 export function isEligibleOutboundPushConnection(args: {
@@ -115,27 +121,18 @@ export function isEligibleOutboundPushConnection(args: {
   return true;
 }
 
-function scoreOutboundPushConnection(args: {
-  connection: BncrConnection;
-  now: number;
-  recentInboundConnIds: Set<string>;
-}) {
+function scoreOutboundPushConnection(args: { connection: BncrConnection; now: number }) {
   const conn = args.connection as OutboundPushCandidateConnection;
   const preferredForOutboundUntil = finiteNumberOr(conn.preferredForOutboundUntil, 0);
   const outboundReadyUntil = finiteNumberOr(conn.outboundReadyUntil, 0);
-  const lastPushTimeoutAt = finiteNumberOr(conn.lastPushTimeoutAt, 0);
   const lastAckOkAt = finiteNumberOr(conn.lastAckOkAt, 0);
-  const pushFailureScore = finiteNumberOr(conn.pushFailureScore, 0);
-  const recentTimeoutPenalty =
-    lastPushTimeoutAt > 0 && args.now - lastPushTimeoutAt <= 30_000 ? 1 : 0;
+  const outboundFailureScore = effectiveOutboundFailureScore(conn, args.now);
   return {
     preferred: preferredForOutboundUntil > args.now ? 1 : 0,
     ready: outboundReadyUntil > args.now ? 1 : 0,
-    recentInbound: args.recentInboundConnIds.has(conn.connId) ? 1 : 0,
-    recentTimeoutPenalty,
-    pushFailureScore,
+    outboundFailureScore,
     lastAckOkAt,
-    lastPushTimeoutAt,
+    lastOutboundFailureAt: finiteNumberOr(conn.lastOutboundFailureAt, 0),
     lastSeenAt: finiteNumberOr(conn.lastSeenAt, 0),
     connectedAt: finiteNumberOr(conn.connectedAt, 0),
   };
@@ -150,22 +147,18 @@ function compareOutboundPushConnections(args: {
   const sa = scoreOutboundPushConnection({
     connection: args.a,
     now: args.now,
-    recentInboundConnIds: args.recentInboundConnIds,
   });
   const sb = scoreOutboundPushConnection({
     connection: args.b,
     now: args.now,
-    recentInboundConnIds: args.recentInboundConnIds,
   });
   if (sb.preferred !== sa.preferred) return sb.preferred - sa.preferred;
   if (sb.ready !== sa.ready) return sb.ready - sa.ready;
-  if (sa.recentTimeoutPenalty !== sb.recentTimeoutPenalty)
-    return sa.recentTimeoutPenalty - sb.recentTimeoutPenalty;
-  if (sa.pushFailureScore !== sb.pushFailureScore) return sa.pushFailureScore - sb.pushFailureScore;
+  if (sa.outboundFailureScore !== sb.outboundFailureScore)
+    return sa.outboundFailureScore - sb.outboundFailureScore;
   if (sb.lastAckOkAt !== sa.lastAckOkAt) return sb.lastAckOkAt - sa.lastAckOkAt;
-  if (sa.lastPushTimeoutAt !== sb.lastPushTimeoutAt)
-    return sa.lastPushTimeoutAt - sb.lastPushTimeoutAt;
-  if (sb.recentInbound !== sa.recentInbound) return sb.recentInbound - sa.recentInbound;
+  if (sa.lastOutboundFailureAt !== sb.lastOutboundFailureAt)
+    return sa.lastOutboundFailureAt - sb.lastOutboundFailureAt;
   if (sb.lastSeenAt !== sa.lastSeenAt) return sb.lastSeenAt - sa.lastSeenAt;
   return sb.connectedAt - sa.connectedAt;
 }
@@ -177,6 +170,9 @@ export function selectOrderedOutboundPushConnections(args: {
   recentInboundConnIds: Set<string>;
   connections: Iterable<BncrConnection>;
 }) {
+  // Inbound affinity must not act as outbound delivery evidence. Keep the
+  // parameter for callers that also need reachability, but do not score it.
+  void args.recentInboundConnIds;
   return Array.from(args.connections)
     .filter((c): c is BncrConnection => c.accountId === args.accountId)
     .filter((connection) =>

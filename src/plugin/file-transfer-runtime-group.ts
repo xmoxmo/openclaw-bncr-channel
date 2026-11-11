@@ -38,6 +38,7 @@ export function createBncrFileTransferRuntimeGroup(runtime: {
     directConnIds: Set<string>;
     recentConnIds: Set<string>;
     recentInboundReachable: boolean;
+    ownerConnId?: string;
   }) => Set<string>;
   broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => void;
   chunkEvent: string;

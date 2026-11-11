@@ -1,4 +1,8 @@
 import {
+  classifyOutboundFailure,
+  type OutboundFailureKind,
+} from '../core/outbound-connection-health.ts';
+import {
   buildFileTransferPushOkArgs,
   buildFileTransferPushSuccessArgs,
 } from '../core/outbox-file-transfer-bookkeeping.ts';
@@ -98,6 +102,12 @@ export type RunBncrOutboxPushArgs = {
   // Failure handlers
   handleTextPushFailure: (args: { entry: OutboxEntry; error: unknown }) => void;
   handleFileTransferPushFailure: (args: { entry: OutboxEntry; error: unknown }) => void;
+  recordOutboundFailure: (args: {
+    accountId: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
+    at?: number;
+  }) => void;
   // Media-specific (optional)
   transferMediaToBncrClient?: (params: {
     accountId: string;
@@ -170,6 +180,7 @@ export async function runBncrOutboxPush(args: RunBncrOutboxPushArgs): Promise<bo
     }
 
     // ── Media success path (inline) ──
+    let broadcastStarted = false;
     try {
       const media = await args.transferMediaToBncrClient!({
         accountId: entry.accountId,
@@ -188,6 +199,7 @@ export async function runBncrOutboxPush(args: RunBncrOutboxPushArgs): Promise<bo
         mediaUrl: guard.mediaUrl,
       });
 
+      broadcastStarted = true;
       args.gatewayBroadcastToConnIds(
         args.pushEvent,
         buildFileTransferBroadcastPayload({ frame, messageId: entry.messageId }),
@@ -227,6 +239,13 @@ export async function runBncrOutboxPush(args: RunBncrOutboxPushArgs): Promise<bo
       );
       return true;
     } catch (error) {
+      if (broadcastStarted) {
+        args.recordOutboundFailure({
+          accountId: entry.accountId,
+          connIds: guard.connIds,
+          kind: classifyOutboundFailure({ error, stage: 'broadcast' }),
+        });
+      }
       args.handleFileTransferPushFailure({ entry, error });
       return false;
     }
@@ -301,6 +320,11 @@ export async function runBncrOutboxPush(args: RunBncrOutboxPushArgs): Promise<bo
     );
     return true;
   } catch (error) {
+    args.recordOutboundFailure({
+      accountId: entry.accountId,
+      connIds: textGuard.connIds,
+      kind: classifyOutboundFailure({ error, stage: 'broadcast' }),
+    });
     args.handleTextPushFailure({ entry, error });
     return false;
   }

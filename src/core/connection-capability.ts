@@ -1,3 +1,4 @@
+import type { OutboundFailureKind } from './outbound-connection-health.ts';
 import type { BncrConnection } from './types.ts';
 
 type CapabilityConnection = BncrConnection & {
@@ -6,6 +7,9 @@ type CapabilityConnection = BncrConnection & {
   inboundOnly?: boolean;
   lastAckOkAt?: number;
   lastPushTimeoutAt?: number;
+  outboundFailureCount?: number;
+  lastOutboundFailureAt?: number;
+  lastOutboundFailureKind?: OutboundFailureKind;
 };
 
 export function applyOutboundCapability(args: {
@@ -59,6 +63,11 @@ export function buildCapabilitySnapshot(connection: CapabilityConnection) {
     outboundReadyUntil: connection.outboundReadyUntil ?? null,
     preferredForOutboundUntil: connection.preferredForOutboundUntil ?? null,
     inboundOnly: connection.inboundOnly === true,
+    lastAckOkAt: connection.lastAckOkAt ?? null,
+    lastPushTimeoutAt: connection.lastPushTimeoutAt ?? null,
+    outboundFailureCount: connection.outboundFailureCount ?? 0,
+    lastOutboundFailureAt: connection.lastOutboundFailureAt ?? null,
+    lastOutboundFailureKind: connection.lastOutboundFailureKind ?? null,
   };
 }
 

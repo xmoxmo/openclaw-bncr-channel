@@ -49,6 +49,11 @@ export function buildConnectionCapabilityDebugPayload(args: {
       inboundOnly: snapshot.inboundOnly,
       outboundReadyUntil: snapshot.outboundReadyUntil,
       preferredForOutboundUntil: snapshot.preferredForOutboundUntil,
+      lastAckOkAt: snapshot.lastAckOkAt,
+      lastPushTimeoutAt: snapshot.lastPushTimeoutAt,
+      outboundFailureCount: snapshot.outboundFailureCount,
+      lastOutboundFailureAt: snapshot.lastOutboundFailureAt,
+      lastOutboundFailureKind: snapshot.lastOutboundFailureKind,
     },
     snapshot,
   };
@@ -132,15 +137,21 @@ export function buildSeenConnection(args: {
   nowMs: number;
   previous?: BncrCapabilityConnection | null;
 }): BncrCapabilityConnection {
+  const sameTransport = args.previous?.connId === args.connId;
   return {
     accountId: args.accountId,
     connId: args.connId,
     clientId: String(args.clientId || '').trim() || undefined,
-    connectedAt: args.previous?.connectedAt || args.nowMs,
+    connectedAt: sameTransport ? args.previous?.connectedAt || args.nowMs : args.nowMs,
     lastSeenAt: args.nowMs,
     outboundReadyUntil: args.previous?.outboundReadyUntil,
     preferredForOutboundUntil: args.previous?.preferredForOutboundUntil,
     inboundOnly: args.previous?.inboundOnly,
+    lastAckOkAt: sameTransport ? args.previous?.lastAckOkAt : undefined,
+    lastPushTimeoutAt: sameTransport ? args.previous?.lastPushTimeoutAt : undefined,
+    outboundFailureCount: sameTransport ? args.previous?.outboundFailureCount : undefined,
+    lastOutboundFailureAt: sameTransport ? args.previous?.lastOutboundFailureAt : undefined,
+    lastOutboundFailureKind: sameTransport ? args.previous?.lastOutboundFailureKind : undefined,
   };
 }
 

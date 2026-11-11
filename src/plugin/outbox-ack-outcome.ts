@@ -16,6 +16,12 @@ export type BncrOutboxAckOutcomeRuntime = {
     outboundReady: boolean;
     preferredForOutbound: boolean;
   }) => void;
+  markOutboundAckSuccess: (args: {
+    accountId: string;
+    connId: string;
+    clientId?: string;
+    at?: number;
+  }) => void;
   recordAckOkTelemetry: (args: {
     accountId: string;
     entry: OutboxEntry;
@@ -56,6 +62,11 @@ export function createBncrOutboxAckOutcome(runtime: BncrOutboxAckOutcomeRuntime)
       clientId: args.clientId,
       outboundReady: true,
       preferredForOutbound: true,
+    });
+    runtime.markOutboundAckSuccess({
+      accountId: args.accountId,
+      connId: args.connId,
+      clientId: args.clientId,
     });
     const telemetryPatch = buildBncrAckOkTelemetryPatch({
       entry: args.entry,

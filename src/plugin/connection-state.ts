@@ -13,6 +13,12 @@ import {
   isRecentlyReachableConn as isRecentlyReachableConnFromRuntime,
   resolveRecentInboundConnIds as resolveRecentInboundConnIdsFromRuntime,
 } from '../core/connection-reachability.ts';
+import {
+  applyOutboundAckSuccess,
+  applyOutboundFailure,
+  isConnectionOutboundFailure,
+  type OutboundFailureKind,
+} from '../core/outbound-connection-health.ts';
 import type { BncrConnection, OutboxEntry } from '../core/types.ts';
 import {
   buildConnectionCapabilityDebugPayload,
@@ -33,12 +39,22 @@ export type BncrActiveConnectionDebugEntry = {
   outboundReadyUntil?: number | null;
   preferredForOutboundUntil?: number | null;
   inboundOnly?: boolean;
+  lastAckOkAt?: number;
+  lastPushTimeoutAt?: number;
+  outboundFailureCount?: number;
+  lastOutboundFailureAt?: number;
+  lastOutboundFailureKind?: OutboundFailureKind;
 };
 
 type BncrCapabilityConnection = BncrConnection & {
   outboundReadyUntil?: number;
   preferredForOutboundUntil?: number;
   inboundOnly?: boolean;
+  lastAckOkAt?: number;
+  lastPushTimeoutAt?: number;
+  outboundFailureCount?: number;
+  lastOutboundFailureAt?: number;
+  lastOutboundFailureKind?: OutboundFailureKind;
 };
 
 // This module owns the live connection model used by outbound routing:
@@ -401,6 +417,89 @@ export function createBncrConnectionState(runtime: BncrConnectionStateRuntime) {
     });
   };
 
+  const markOutboundAckSuccess = (args: {
+    accountId: string;
+    connId: string;
+    clientId?: string;
+    at?: number;
+  }) => {
+    const acc = normalizeAccountId(args.accountId);
+    const matched = findCapabilityConnection({
+      accountId: acc,
+      connId: args.connId,
+      clientId: args.clientId,
+      connections: runtime.connections.entries(),
+    });
+    if (!matched) return;
+    const at = Number(args.at || runtime.now());
+    const next = applyOutboundAckSuccess(matched.connection, at) as BncrConnection;
+    runtime.connections.set(matched.key, next);
+    runtime.logInfo(
+      'connection',
+      `outbound-health ${JSON.stringify({
+        bridge: runtime.bridgeId,
+        accountId: acc,
+        connId: next.connId,
+        clientId: next.clientId,
+        outcome: 'ack-success',
+        at,
+        outboundFailureCount: next.outboundFailureCount || 0,
+      })}`,
+      { debugOnly: true },
+    );
+  };
+
+  const recordOutboundFailure = (args: {
+    accountId: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
+    at?: number;
+  }): boolean => {
+    if (!isConnectionOutboundFailure(args.kind)) {
+      runtime.logInfo(
+        'connection',
+        `outbound-failure ${JSON.stringify({
+          bridge: runtime.bridgeId,
+          accountId: normalizeAccountId(args.accountId),
+          kind: args.kind,
+          recordsConnectionHealth: false,
+        })}`,
+        { debugOnly: true },
+      );
+      return false;
+    }
+    const acc = normalizeAccountId(args.accountId);
+    const at = Number(args.at || runtime.now());
+    for (const connId of new Set(args.connIds)) {
+      const matched = findCapabilityConnection({
+        accountId: acc,
+        connId,
+        connections: runtime.connections.entries(),
+      });
+      if (!matched) continue;
+      const next = applyOutboundFailure(matched.connection, {
+        kind: args.kind,
+        at,
+      }) as BncrConnection;
+      runtime.connections.set(matched.key, next);
+      runtime.logInfo(
+        'connection',
+        `outbound-health ${JSON.stringify({
+          bridge: runtime.bridgeId,
+          accountId: acc,
+          connId: next.connId,
+          clientId: next.clientId,
+          outcome: 'failure',
+          kind: args.kind,
+          at,
+          outboundFailureCount: next.outboundFailureCount || 0,
+        })}`,
+        { debugOnly: true },
+      );
+    }
+    return true;
+  };
+
   const hasAlternativeLiveConnection = (
     accountId: string,
     currentConnId?: string,
@@ -519,6 +618,8 @@ export function createBncrConnectionState(runtime: BncrConnectionStateRuntime) {
     refreshLiveConnectionState,
     markSeen,
     markOutboundCapability,
+    markOutboundAckSuccess,
+    recordOutboundFailure,
     hasAlternativeLiveConnection,
     degradeOutboundCapability,
     isOnline,

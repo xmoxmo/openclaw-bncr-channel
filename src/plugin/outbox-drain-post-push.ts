@@ -1,5 +1,5 @@
+import type { OutboundFailureKind } from '../core/outbound-connection-health.ts';
 import type { OutboxEntry } from '../core/types.ts';
-import { OUTBOUND_DEGRADE_REASON } from '../messaging/outbound/reasons.ts';
 import {
   computeRetryRerouteDecision,
   type RetryRerouteDecision,
@@ -44,11 +44,10 @@ type BncrOutboxDrainPostPushRuntime = {
     recentInboundReachable: boolean;
     ackTimeoutMs: number | null;
   }) => void;
-  degradeOutboundCapability: (args: {
+  recordOutboundFailure: (args: {
     accountId: string;
-    connId?: string;
-    clientId?: string;
-    reason: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
   }) => void;
   resolvePushConnIds: (accountId: string) => Iterable<string>;
   sleepMs: (ms: number) => Promise<void>;
@@ -109,13 +108,10 @@ export function createBncrOutboxDrainPostPush(runtime: BncrOutboxDrainPostPushRu
     }
 
     if (entry.lastPushConnId || entry.lastPushClientId) {
-      runtime.degradeOutboundCapability({
+      runtime.recordOutboundFailure({
         accountId,
-        connId: entry.lastPushConnId || undefined,
-        clientId: entry.lastPushClientId || undefined,
-        reason: requireAck
-          ? OUTBOUND_DEGRADE_REASON.ACK_TIMEOUT
-          : OUTBOUND_DEGRADE_REASON.PUSH_UNCONFIRMED,
+        connIds: entry.lastPushConnId ? [entry.lastPushConnId] : [],
+        kind: requireAck ? 'ack-timeout' : 'broadcast-failure',
       });
     }
 

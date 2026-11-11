@@ -32,6 +32,7 @@ export type BncrFileTransferSetupRuntime = {
     directConnIds: Set<string>;
     recentConnIds: Set<string>;
     recentInboundReachable: boolean;
+    ownerConnId?: string;
   }) => Set<string>;
   logFileChunkDiag: (args: {
     accountId: string;
@@ -147,6 +148,7 @@ export function createBncrFileTransferSetup(runtime: BncrFileTransferSetupRuntim
       directConnIds: routeDiagnostics.directConnIds,
       recentConnIds: routeDiagnostics.recentConnIds,
       recentInboundReachable,
+      ownerConnId: resolvedOwner?.connId,
     });
     // File ACKs are authorized by transfer owner. The normal route selection
     // provides that owner; if it did not, bind the first recipient selected by

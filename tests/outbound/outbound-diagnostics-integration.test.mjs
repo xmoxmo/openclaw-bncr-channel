@@ -63,7 +63,7 @@ test('diagnostics separates current outbox summary from historical deadLetter su
       lastSeenAt: nowTs - 1_000,
       outboundReadyUntil: nowTs + 60_000,
       preferredForOutboundUntil: nowTs + 60_000,
-      pushFailureScore: 0,
+      outboundFailureCount: 0,
     });
 
     const pendingOld = makeEntry('msg-summary-old', 'summary old');

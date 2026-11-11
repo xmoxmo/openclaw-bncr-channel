@@ -1,5 +1,6 @@
 import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import { isNoReplyDropText, isNoReplyMarkerText } from '../core/no-reply-marker.ts';
+import type { OutboundFailureKind } from '../core/outbound-connection-health.ts';
 import type { BncrRoute, FileSendTransferState, OutboxEntry } from '../core/types.ts';
 import type {
   NormalizedReplyPayload,
@@ -139,6 +140,11 @@ export function createBncrMediaOrchestratorsRuntimeGroup(runtime: {
     accountId: string;
     payload: { path: string };
   }) => void;
+  recordOutboundFailure: (args: {
+    accountId: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
+  }) => void;
   logInfo: (scope: string | undefined, message: string, options?: { debugOnly?: boolean }) => void;
   logEnqueueFromReply: (args: {
     accountId: string;
@@ -195,6 +201,7 @@ export function createBncrMediaOrchestratorsRuntimeGroup(runtime: {
     logFileTransferChunkAck: runtime.logFileTransferChunkAck,
     logFileTransferChunkAckFail: runtime.logFileTransferChunkAckFail,
     logFileTransferCompleteAck: runtime.logFileTransferCompleteAck,
+    recordOutboundFailure: runtime.recordOutboundFailure,
   });
 
   const enqueueFromReply = async (params: {

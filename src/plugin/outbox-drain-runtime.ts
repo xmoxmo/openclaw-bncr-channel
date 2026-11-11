@@ -1,3 +1,4 @@
+import type { OutboundFailureKind } from '../core/outbound-connection-health.ts';
 import type { OutboxEntry } from '../core/types.ts';
 import type { updateMinOutboxDelay } from '../messaging/outbound/queue-selectors.ts';
 import type { RetryRerouteDecision } from '../messaging/outbound/retry-policy.ts';
@@ -75,7 +76,14 @@ type BncrOutboxDrainRuntime = {
     preferredForOutboundUntil?: number;
     lastAckOkAt?: number;
     lastPushTimeoutAt?: number;
-    pushFailureScore?: number;
+    outboundFailureCount?: number;
+    lastOutboundFailureAt?: number;
+    lastOutboundFailureKind?:
+      | 'pre-push-absence'
+      | 'broadcast-failure'
+      | 'ack-timeout'
+      | 'business-error'
+      | 'rpc-transport-timeout';
   }>;
   gatewayContextAvailable: () => boolean;
   messageAckWaiterCount: () => number;
@@ -98,11 +106,10 @@ type BncrOutboxDrainRuntime = {
     recentInboundReachable: boolean;
     ackTimeoutMs: number | null;
   }) => void;
-  degradeOutboundCapability: (args: {
+  recordOutboundFailure: (args: {
     accountId: string;
-    connId?: string;
-    clientId?: string;
-    reason: string;
+    connIds: Iterable<string>;
+    kind: OutboundFailureKind;
   }) => void;
   resolvePushConnIds: (accountId: string) => Iterable<string>;
   sleepMs: (ms: number) => Promise<void>;

@@ -66,33 +66,37 @@ export function createBncrOutboxRoute(runtime: BncrOutboxRouteRuntime) {
     const next = (candidates[0] as BncrConnectionWithOutboundHints | undefined) || null;
     if (!next) return null;
 
-    const nextKey = runtime.connectionKey(acc, next.clientId);
-    if (primaryKey !== nextKey) {
-      runtime.activeConnectionByAccount.set(acc, nextKey);
-      runtime.logInfo(
-        'connection',
-        `owner:promote ${JSON.stringify({
-          bridge: runtime.bridgeId,
-          accountId: acc,
-          previousActiveKey: primaryKey || null,
-          previousActiveConn: primary || null,
-          nextActiveKey: nextKey,
-          nextActiveConn: {
-            connId: next.connId,
-            clientId: next.clientId,
-            connectedAt: next.connectedAt,
-            lastSeenAt: next.lastSeenAt,
-            outboundReadyUntil: next.outboundReadyUntil || null,
-            preferredForOutboundUntil: next.preferredForOutboundUntil || null,
-            inboundOnly: next.inboundOnly === true,
-          },
-          reason: 'better-outbound-candidate',
-        })}`,
-        { debugOnly: true },
-      );
-    }
-
     return next;
+  };
+
+  const commitOutboxPushOwner = (accountId: string, connId: string): boolean => {
+    const acc = normalizeAccountId(accountId);
+    const targetConnId = String(connId || '').trim();
+    if (!targetConnId) return false;
+
+    const targetEntry = Array.from(runtime.connections.entries()).find(
+      ([, connection]) => connection.accountId === acc && connection.connId === targetConnId,
+    );
+    if (!targetEntry) return false;
+    const [targetKey, target] = targetEntry;
+    const previousKey = runtime.activeConnectionByAccount.get(acc) || null;
+    if (previousKey === targetKey) return true;
+
+    runtime.activeConnectionByAccount.set(acc, targetKey);
+    runtime.logInfo(
+      'connection',
+      `owner:commit ${JSON.stringify({
+        bridge: runtime.bridgeId,
+        accountId: acc,
+        previousActiveKey: previousKey,
+        nextActiveKey: targetKey,
+        connId: target.connId,
+        clientId: target.clientId,
+        reason: 'outbound-dispatch-accepted',
+      })}`,
+      { debugOnly: true },
+    );
+    return true;
   };
 
   const resolvePushConnIds = (accountId: string): Set<string> => {
@@ -164,16 +168,20 @@ export function createBncrOutboxRoute(runtime: BncrOutboxRouteRuntime) {
     directConnIds: Set<string>;
     recentConnIds: Set<string>;
     recentInboundReachable: boolean;
+    ownerConnId?: string;
   }) => {
-    let connIds = args.directConnIds;
-    if (!connIds.size && args.recentInboundReachable) {
-      connIds = args.recentConnIds;
-    }
-    return connIds;
+    const preferred =
+      args.ownerConnId && args.directConnIds.has(args.ownerConnId)
+        ? args.ownerConnId
+        : Array.from(args.directConnIds)[0];
+    const fallback = args.recentInboundReachable ? Array.from(args.recentConnIds)[0] : undefined;
+    const connId = preferred || fallback;
+    return connId ? new Set([connId]) : new Set<string>();
   };
 
   return {
     resolveOutboxPushOwner,
+    commitOutboxPushOwner,
     resolvePushConnIds,
     buildTransferRouteDiagnostics,
     selectTransferConnIds,

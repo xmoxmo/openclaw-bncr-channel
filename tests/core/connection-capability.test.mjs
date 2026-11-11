@@ -16,6 +16,11 @@ test('buildCapabilitySnapshot preserves zero capability timestamps', () => {
       outboundReadyUntil: 0,
       preferredForOutboundUntil: 0,
       inboundOnly: false,
+      lastAckOkAt: null,
+      lastPushTimeoutAt: null,
+      outboundFailureCount: 0,
+      lastOutboundFailureAt: null,
+      lastOutboundFailureKind: null,
     },
   );
 });

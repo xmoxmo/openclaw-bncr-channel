@@ -113,11 +113,8 @@ export function selectOutboxFileTransferRouteCandidates(args: {
   );
   const ownerConnId =
     args.ownerConnId && !attemptedConnIds.has(args.ownerConnId) ? args.ownerConnId : undefined;
-  let connIds = ownerConnId
-    ? [ownerConnId]
-    : filteredCandidates.length > 0
-      ? filteredCandidates
-      : routeCandidates;
+  const selectedConnId = ownerConnId || filteredCandidates[0] || routeCandidates[0];
+  let connIds = selectedConnId ? [selectedConnId] : [];
   let routeReason: OutboxFileTransferRouteSelection['routeReason'] = ownerConnId
     ? 'owner'
     : connIds.length > 0
@@ -133,8 +130,8 @@ export function selectOutboxFileTransferRouteCandidates(args: {
     const filteredRecentInboundConnIds = recentInboundConnIds.filter(
       (connId) => !attemptedConnIds.has(connId),
     );
-    connIds =
-      filteredRecentInboundConnIds.length > 0 ? filteredRecentInboundConnIds : recentInboundConnIds;
+    const fallbackConnId = filteredRecentInboundConnIds[0] || recentInboundConnIds[0];
+    connIds = fallbackConnId ? [fallbackConnId] : [];
     routeReason = connIds.length > 0 ? 'recent-inbound-fallback' : 'none';
   }
 
@@ -166,7 +163,8 @@ export function selectOutboxRouteCandidates(args: {
     args.ownerConnId && preferredCandidates.includes(args.ownerConnId)
       ? args.ownerConnId
       : undefined;
-  let connIds = ownerConnId ? [ownerConnId] : preferredCandidates;
+  const selectedConnId = ownerConnId || preferredCandidates[0];
+  let connIds = selectedConnId ? [selectedConnId] : [];
   let routeReason: OutboxRouteSelection['routeReason'] = ownerConnId
     ? 'owner'
     : connIds.length > 0
@@ -184,10 +182,8 @@ export function selectOutboxRouteCandidates(args: {
     const unattemptedRecentInboundConnIds = recentInboundConnIds.filter(
       (connId) => !attemptedConnIds.has(connId),
     );
-    connIds =
-      unattemptedRecentInboundConnIds.length > 0
-        ? unattemptedRecentInboundConnIds
-        : recentInboundConnIds;
+    const fallbackConnId = unattemptedRecentInboundConnIds[0] || recentInboundConnIds[0];
+    connIds = fallbackConnId ? [fallbackConnId] : [];
     routeReason = connIds.length > 0 ? 'recent-inbound-fallback' : 'none';
   }
 

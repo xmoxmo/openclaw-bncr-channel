@@ -52,6 +52,11 @@ export function resolveFileTransferGuard(args: {
       recentInboundReachable: args.routeSelection.recentInboundReachable,
     };
   }
+  if (connIds.size !== 1) {
+    throw new Error(
+      `outbound file delivery requires exactly one target connection; got ${connIds.size}`,
+    );
+  }
 
   if (!args.mediaUrl) {
     return {
