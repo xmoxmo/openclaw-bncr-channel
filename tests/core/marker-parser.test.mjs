@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -190,4 +191,115 @@ test('media probe releases HEAD and Range fallback responses', async (t) => {
 
   assert.equal(result.cleanText, 'caption');
   assert.deepEqual(released, ['HEAD', 'GET']);
+});
+
+test('ismedia:false skips media path probes', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('fetch must not run for ismedia:false');
+  };
+
+  const result = await resolveMarkerStripDecision(
+    'caption [BncrParam:{"ismedia":false,"path":"https://media.example/private"}]',
+  );
+
+  assert.equal(result.cleanText, 'caption');
+  assert.deepEqual(result.params, {
+    ismedia: false,
+    path: 'https://media.example/private',
+  });
+  assert.deepEqual(result.warnings, []);
+  assert.equal(fetchCalls, 0);
+});
+
+test('ismedia:false skips local-file probes', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const originalExistsSync = fs.existsSync;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.existsSync = originalExistsSync;
+  });
+  let fetchCalls = 0;
+  let existsCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('fetch must not run for ismedia:false');
+  };
+  fs.existsSync = () => {
+    existsCalls += 1;
+    return true;
+  };
+
+  const result = await resolveMarkerStripDecision(
+    'caption [BncrParam:{"ismedia":false,"path":"/tmp/private.bin"}]',
+  );
+
+  assert.equal(result.cleanText, 'caption');
+  assert.deepEqual(result.params, {
+    ismedia: false,
+    path: '/tmp/private.bin',
+  });
+  assert.deepEqual(result.warnings, []);
+  assert.equal(fetchCalls, 0);
+  assert.equal(existsCalls, 0);
+});
+
+test('ismedia:false preserves marker path arrays without filtering', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const originalExistsSync = fs.existsSync;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.existsSync = originalExistsSync;
+  });
+  let probeCalls = 0;
+  globalThis.fetch = async () => {
+    probeCalls += 1;
+    throw new Error('fetch must not run for ismedia:false');
+  };
+  fs.existsSync = () => {
+    probeCalls += 1;
+    return false;
+  };
+  const paths = ['https://media.example/a', '/tmp/missing-b.bin'];
+  const mediaUrls = ['/tmp/missing-c.bin'];
+
+  const result = await resolveMarkerStripDecision(
+    `caption [BncrParam:${JSON.stringify({ ismedia: false, paths, mediaUrls })}]`,
+  );
+
+  assert.equal(result.cleanText, 'caption');
+  assert.deepEqual(result.params, { ismedia: false, paths, mediaUrls });
+  assert.deepEqual(result.warnings, []);
+  assert.equal(probeCalls, 0);
+});
+
+test('ismedia:true still probes real media paths', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const methods = [];
+  globalThis.fetch = async (_url, init) => {
+    methods.push(init?.method);
+    return {
+      ok: true,
+      status: 200,
+      body: { cancel: async () => {} },
+    };
+  };
+
+  const result = await resolveMarkerStripDecision(
+    'caption [BncrParam:{"ismedia":true,"path":"https://media.example/public"}]',
+  );
+
+  assert.equal(result.cleanText, 'caption');
+  assert.equal(result.params.ismedia, true);
+  assert.equal(result.params.path, 'https://media.example/public');
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(methods, ['HEAD']);
 });

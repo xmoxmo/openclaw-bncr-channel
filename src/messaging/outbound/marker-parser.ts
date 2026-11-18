@@ -12,7 +12,8 @@
  * - Incomplete marker (no closing ]) → left in text, does NOT block later
  *   complete markers.
  * - Multiple valid markers → all stripped, params merge (later same-key wins).
- * - When path/paths/mediaUrl/mediaUrls are present, probe for reachability.
+ * - When path/paths/mediaUrl/mediaUrls are present, probe for reachability
+ *   unless ismedia is explicitly false.
  *   Unreachable single paths keep the marker visible in the output text.
  *   Unreachable entries in path arrays are dropped with warnings logged.
  */
@@ -368,7 +369,8 @@ async function probeAndResolveMarkerPaths(params: Record<string, unknown>): Prom
  * a [BncrParam:...] marker from the text or leave it in place.
  *
  * - Markers that JSON parse successfully AND whose media paths (if any) are
- *   reachable → stripped from text, params extracted and merged.
+ *   reachable, or that explicitly set ismedia:false → stripped from text,
+ *   params extracted and merged.
  * - Markers whose paths are unreachable (single path OR all array entries) →
  *   kept in text, NOT stripped, NOT extracted.
  * - Markers without path fields → stripped as normal (existing behavior).
@@ -421,8 +423,10 @@ export async function resolveMarkerStripDecision(text: string): Promise<{
       continue;
     }
 
-    // Marker has path fields → probe before deciding to strip
-    if (hasMediaPathParams(parsed)) {
+    // An explicit media opt-out must be side-effect free. The marker can be
+    // stripped and its parameters preserved, but path reachability checks may
+    // not run for this marker.
+    if (hasMediaPathParams(parsed) && parsed.ismedia !== false) {
       const probeResult = await probeAndResolveMarkerPaths(parsed);
       if (probeResult.warnings.length > 0) warnings.push(...probeResult.warnings);
       if (!probeResult.allValid) {

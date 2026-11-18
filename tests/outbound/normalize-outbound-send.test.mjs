@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -392,6 +393,64 @@ test('[structured extra] appmsg type and msg pass through for downstream scatter
   assert.equal(r.extra?.type, 'appmsg');
   assert.equal(r.extra?.msg, '<appmsg/>');
   assert.equal(r.extra?.customKey, 'keep');
+});
+
+test('[structured extra] ismedia:false does not probe or route path as media', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const originalExistsSync = fs.existsSync;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.existsSync = originalExistsSync;
+  });
+  let probeCalls = 0;
+  globalThis.fetch = async () => {
+    probeCalls += 1;
+    throw new Error('structured extra must not be probed during marker parsing');
+  };
+  fs.existsSync = () => {
+    probeCalls += 1;
+    return false;
+  };
+
+  const r = await n({
+    text: 'structured text',
+    extra: { ismedia: false, path: '/tmp/private.bin' },
+  });
+
+  assert.equal(r.hasMedia, false);
+  assert.equal(r.mediaUrl, undefined);
+  assert.equal(r.extra?.path, '/tmp/private.bin');
+  assert.equal(r.extra?.ismedia, undefined);
+  assert.equal(probeCalls, 0);
+});
+
+test('[structured extra] media type and path route as media without marker re-probing', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const originalExistsSync = fs.existsSync;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.existsSync = originalExistsSync;
+  });
+  let probeCalls = 0;
+  globalThis.fetch = async () => {
+    probeCalls += 1;
+    throw new Error('structured extra must not be probed during marker parsing');
+  };
+  fs.existsSync = () => {
+    probeCalls += 1;
+    return false;
+  };
+
+  const r = await n({
+    text: 'structured media',
+    extra: { type: 'image', path: '/tmp/real-image.png' },
+  });
+
+  assert.equal(r.hasMedia, true);
+  assert.equal(r.type, 'image');
+  assert.equal(r.mediaUrl, '/tmp/real-image.png');
+  assert.equal(r.extra?.path, undefined);
+  assert.equal(probeCalls, 0);
 });
 
 test('[BncrParam] empty text and no media returns hasMedia=false, asVoice=false', async () => {
