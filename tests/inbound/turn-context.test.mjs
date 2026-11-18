@@ -350,6 +350,23 @@ test('buildBncrInboundTurnContext passes canonical route fields and visible untr
   assert.equal(calls[0].extra.GroupSubject, 'wind_system');
   assert.equal(calls[0].sender.id, '10001');
   assert.equal(calls[0].sender.username, 'xmo');
+  // Hook-visible channel metadata is additive: prompt-visible facts above are
+  // unchanged, and this object never reaches the model.
+  assert.deepEqual(calls[0].channelContext, {
+    chat: {
+      id: 'group-1',
+      platform: 'bncr/tgBot',
+      kind: 'group',
+      title: 'wind_system',
+    },
+    sender: {
+      id: '10001',
+      name: 'xmo',
+      userId: '10001',
+      username: 'xmo',
+    },
+  });
+  assert.equal(calls[0].supplemental.untrustedContext[0].payload.sender.isOwner, true);
   assert.deepEqual(calls[0].access, {
     mentions: {
       canDetectMention: true,
@@ -368,6 +385,78 @@ test('buildBncrInboundTurnContext passes canonical route fields and visible untr
   assert.equal(result.CommandAuthorized, true);
   assert.equal(result.CommandSource, 'text');
   assert.equal(result.CommandTurn?.kind, 'text-slash');
+});
+
+test('buildBncrInboundTurnContext omits hook identity for silent history carriers', async () => {
+  const calls = [];
+  const api = createTurnContextApiStub(calls);
+
+  await buildBncrInboundTurnContext({
+    api,
+    cfg: {},
+    channelId: 'bncr',
+    parsed: {
+      accountId: 'Primary',
+      platform: 'tgBot',
+      peer: { kind: 'group', id: '-1001' },
+      groupId: '-1001',
+      userId: '10001',
+      userName: 'xmo',
+      isGroup: true,
+      isAdmin: true,
+      shouldRespond: false,
+      type: 'text',
+      msg: 'carrier message',
+      msgId: 'history-carrier',
+    },
+    msgId: 'history-carrier',
+    peer: { kind: 'group', id: '-1001' },
+    senderIdForContext: '10001',
+    senderDisplayName: 'xmo',
+    ownerAllowFrom: ['10001'],
+    resolution: {
+      accountId: 'Primary',
+      chatType: 'group',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      resolvedRoute: {
+        sessionKey: 'agent:public:bncr:group:route',
+        agentId: 'public',
+      },
+      canonicalTo: 'Bncr:tgBot:-1001:0',
+      rawTo: 'Bncr:tgBot:-1001:10001',
+      originatingTo: 'Bncr:tgBot:-1001:10001',
+      baseSessionKey: 'agent:public:bncr:group:route',
+      dispatchSessionKey: 'agent:public:bncr:group:route',
+    },
+    prepared: {
+      storePath: '/tmp/store.json',
+      rawBody: 'carrier message',
+      body: 'ENV:carrier message',
+      mediaItems: [],
+    },
+    conversationHistories: new Map(),
+    pendingHistoryEntries: [],
+    shouldDispatch: true,
+    silentHistoryFlush: true,
+  });
+
+  assert.equal(calls[0].sender.id, 'bncr-history-system');
+  assert.equal(calls[0].channelContext, undefined);
+  const senderFacts = calls[0].extra.BncrStructuredContextFacts.sender;
+  assert.equal(senderFacts.id, 'bncr-history-system');
+  assert.equal(senderFacts.userId, undefined);
+  assert.equal(senderFacts.userName, undefined);
+  assert.equal(senderFacts.isAdmin, undefined);
+  assert.equal(senderFacts.isOwner, undefined);
+  assert.equal(senderFacts.isAuthorizedSender, undefined);
+  assert.equal(senderFacts.role, undefined);
+  assert.equal(
+    calls[0].extra.BncrStructuredContextFacts.participants['bncr-history-system'],
+    undefined,
+  );
+  assert.equal(calls[0].supplemental.untrustedContext[0].payload.sender, undefined);
+  assert.equal(calls[0].access.commands, undefined);
+  assert.match(String(calls[0].message.rawBody), /Output exactly NO_REPLY FROM AGENT\./);
 });
 
 test('buildBncrInboundTurnContext treats platform shouldRespond as effective mention for groups', async () => {

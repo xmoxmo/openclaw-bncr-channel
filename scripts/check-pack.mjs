@@ -72,6 +72,7 @@ const requiredSourceFiles = [
   'src/messaging/inbound/dispatch-prep.ts',
   'src/messaging/inbound/dispatch.ts',
   'src/messaging/inbound/gate.ts',
+  'src/messaging/inbound/hook-context.ts',
   'src/messaging/inbound/last-route.ts',
   'src/messaging/inbound/media-assets.ts',
   'src/messaging/inbound/media-url-download.ts',

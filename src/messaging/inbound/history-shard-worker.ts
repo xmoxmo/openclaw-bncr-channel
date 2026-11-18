@@ -32,13 +32,18 @@ export type BncrHistoryShardDispatchPayload = {
 };
 
 export type BncrHistoryShardPayloadEnvelope = {
-  version: 2;
+  version: typeof BNCR_HISTORY_SHARD_PAYLOAD_VERSION;
   historyKey: string;
   accountId?: string;
   messageIds: string[];
   bufferKeys: string[];
   dispatch: BncrHistoryShardDispatchPayload;
 };
+
+// Version 3 is the first payload contract whose synthetic history context is
+// guaranteed not to inherit the triggering message's platform identity. Do not
+// replay older successful-looking payloads with newer dispatch code.
+export const BNCR_HISTORY_SHARD_PAYLOAD_VERSION = 3 as const;
 
 export const HISTORY_SHARD_LEASE_RENEW_INTERVAL_MS = 60_000;
 
@@ -70,7 +75,7 @@ export async function runBncrHistoryShardWithLeaseRenewal<T>(args: {
 
 export function parseBncrHistoryShardPayload(value: string): BncrHistoryShardPayloadEnvelope {
   const parsed = JSON.parse(value) as Partial<BncrHistoryShardPayloadEnvelope>;
-  if (parsed?.version !== 2) {
+  if (parsed?.version !== BNCR_HISTORY_SHARD_PAYLOAD_VERSION) {
     throw new Error(`unsupported history shard payload version=${String(parsed?.version)}`);
   }
   if (!parsed.dispatch || !parsed.historyKey) {
@@ -90,6 +95,20 @@ export async function processBncrHistoryShardSlot(args: {
   const shardOwner = args.shard.owner ?? getConversationHistorySerialOwner();
   let payload: BncrHistoryShardPayloadEnvelope;
   try {
+    const rawPayload = JSON.parse(args.shard.payloadJson) as { version?: unknown };
+    if (rawPayload?.version !== BNCR_HISTORY_SHARD_PAYLOAD_VERSION) {
+      const discarded = args.historyShardQueue.discardHistoryShard(args.shard.id, shardOwner);
+      if (!discarded) {
+        throw new Error(
+          `history shard incompatible payload discard lost|shard=${args.shard.id}|owner=${shardOwner}`,
+        );
+      }
+      emitBncrLogLine(
+        'warn',
+        `[bncr] history shard incompatible payload discarded|shard=${args.shard.id}|version=${String(rawPayload?.version)}|requiredVersion=${BNCR_HISTORY_SHARD_PAYLOAD_VERSION}`,
+      );
+      return;
+    }
     payload = parseBncrHistoryShardPayload(args.shard.payloadJson);
   } catch (error) {
     try {

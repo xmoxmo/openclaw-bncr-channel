@@ -5,6 +5,7 @@ import {
   buildBncrDebugJsonMessage,
   formatBncrLogLine,
   normalizeBncrLogLine,
+  redactBncrLogText,
   summarizeBncrTextPreview,
 } from '../../src/core/logging.ts';
 
@@ -26,6 +27,27 @@ test('normalizeBncrLogLine preserves existing prefix', () => {
   assert.equal(normalizeBncrLogLine('ready'), '[bncr] ready');
   assert.equal(normalizeBncrLogLine('[bncr] ready'), '[bncr] ready');
   assert.equal(normalizeBncrLogLine(''), '[bncr]');
+});
+
+test('generic log formatting redacts embedded URLs and credentials', () => {
+  const raw = 'GET https://cdn.example.test/private.mp4?token=secret token=second Bearer third';
+  const formatted = formatBncrLogLine('outbound', raw);
+
+  assert.equal(formatted.includes('cdn.example.test'), false);
+  assert.equal(formatted.includes('secret'), false);
+  assert.equal(formatted.includes('second'), false);
+  assert.equal(formatted.includes('third'), false);
+  assert.equal(formatted.includes('[redacted-url]'), true);
+  assert.equal(redactBncrLogText(raw).includes('[redacted-url]'), true);
+});
+
+test('generic log formatting redacts compound credential assignments', () => {
+  const raw =
+    'access_token=abc123 refresh_token=def456 clientSecret=ghi789 client_secret=jkl012 api-key=mno345 private_key=pqr678 password="my password"';
+  const formatted = formatBncrLogLine('state', raw);
+
+  assert.doesNotMatch(formatted, /abc123|def456|ghi789|jkl012|mno345|pqr678|my password/);
+  assert.equal(formatted.match(/\[redacted\]/g)?.length, 7);
 });
 
 test('buildBncrDebugJsonMessage appends serialized payload', () => {
@@ -118,6 +140,28 @@ test('buildBncrDebugJsonMessage redacts sensitive debug payload keys', () => {
   assert.doesNotMatch(
     message,
     /token-123|pw-123|Bearer abc|secret-cookie|secret-123|api-key-123|token-a/,
+  );
+});
+
+test('buildBncrDebugJsonMessage hashes diagnostic details without leaking URLs or credentials', () => {
+  const error = 'upload failed: https://cdn.example.test/private/video.mp4?token=secret-token';
+  const message = buildBncrDebugJsonMessage('debug:diagnostic', {
+    error,
+    errorMessage: 'Authorization: Bearer secret-bearer',
+    nested: { lastError: '/private/workspace/report.pdf?sig=secret-sig' },
+  });
+  const payload = parseDebugPayload(message);
+
+  assert.deepEqual(payload.error, {
+    length: error.length,
+    sha256: sha12(error),
+  });
+  assert.equal('preview' in payload.error, false);
+  assert.equal('preview' in payload.errorMessage, false);
+  assert.equal('preview' in payload.nested.lastError, false);
+  assert.doesNotMatch(
+    message,
+    /cdn\.example\.test|private\/video|secret-token|secret-bearer|report\.pdf|secret-sig/,
   );
 });
 

@@ -24,6 +24,44 @@ type FileAckPayload = Awaited<
 
 const FILE_TRANSFER_ACK_TTL_MS = 30_000;
 
+async function releaseFetchResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // A closed transport is already released; preserve the caller's outcome.
+  }
+}
+
+async function readFetchResponsePrefix(response: Response, maxBytes: number): Promise<Buffer> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== 'function') {
+    return Buffer.from(await response.arrayBuffer()).subarray(0, maxBytes);
+  }
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const chunk = Buffer.from(value);
+      const remaining = maxBytes - total;
+      if (chunk.length > remaining) chunks.push(chunk.subarray(0, remaining));
+      else chunks.push(chunk);
+      total += Math.min(chunk.length, remaining);
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // The prefix is already bounded even if the transport closed first.
+    }
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
 function getFileSendTransferForAck(
   fileSendTransfers: ReadonlyMap<string, FileSendTransferState>,
   transferId: string,
@@ -257,13 +295,17 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
         redirect: 'manual',
         signal: AbortSignal.timeout(10_000),
       });
-      if (head.ok) {
-        const raw = (head.headers.get('content-type') || '').trim().toLowerCase();
-        const parsed = raw.split(';')[0]?.trim() || '';
-        // Accept explicit types; reject octet-stream and generic application/*
-        if (parsed && parsed !== 'application/octet-stream') {
-          headerType = parsed;
+      try {
+        if (head.ok) {
+          const raw = (head.headers.get('content-type') || '').trim().toLowerCase();
+          const parsed = raw.split(';')[0]?.trim() || '';
+          // Accept explicit types; reject octet-stream and generic application/*
+          if (parsed && parsed !== 'application/octet-stream') {
+            headerType = parsed;
+          }
         }
+      } finally {
+        await releaseFetchResponse(head);
       }
     } catch {
       /* HEAD failed, fall through to Range sniff */
@@ -281,8 +323,11 @@ export function createBncrFileTransferOrchestrator(runtime: BncrFileTransferOrch
         signal: AbortSignal.timeout(10_000),
       });
       // Only accept 206 Partial Content; 200 (no Range support) or other statuses -> fall through
-      if (range.status !== 206) return {};
-      const buf = Buffer.from(await range.arrayBuffer());
+      if (range.status !== 206) {
+        await releaseFetchResponse(range);
+        return {};
+      }
+      const buf = await readFetchResponsePrefix(range, 512);
       if (buf.length < 4) return {};
 
       const sniffed = sniffMimeFromMagic(buf);

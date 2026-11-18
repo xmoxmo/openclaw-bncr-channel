@@ -28,6 +28,14 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
+async function releaseInboundMediaResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Releasing is best-effort and must not replace the protocol error.
+  }
+}
+
 async function readInboundMediaResponseBody(args: {
   response: Response;
   maxBytes: number;
@@ -95,20 +103,25 @@ export async function downloadInboundMediaUrl(
       });
       if (guard && isRedirectStatus(response.status)) {
         if (redirects >= MAX_INBOUND_MEDIA_REDIRECTS) {
+          await releaseInboundMediaResponse(response);
           throw new Error('inbound media url redirect limit exceeded');
         }
         const location = readResponseHeader(response.headers, 'location');
         if (!location) {
+          await releaseInboundMediaResponse(response);
           throw new Error(`inbound media url redirect missing location: HTTP ${response.status}`);
         }
         try {
           currentUrl = new URL(location, currentUrl).toString();
         } catch {
+          await releaseInboundMediaResponse(response);
           throw new Error('inbound media url redirect target is invalid');
         }
+        await releaseInboundMediaResponse(response);
         continue;
       }
       if (!response.ok) {
+        await releaseInboundMediaResponse(response);
         throw new Error(`inbound media url download failed: HTTP ${response.status}`);
       }
 

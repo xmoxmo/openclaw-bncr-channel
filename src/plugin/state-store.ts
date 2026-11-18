@@ -1426,6 +1426,9 @@ export function createBncrStateStore(runtime: {
     },
     completeHistoryShard: (shardId, owner) =>
       sqliteState?.completeHistoryShard(shardId, owner || getConversationHistorySerialOwner()),
+    discardHistoryShard: (shardId, owner) =>
+      sqliteState?.discardHistoryShard(shardId, owner || getConversationHistorySerialOwner()) ??
+      false,
     markHistoryShardProcessing: (shardId, owner) =>
       sqliteState?.markHistoryShardProcessing(
         shardId,
@@ -1489,13 +1492,27 @@ export function createBncrStateStore(runtime: {
     cutoverToSqlite,
     createHistoryShard,
     completeHistoryShard,
-    recoverInFlightHistoryShards: async (skipHistoryKeys?: readonly string[]) => {
+    discardHistoryShard: (shardId: number, owner?: string) =>
+      sqliteState?.discardHistoryShard(shardId, owner || getConversationHistorySerialOwner()) ??
+      false,
+    discardHistoryShardsWithoutPayloadVersion: async (
+      version: number,
+      skipHistoryKeys?: readonly string[],
+    ) => {
+      const statePath = runtime.getStatePath();
+      const sqlite = await resolveSqliteState(statePath);
+      return sqlite?.discardHistoryShardsWithoutPayloadVersion(version, skipHistoryKeys) ?? 0;
+    },
+    recoverInFlightHistoryShards: async (
+      skipHistoryKeys?: readonly string[],
+      options?: { includeForeignOwners?: boolean },
+    ) => {
       const statePath = runtime.getStatePath();
       const sqlite = await resolveSqliteState(statePath);
       return (
         sqlite?.recoverInFlightHistoryShards(
           skipHistoryKeys,
-          getConversationHistorySerialOwner(),
+          options?.includeForeignOwners ? undefined : getConversationHistorySerialOwner(),
         ) ?? 0
       );
     },

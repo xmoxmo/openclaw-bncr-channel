@@ -69,6 +69,14 @@ function createDynamicChannelPlugin(args) {
 
 // src/core/logging.ts
 var BNCR_PREFIX = "[bncr]";
+var SENSITIVE_KEY_CORE = "(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|access[-_]?key|refresh[-_]?key|private[-_]?key)";
+var SENSITIVE_DEBUG_KEY_PATTERN = new RegExp(SENSITIVE_KEY_CORE, "i");
+var URL_IN_LOG_PATTERN = /\bhttps?:\/\/[^\s|"'<>]+/gi;
+var BEARER_IN_LOG_PATTERN = /\bBearer\s+[^\s|,;"']+/gi;
+var SENSITIVE_ASSIGNMENT_PATTERN = new RegExp(
+  "(\\b[A-Za-z0-9_.-]*" + SENSITIVE_KEY_CORE + `[A-Za-z0-9_.-]*\\s*[=:]\\s*)(?:"[^"]*"|'[^']*'|[^\\s|,;&]+)`,
+  "gi"
+);
 function resolveConsoleMethod(level) {
   switch (level) {
     case "warn":
@@ -90,8 +98,11 @@ function emitConsole(method, line) {
   }
   console.log(line);
 }
+function redactBncrLogText(raw) {
+  return String(raw || "").replace(URL_IN_LOG_PATTERN, "[redacted-url]").replace(BEARER_IN_LOG_PATTERN, "Bearer [redacted]").replace(SENSITIVE_ASSIGNMENT_PATTERN, "$1[redacted]");
+}
 function normalizeBncrLogLine(raw) {
-  const text = String(raw || "").trim();
+  const text = redactBncrLogText(raw).trim();
   if (!text) return BNCR_PREFIX;
   return text.startsWith(BNCR_PREFIX) ? text : `${BNCR_PREFIX} ${text}`;
 }

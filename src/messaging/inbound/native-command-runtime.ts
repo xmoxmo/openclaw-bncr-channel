@@ -12,6 +12,7 @@ import type {
   BncrInboundContextPayload,
 } from './contracts.ts';
 import type { ParsedInbound } from './dispatch-prep.ts';
+import { buildBncrHookChannelContext } from './hook-context.ts';
 import { buildBncrNativeReplyDeliveryPayload } from './native-reply-delivery.ts';
 
 export function logBncrNativeCommandEvent(
@@ -79,6 +80,10 @@ export function createNativeCommandTurnContext(args: {
   accountId: string;
   msgId?: string;
   peer: ParsedInbound['peer'];
+  platform?: string;
+  groupName?: string;
+  userId?: string;
+  userName?: string;
   resolvedRoute: { sessionKey: string; agentId: string; mainSessionKey?: string };
   sessionKey: string;
   ownerAllowFrom?: string[];
@@ -88,6 +93,16 @@ export function createNativeCommandTurnContext(args: {
   senderDisplayName: string;
   body: string;
 }): BncrInboundContextPayload | Promise<BncrInboundContextPayload> {
+  const hookChannelContext = buildBncrHookChannelContext({
+    channelId: args.channelId,
+    platform: args.platform,
+    peer: { kind: args.peer.kind, id: args.peer.id },
+    groupName: args.groupName,
+    senderId: args.senderIdForContext,
+    senderName: args.senderDisplayName,
+    userId: args.userId,
+    userName: args.userName,
+  });
   return Promise.resolve(
     resolveBncrChannelInboundRuntime(args.api).buildContext({
       channel: args.channelId,
@@ -138,6 +153,7 @@ export function createNativeCommandTurnContext(args: {
         authorized: true,
         body: args.body,
       },
+      ...(hookChannelContext ? { channelContext: hookChannelContext } : {}),
       access: {
         mentions: {
           canDetectMention: true,

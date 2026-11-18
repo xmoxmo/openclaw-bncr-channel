@@ -1,6 +1,7 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import { CHANNEL_ID } from '../core/accounts.ts';
 import { matchesTransferOwner } from '../core/lease-state.ts';
+import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import type { FileSendTransferState } from '../core/types.ts';
 import {
   applyFileAckState,
@@ -298,7 +299,7 @@ export function createBncrConnectionHandlers(runtime: BncrConnectionHandlersRunt
 
       runtime.logInfo(
         'file-ack-inbound',
-        JSON.stringify({
+        buildBncrDebugJsonMessage('file-ack-inbound', {
           ...buildGatewayDebugFields({
             bridgeId: runtime.bridgeId,
             accountId,

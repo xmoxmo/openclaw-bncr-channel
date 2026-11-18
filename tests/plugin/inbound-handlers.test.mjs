@@ -128,6 +128,45 @@ test('inbound handlers accept inbound and flush/dispatch with canonical agent id
   assert.equal(calls.dispatched[0].historyShardQueue, historyShardQueue);
 });
 
+test('inbound accepted debug log summarizes message text instead of printing it raw', async () => {
+  const logs = [];
+  const secretText = 'please use https://internal.example.test/hook?token=secret-token now';
+  const { runtime } = createRuntime({
+    logInfo(scope, message, options) {
+      logs.push({ scope, message, options });
+    },
+    async prepareInboundAcceptance() {
+      return {
+        ok: true,
+        sessionKey: 'session-1',
+        inboundText: secretText,
+        hasMedia: false,
+        resolvedAgentId: 'orion',
+        shouldDispatch: true,
+        shouldAccumulate: true,
+        dispatchBy: 'test',
+      };
+    },
+  });
+  const handlers = createBncrInboundHandlers(runtime);
+
+  await handlers.handleInbound({
+    params: { leaseId: 'lease-1' },
+    respond() {},
+    client: { connId: 'conn-1', clientId: 'client-1' },
+    context: null,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const accepted = logs.find((item) => item.message.startsWith('inbound-accepted '));
+  assert.ok(accepted);
+  assert.doesNotMatch(accepted.message, /internal\.example\.test|secret-token/);
+  const payload = JSON.parse(accepted.message.slice(accepted.message.indexOf(' ') + 1));
+  assert.equal(payload.textPreview.length, secretText.length);
+  assert.equal(Array.from(payload.textPreview.preview).length, 25);
+  assert.equal(payload.textPreview.preview.endsWith('…'), true);
+});
+
 test('inbound handlers run post-ack dispatch through an independent work runner', async () => {
   const detachedStarts = [];
   const { runtime, calls } = createRuntime({

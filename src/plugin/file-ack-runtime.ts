@@ -1,4 +1,5 @@
 import { buildFileAckKey } from '../core/file-ack.ts';
+import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import { OUTBOUND_TERMINAL_REASON } from '../messaging/outbound/reasons.ts';
 
 export type FileAckPayloadState = {
@@ -221,7 +222,7 @@ export function createBncrFileAckRuntime(runtime: {
       });
       runtime.logInfo(
         'file-ack-early-cache',
-        JSON.stringify({
+        buildBncrDebugJsonMessage('file-ack-early-cache', {
           bridge: runtime.bridgeId,
           transferId: ack.transferId,
           stage: ack.stage,
@@ -243,7 +244,7 @@ export function createBncrFileAckRuntime(runtime: {
     clearTimeout(waiter.timer);
     runtime.logInfo(
       'file-ack-resolve',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-ack-resolve', {
         bridge: runtime.bridgeId,
         transferId: ack.transferId,
         stage: ack.stage,

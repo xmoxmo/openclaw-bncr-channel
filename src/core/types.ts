@@ -310,9 +310,22 @@ export type BncrOutboxIncidentAckSummary = {
   adaptiveTimeoutReason: string | null;
 };
 
+export type BncrOutboxIncidentType =
+  | 'none'
+  | 'no-gateway-context'
+  | 'no-active-outbound-connection'
+  | 'ack-timeout'
+  | 'pre-push-absence'
+  | 'broadcast-failure'
+  | 'business-error'
+  | 'rpc-transport-timeout'
+  | 'outbox-backlog'
+  | 'pending-outbox'
+  | 'slow-or-late-ack';
+
 export type BncrOutboxIncidentSummary = {
   active: boolean;
-  type: string;
+  type: BncrOutboxIncidentType;
   severity: 'ok' | 'warning' | 'critical';
   recommendedAction: string;
   pending: number;

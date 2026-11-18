@@ -514,6 +514,8 @@ export type BncrStructuredContextFactsFromInboundPartsInput = {
   bridgeSenderName?: string;
   senderIsOwner?: boolean;
   senderIsAuthorized?: boolean;
+  /** Synthetic system turns retain routing identity but no platform sender identity. */
+  suppressSenderIdentity?: boolean;
   conversationHistoryContext?: BncrConversationContextEntry[];
   participants?: BncrParticipantRecord | null;
   isGroupChat?: boolean;
@@ -523,6 +525,7 @@ export function buildBncrStructuredContextFactsFromInboundParts(
   input: BncrStructuredContextFactsFromInboundPartsInput,
 ) {
   const mediaItems = Array.isArray(input.prepared.mediaItems) ? input.prepared.mediaItems : [];
+  const senderIsAdmin = input.suppressSenderIdentity ? undefined : input.parsed.isAdmin;
   const conversationHistoryContext = Array.isArray(input.conversationHistoryContext)
     ? input.conversationHistoryContext
     : [];
@@ -548,14 +551,14 @@ export function buildBncrStructuredContextFactsFromInboundParts(
     sender: {
       id: input.senderIdForContext,
       displayName: input.senderDisplayName,
-      userId: input.parsed.userId,
-      userName: input.parsed.userName,
+      userId: input.suppressSenderIdentity ? undefined : input.parsed.userId,
+      userName: input.suppressSenderIdentity ? undefined : input.parsed.userName,
       bridgeId: input.bridgeSenderId || input.parsed.bridgeId || input.parsed.clientId,
       bridgeName: input.bridgeSenderName || input.parsed.bridgeName,
-      isAdmin: input.parsed.isAdmin,
+      isAdmin: senderIsAdmin,
       isOwner: input.senderIsOwner === true ? true : undefined,
       isAuthorizedSender: input.senderIsAuthorized === true ? true : undefined,
-      role: input.senderIsOwner ? 'owner' : input.parsed.isAdmin ? 'admin' : undefined,
+      role: input.senderIsOwner ? 'owner' : senderIsAdmin ? 'admin' : undefined,
     },
     platform: input.parsed.platform,
     group: {

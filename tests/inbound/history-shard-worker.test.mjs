@@ -7,6 +7,7 @@ import {
   setConversationHistorySerialOwner,
 } from '../../src/messaging/inbound/conversation-history-serial.ts';
 import {
+  BNCR_HISTORY_SHARD_PAYLOAD_VERSION,
   parseBncrHistoryShardPayload,
   processBncrHistoryShardSlot,
   runBncrHistoryShardWithLeaseRenewal,
@@ -20,7 +21,7 @@ function buildHistoryShard(overrides = {}) {
     status: 'claimed',
     attempts: 1,
     payloadJson: JSON.stringify({
-      version: 2,
+      version: BNCR_HISTORY_SHARD_PAYLOAD_VERSION,
       historyKey: 'Primary:tgBot:10001',
       accountId: 'Primary',
       messageIds: ['h1', 'h2'],
@@ -90,6 +91,10 @@ function buildQueue() {
       return true;
     },
     completeHistoryShard: (shardId) => calls.push(`complete:${shardId}`),
+    discardHistoryShard: (shardId) => {
+      calls.push(`discard:${shardId}`);
+      return true;
+    },
   };
 }
 
@@ -160,6 +165,10 @@ test('parseBncrHistoryShardPayload rejects legacy payloads without replay data',
     () => parseBncrHistoryShardPayload('{"version":1}'),
     /unsupported history shard payload/,
   );
+  assert.throws(
+    () => parseBncrHistoryShardPayload('{"version":2,"historyKey":"legacy","dispatch":{}}'),
+    /unsupported history shard payload/,
+  );
 });
 
 test('history shard worker dispatches a claimed shard and completes cleanup', async () => {
@@ -210,6 +219,29 @@ test('history shard worker marks failed and does not complete on dispatch error'
   }
   assert.equal(caught, originalError);
   assert.deepEqual(queue.calls, ['processing:77', 'failed:77:Error: original upload failure']);
+});
+
+test('history shard worker discards an incompatible payload before dispatch', async () => {
+  resetConversationHistorySerialForTest();
+  const queue = buildQueue();
+  const shard = buildHistoryShard();
+  shard.payloadJson = JSON.stringify({
+    version: 2,
+    historyKey: 'Primary:tgBot:10001',
+    dispatch: {},
+  });
+  let dispatched = false;
+
+  await processBncrHistoryShardSlot({
+    shard,
+    historyShardQueue: queue,
+    runDispatch: async () => {
+      dispatched = true;
+    },
+  });
+
+  assert.equal(dispatched, false);
+  assert.deepEqual(queue.calls, ['discard:77']);
 });
 
 test('history shard worker aborts before dispatch when another owner holds the claim', async () => {

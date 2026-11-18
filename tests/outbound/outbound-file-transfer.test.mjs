@@ -77,6 +77,63 @@ test('MIME sniffing attempts a private destination and falls back to the URL ext
   }
 });
 
+test('MIME sniffing releases HEAD and bounds Range bodies before cancellation', async () => {
+  const bridge = createBridge();
+  const originalFetch = globalThis.fetch;
+  const released = [];
+  let pulls = 0;
+
+  try {
+    globalThis.fetch = async (_url, init) => {
+      if (init?.method === 'HEAD') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/octet-stream' }),
+          body: new ReadableStream({
+            cancel() {
+              released.push('head');
+            },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 206,
+        headers: new Headers(),
+        body: new ReadableStream(
+          {
+            pull(controller) {
+              pulls += 1;
+              const chunk = new Uint8Array(256);
+              if (pulls === 1) chunk.set([0x89, 0x50, 0x4e, 0x47]);
+              controller.enqueue(chunk);
+            },
+            cancel() {
+              released.push('range');
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      };
+    };
+
+    const result = await bridge.transferMediaToBncrClient({
+      accountId: 'Primary',
+      sessionKey: 'agent:orion:bncr:direct:demo',
+      route: { platform: 'tgBot', groupId: '-1001', userId: '10001' },
+      mediaUrl: 'http://127.0.0.1:9/private-sniff',
+    });
+
+    assert.equal(result.mimeType, 'image/png');
+    assert.deepEqual(released, ['head', 'range']);
+    assert.equal(pulls, 2, 'Range sniff stops after the 512 byte bound');
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanupBridge(bridge);
+  }
+});
+
 test('scene downloadMedia off is a default and a per-message true still downloads', async () => {
   const bridge = createBridge();
   const originalLoad = bridge.loadOutboundTransferMedia;

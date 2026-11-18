@@ -1,7 +1,13 @@
+import { redactBncrLogText } from '../../core/logging.ts';
+import {
+  classifyOutboundFailure,
+  OUTBOUND_FAILURE_KIND,
+} from '../../core/outbound-connection-health.ts';
 import type {
   BncrAckObservability,
   BncrExtendedOutboundDiagnostics,
   BncrOutboxIncidentSummary,
+  BncrOutboxIncidentType,
   BncrOutboxQueueDiagnostics,
   OutboxEntry,
 } from '../../core/types.ts';
@@ -53,8 +59,12 @@ export function buildOutboxIncidentSummary(
 ): BncrOutboxIncidentSummary {
   const pending = Math.max(0, Math.floor(finiteNumberOrNull(input.pending) || 0));
   const nowMs = finiteNumberOrNull(input.nowMs) || Date.now();
-  const lastPushError =
-    typeof input.lastPushError === 'string' && input.lastPushError ? input.lastPushError : null;
+  const trimmedLastPushError =
+    typeof input.lastPushError === 'string' ? input.lastPushError.trim() : '';
+  const rawLastPushError = trimmedLastPushError || null;
+  const lastPushError = rawLastPushError
+    ? redactBncrLogText(rawLastPushError).trim() || null
+    : null;
   const lastPrePushGuardSkipReason =
     typeof input.lastPrePushGuardSkipReason === 'string' && input.lastPrePushGuardSkipReason
       ? input.lastPrePushGuardSkipReason
@@ -76,7 +86,7 @@ export function buildOutboxIncidentSummary(
       'recovered',
     ].includes(adaptiveAckTimeoutReason);
 
-  let type = 'none';
+  let type: BncrOutboxIncidentType = 'none';
   let severity: 'ok' | 'warning' | 'critical' = 'ok';
   let recommendedAction = 'none';
 
@@ -89,14 +99,24 @@ export function buildOutboxIncidentSummary(
     severity = 'critical';
     recommendedAction = 'reconnect-bncr-client';
   } else if (pending > 0 && lastPrePushGuardSkipReason) {
-    type = lastPrePushGuardSkipReason;
+    type =
+      lastPrePushGuardSkipReason === 'no-gateway-context'
+        ? 'no-gateway-context'
+        : lastPrePushGuardSkipReason === 'no-active-connection'
+          ? 'no-active-outbound-connection'
+          : 'pre-push-absence';
     severity = 'warning';
     recommendedAction = 'inspect-pre-push-guard';
-  } else if (pending > 0 && lastPushError) {
-    type =
-      lastPushError.includes('ack') || lastPushError.includes('timeout')
-        ? 'ack-timeout'
-        : lastPushError;
+  } else if (pending > 0 && rawLastPushError) {
+    const normalizedError = rawLastPushError.toLowerCase().replace(/[_-]+/g, ' ');
+    const failureKind = classifyOutboundFailure({
+      error: rawLastPushError,
+      stage: 'broadcast',
+      explicitKind: normalizedError.includes('ack timeout')
+        ? OUTBOUND_FAILURE_KIND.ACK_TIMEOUT
+        : undefined,
+    });
+    type = failureKind === OUTBOUND_FAILURE_KIND.ACK_TIMEOUT ? 'ack-timeout' : failureKind;
     severity = type === 'ack-timeout' ? 'critical' : 'warning';
     recommendedAction = 'inspect-ack-and-route-state';
   } else if (pending > 0 && oldestPendingAgeMs !== null && oldestPendingAgeMs >= 120_000) {
@@ -220,7 +240,7 @@ export function buildOutboxQueueDiagnostics(args: {
     const pushAt = Number(entry.lastPushAt);
     if (Number.isFinite(pushAt) && (lastPushAt === null || pushAt > lastPushAt)) {
       lastPushAt = pushAt;
-      lastError = entry.lastError || null;
+      lastError = entry.lastError ? redactBncrLogText(entry.lastError).trim() || null : null;
     }
   }
 

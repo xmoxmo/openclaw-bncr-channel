@@ -1339,6 +1339,16 @@ test('admin mode drops non-admin inbound but still accumulates bot replies for o
 
   assert.equal(calls.turnRuns.length, 1);
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  const silentOutboundArgs = calls.builtContextArgs.find(
+    (args) => args.from === 'bncr-history-system',
+  );
+  assert.equal(silentOutboundArgs?.channelContext, undefined);
+  assert.equal(silentOutboundArgs?.extra.BncrStructuredContextFacts.sender.userId, undefined);
+  assert.equal(silentOutboundArgs?.extra.BncrStructuredContextFacts.sender.userName, undefined);
+  assert.equal(
+    silentOutboundArgs?.extra.BncrStructuredContextFacts.participants['bncr-history-system'],
+    undefined,
+  );
   assert.deepEqual(
     calls.turnRuns[0].ctxPayload.StructuredContextFacts.conversationContext.map(
       (entry) => entry.messageId,
@@ -1718,6 +1728,16 @@ test('dispatchBncrInbound flushes pending group history silently at the limit an
     ['测试4', '测试5'],
   );
   assert.equal(calls.turnRuns[0].ctxPayload.SenderId, 'bncr-history-system');
+  const silentOverflowArgs = calls.builtContextArgs.find(
+    (args) => args.from === 'bncr-history-system',
+  );
+  assert.equal(silentOverflowArgs?.channelContext, undefined);
+  assert.equal(silentOverflowArgs?.extra.BncrStructuredContextFacts.sender.userId, undefined);
+  assert.equal(silentOverflowArgs?.extra.BncrStructuredContextFacts.sender.userName, undefined);
+  assert.equal(
+    silentOverflowArgs?.extra.BncrStructuredContextFacts.participants['bncr-history-system'],
+    undefined,
+  );
   assert.match(
     String(calls.turnRuns[0].ctxPayload.RawBody || ''),
     /Output exactly NO_REPLY FROM AGENT\./,

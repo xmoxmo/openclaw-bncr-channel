@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildExtendedOutboundDiagnostics,
   buildOutboxIncidentSummary,
+  buildOutboxQueueDiagnostics,
 } from '../../src/messaging/outbound/diagnostics.ts';
 import { clampOutboxDrainDelay } from '../../src/messaging/outbound/queue-selectors.ts';
 
@@ -106,6 +107,82 @@ test('buildOutboxIncidentSummary preserves zero timestamp age calculations', () 
   assert.equal(summary.lastPushAgeMs, 10_000);
   assert.equal(summary.lastPrePushGuardSkipAgeMs, 10_000);
   assert.equal(summary.ack.lastLateAckAgeMs, 10_000);
+});
+
+test('outbound incident diagnostics redact URL and credential display fields', () => {
+  const summary = buildOutboxIncidentSummary({
+    pending: 1,
+    lastPushError: 'GET https://internal.example/private?access_token=secret failed',
+    hasGatewayContext: true,
+    activeOutboundConnection: true,
+    activeOutboundConnectionCount: 1,
+  });
+
+  assert.equal(summary.lastPushError, 'GET [redacted-url] failed');
+  assert.equal(summary.type, 'broadcast-failure');
+  assert.equal(summary.severity, 'warning');
+});
+
+test('outbox snapshot redacts the last push error without mutating persisted source', () => {
+  const raw = 'GET https://internal.example/private?access_token=secret failed';
+  const entry = {
+    messageId: 'message-1',
+    accountId: 'Primary',
+    route: {},
+    payload: {},
+    createdAt: 1,
+    lastPushAt: 2,
+    lastError: raw,
+  };
+
+  const snapshot = buildOutboxQueueDiagnostics({
+    accountId: 'Primary',
+    outboxEntries: [entry],
+    pendingAllAccounts: 1,
+    pushConnIds: ['connection-1'],
+  });
+
+  assert.equal(snapshot.lastPushError, 'GET [redacted-url] failed');
+  assert.equal(entry.lastError, raw);
+});
+
+test('blank error text does not fabricate a push-failure incident category', () => {
+  const summary = buildOutboxIncidentSummary({
+    pending: 1,
+    lastPushError: '   ',
+    hasGatewayContext: true,
+    activeOutboundConnection: true,
+    activeOutboundConnectionCount: 1,
+  });
+
+  assert.equal(summary.type, 'pending-outbox');
+  assert.equal(summary.lastPushError, null);
+});
+
+test('dynamic pre-push guard text cannot replace the categorical incident type', () => {
+  const summary = buildOutboxIncidentSummary({
+    pending: 1,
+    lastPrePushGuardSkipReason: 'dynamic upstream detail',
+    hasGatewayContext: true,
+    activeOutboundConnection: true,
+    activeOutboundConnectionCount: 1,
+  });
+
+  assert.equal(summary.type, 'pre-push-absence');
+  assert.equal(summary.lastPrePushGuardSkipReason, 'dynamic upstream detail');
+});
+
+test('outbound incident type stays categorical for dynamic error text', () => {
+  const summary = buildOutboxIncidentSummary({
+    pending: 1,
+    lastPushError: 'upstream rejected the invalid request',
+    hasGatewayContext: true,
+    activeOutboundConnection: true,
+    activeOutboundConnectionCount: 1,
+  });
+
+  assert.equal(summary.type, 'business-error');
+  assert.equal(summary.lastPushError, 'upstream rejected the invalid request');
 });
 
 test('buildOutboxIncidentSummary exposes stable incident schema and categories', () => {

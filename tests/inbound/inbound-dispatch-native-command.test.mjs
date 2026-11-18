@@ -2918,6 +2918,12 @@ test('native command honors admitted resolvedAgentId for group session routing',
   assert.equal(enqueueCalls.length, 1);
   assert.equal(enqueueCalls[0].sessionKey, 'agent:public:bncr:group:7467426f743a2d31303031');
   assert.equal(enqueueCalls[0].payload.replyToId, 'slash-help-public');
+  // Native command turns carry the same hook-visible channel metadata as
+  // ordinary messages so plugin identity resolution never falls back.
+  assert.deepEqual(calls.builtContextArgs[0].channelContext, {
+    chat: { id: '-1001', platform: 'bncr/tgBot', kind: 'group' },
+    sender: { id: '10001', name: 'Bncr:tgBot:-1001:0', userId: '10001' },
+  });
 });
 
 // ─── Private-chat whitelist semantics ────────────────────────────────────────

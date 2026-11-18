@@ -1,4 +1,5 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
+import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import type { OutboxEntry } from '../core/types.ts';
 import { buildBncrGatewayEventContext } from './gateway-event-context.ts';
 
@@ -142,7 +143,7 @@ export function createBncrMessageAckRuntime(runtime: {
 
     runtime.logInfo(
       'outbox',
-      `ack ${JSON.stringify({
+      `ack ${buildBncrDebugJsonMessage('message-ack', {
         accountId,
         messageId,
         ok: params?.ok !== false,

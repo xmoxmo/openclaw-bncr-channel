@@ -1,3 +1,4 @@
+import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import type { BncrRoute } from '../core/types.ts';
 
 export type BncrFileTransferLogsRuntime = {
@@ -29,7 +30,7 @@ export function createBncrFileTransferLogs(runtime: BncrFileTransferLogsRuntime)
   }) => {
     runtime.logInfo(
       'file-chunk-diag',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-chunk-diag', {
         bridge: runtime.bridgeId,
         accountId: args.accountId,
         sessionKey: args.sessionKey,
@@ -63,7 +64,7 @@ export function createBncrFileTransferLogs(runtime: BncrFileTransferLogsRuntime)
   }) => {
     runtime.logInfo(
       'file-transfer-start',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-transfer-start', {
         bridge: runtime.bridgeId,
         transferId: args.transferId,
         accountId: args.accountId,
@@ -93,7 +94,7 @@ export function createBncrFileTransferLogs(runtime: BncrFileTransferLogsRuntime)
   }) => {
     runtime.logInfo(
       'file-transfer-chunk-send',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-transfer-chunk-send', {
         bridge: runtime.bridgeId,
         transferId: args.transferId,
         accountId: args.accountId,
@@ -115,7 +116,7 @@ export function createBncrFileTransferLogs(runtime: BncrFileTransferLogsRuntime)
   }) => {
     runtime.logInfo(
       'file-transfer-chunk-ack',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-transfer-chunk-ack', {
         bridge: runtime.bridgeId,
         transferId: args.transferId,
         accountId: args.accountId,
@@ -135,7 +136,7 @@ export function createBncrFileTransferLogs(runtime: BncrFileTransferLogsRuntime)
   }) => {
     runtime.logWarn(
       'file-transfer-chunk-ack-fail',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-transfer-chunk-ack-fail', {
         bridge: runtime.bridgeId,
         transferId: args.transferId,
         accountId: args.accountId,
@@ -154,7 +155,7 @@ export function createBncrFileTransferLogs(runtime: BncrFileTransferLogsRuntime)
   }) => {
     runtime.logInfo(
       'file-transfer-complete-send',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-transfer-complete-send', {
         bridge: runtime.bridgeId,
         transferId: args.transferId,
         accountId: args.accountId,
@@ -171,7 +172,7 @@ export function createBncrFileTransferLogs(runtime: BncrFileTransferLogsRuntime)
   }) => {
     runtime.logInfo(
       'file-transfer-complete-ack',
-      JSON.stringify({
+      buildBncrDebugJsonMessage('file-transfer-complete-ack', {
         bridge: runtime.bridgeId,
         transferId: args.transferId,
         accountId: args.accountId,

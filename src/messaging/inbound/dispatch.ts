@@ -37,7 +37,10 @@ import {
   prepareBncrInboundDispatch,
   resolveBncrInboundConversation,
 } from './dispatch-prep.ts';
-import { runBncrHistoryShardWithLeaseRenewal } from './history-shard-worker.ts';
+import {
+  BNCR_HISTORY_SHARD_PAYLOAD_VERSION,
+  runBncrHistoryShardWithLeaseRenewal,
+} from './history-shard-worker.ts';
 import { isBncrStopCommandText } from './native-command.ts';
 import {
   type BncrOutboundReplayCache,
@@ -534,7 +537,7 @@ export async function dispatchBncrInbound(params: {
           historyKey,
           accountId,
           payloadJson: JSON.stringify({
-            version: 2,
+            version: BNCR_HISTORY_SHARD_PAYLOAD_VERSION,
             historyKey,
             accountId,
             messageIds: snapshotMessageIds,

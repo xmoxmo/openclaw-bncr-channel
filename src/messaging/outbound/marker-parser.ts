@@ -206,6 +206,24 @@ function hasMediaPathParams(params: Record<string, unknown>): boolean {
   return false;
 }
 
+async function fetchProbe(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function releaseProbeResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The transport may already be closed; preserve the probe result.
+  }
+}
+
 /**
  * Check whether a single media path (HTTP URL or local file) is reachable.
  *
@@ -224,30 +242,35 @@ async function probeMediaPath(raw: string): Promise<{
   // HTTP(S) URL — HEAD probe
   if (path.startsWith('http://') || path.startsWith('https://')) {
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-      const response = await fetch(path, {
+      const response = await fetchProbe(path, {
         method: 'HEAD',
-        signal: controller.signal,
         redirect: 'follow',
       });
-      clearTimeout(timer);
-      if (response.ok || response.status === 206) return { ok: true };
+      let probeReason = '';
+      try {
+        if (response.ok || response.status === 206) return { ok: true };
+        probeReason = `HEAD ${response.status}`;
+      } finally {
+        await releaseProbeResponse(response);
+      }
+
       // HEAD failed — try Range GET (first 4 bytes) as fallback.
       // Some CDNs / object stores reject HEAD but serve GET with Range.
-      const probeReason = `HEAD ${response.status}`;
       try {
-        const controller2 = new AbortController();
-        const timer2 = setTimeout(() => controller2.abort(), PROBE_TIMEOUT_MS);
-        const rangeResp = await fetch(path, {
+        const rangeResp = await fetchProbe(path, {
           method: 'GET',
           headers: { Range: 'bytes=0-3' },
-          signal: controller2.signal,
           redirect: 'follow',
         });
-        clearTimeout(timer2);
-        if (rangeResp.status === 206 || rangeResp.ok) return { ok: true }; // 206=Range ok, other 2xx=server reachable
-        return { ok: false, reason: `${probeReason}, Range GET ${rangeResp.status}` };
+        try {
+          if (rangeResp.status === 206 || rangeResp.ok) return { ok: true };
+          return {
+            ok: false,
+            reason: `${probeReason}, Range GET ${rangeResp.status}`,
+          };
+        } finally {
+          await releaseProbeResponse(rangeResp);
+        }
       } catch (err2: unknown) {
         const reason2 = err2 instanceof Error ? err2.message : String(err2);
         return { ok: false, reason: `${probeReason}, Range GET error: ${reason2}` };

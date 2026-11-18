@@ -74,6 +74,7 @@ const requiredSourceFiles = [
   'src/messaging/inbound/dispatch-prep.ts',
   'src/messaging/inbound/dispatch.ts',
   'src/messaging/inbound/gate.ts',
+  'src/messaging/inbound/hook-context.ts',
   'src/messaging/inbound/conversation-history.ts',
   'src/messaging/inbound/conversation-history-serial.ts',
   'src/messaging/inbound/history-shard-worker.ts',

@@ -314,8 +314,11 @@ test('file ack debug logs include transfer owner context', async () => {
     const resolveLog = logs.find((item) => item.scope === 'file-ack-resolve');
     assert.equal(JSON.parse(waitLog.message).ownerConnId, 'conn-owner');
     assert.equal(JSON.parse(waitLog.message).ownerClientId, 'client-owner');
-    assert.equal(JSON.parse(resolveLog.message).ownerConnId, 'conn-owner');
-    assert.equal(JSON.parse(resolveLog.message).ownerClientId, 'client-owner');
+    const resolvePayload = JSON.parse(
+      resolveLog.message.slice(resolveLog.message.indexOf(' ') + 1),
+    );
+    assert.equal(resolvePayload.ownerConnId, 'conn-owner');
+    assert.equal(resolvePayload.ownerClientId, 'client-owner');
   } finally {
     bridge.logInfo = originalLogInfo;
     cleanupBridge(bridge);

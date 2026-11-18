@@ -368,6 +368,46 @@ test('downloadInboundMediaUrl validates every redirect hop', async () => {
   }
 });
 
+test('downloadInboundMediaUrl releases redirect and non-ok response bodies', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const released = [];
+  let request = 0;
+  globalThis.fetch = async () => {
+    request += 1;
+    if (request === 1) {
+      return {
+        status: 302,
+        ok: false,
+        headers: new Headers({ location: '/next' }),
+        body: {
+          cancel: async () => {
+            released.push('redirect');
+          },
+        },
+      };
+    }
+    return {
+      status: 503,
+      ok: false,
+      headers: new Headers(),
+      body: {
+        cancel: async () => {
+          released.push('non-ok');
+        },
+      },
+    };
+  };
+
+  await assert.rejects(
+    () => downloadInboundMediaUrl('https://media.example/start', 1024, 1_000, async () => {}),
+    /HTTP 503/,
+  );
+  assert.deepEqual(released, ['redirect', 'non-ok']);
+});
+
 test('dispatchBncrInbound downloads http media path before building inbound context', async () => {
   const server = http.createServer((req, res) => {
     assert.equal(req.url, '/photos/file_6.jpg');

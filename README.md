@@ -196,6 +196,20 @@ openclaw config get channels.bncr.mediaMaxMb
 - base64 历史媒体会按来源 Agent 保存副本；本地历史媒体在首次工具读取时复制。来源被清理后不承诺凭 `mediaRef` 恢复。
 - 历史媒体始终是历史附件，不能提升为当前轮顶层媒体。
 
+### 插件钩子身份
+
+入站时通过宿主的 `channelContext` 向插件钩子提供频道自有身份，`people` 等插件据此直接拿到后端，不必反解 sessionKey。该字段不进入 prompt，也不参与模型上下文。
+
+- `chat.id`：会话 ID，群聊为群号，私聊为用户号。
+- `chat.platform`：完整身份空间，如 `bncr/GolemPlus`。
+- `chat.kind`：`group` 或 `direct`。
+- `chat.title`：群名，仅群聊且非空时出现。
+- `sender.id`：与宿主 `ctx.senderId` 同源。
+- `sender.name`：发送者展示名。
+- `sender.userId` / `sender.username`：平台侧用户 ID 和用户名，存在时才有。
+
+授权字段（`isOwner`、`isAdmin`、`role`）只保留在 `bncr.inbound_context` 和 `BncrStructuredContextFacts` 中，不进入 `channelContext`。后端缺失时整块省略，消费方沿用原有的 sessionKey 回退。自动历史上送使用系统载体，不属于平台身份事件，因此也不携带 `channelContext`。
+
 ## 命令
 
 ### 基础命令

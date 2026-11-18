@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   extractConsumptionFields,
   parseBncrMarker,
+  resolveMarkerStripDecision,
 } from '../../src/messaging/outbound/marker-parser.ts';
 
 test('parseBncrMarker: no marker returns original text', () => {
@@ -162,4 +163,31 @@ test('parseBncrMarker: incomplete then complete keeps incomplete only', () => {
   // First incomplete left; second complete stripped
   assert.equal(result.cleanText, 'broken [BncrParam:{"key":"val"} still done');
   assert.deepEqual(result.params, { ok: true });
+});
+
+test('media probe releases HEAD and Range fallback responses', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const released = [];
+  globalThis.fetch = async (_url, init) => {
+    const method = init?.method;
+    return {
+      ok: method === 'GET',
+      status: method === 'GET' ? 200 : 404,
+      body: {
+        cancel: async () => {
+          released.push(method);
+        },
+      },
+    };
+  };
+
+  const result = await resolveMarkerStripDecision(
+    'caption [BncrParam:{"path":"https://media.example/private"}]',
+  );
+
+  assert.equal(result.cleanText, 'caption');
+  assert.deepEqual(released, ['HEAD', 'GET']);
 });

@@ -19,6 +19,7 @@ import type {
   BncrPreparedInboundSessionContext,
   ParsedInbound,
 } from './dispatch-prep.ts';
+import { buildBncrHookChannelContext } from './hook-context.ts';
 
 function dedupeBncrTurnMedia(entries: readonly BncrHistoryMediaEntry[]): BncrHistoryMediaEntry[] {
   const seen = new Set<string>();
@@ -35,6 +36,7 @@ function dedupeBncrTurnMedia(entries: readonly BncrHistoryMediaEntry[]): BncrHis
 function buildBncrParticipantsMap(args: {
   entries: readonly BncrHistoryEntry[];
   parsed: ParsedInbound;
+  includeCurrentSender: boolean;
   currentSenderId: string;
   currentSenderName: string;
   currentSenderUsername?: string;
@@ -67,16 +69,18 @@ function buildBncrParticipantsMap(args: {
       displayName?: string;
     }
   > = {};
-  map[args.currentSenderId] = {
-    name: args.currentSenderName,
-    ...(args.currentSenderUsername ? { username: args.currentSenderUsername } : {}),
-    isBot: false,
-    ...(args.currentSenderIsAdmin ? { isAdmin: true } : {}),
-    ...(args.currentSenderIsOwner ? { isOwner: true } : {}),
-    ...(args.currentSenderIsAuthorized ? { isAuthorizedSender: true } : {}),
-    role: args.currentSenderIsOwner ? 'owner' : args.currentSenderIsAdmin ? 'admin' : 'user',
-    displayName: args.currentSenderName,
-  };
+  if (args.includeCurrentSender) {
+    map[args.currentSenderId] = {
+      name: args.currentSenderName,
+      ...(args.currentSenderUsername ? { username: args.currentSenderUsername } : {}),
+      isBot: false,
+      ...(args.currentSenderIsAdmin ? { isAdmin: true } : {}),
+      ...(args.currentSenderIsOwner ? { isOwner: true } : {}),
+      ...(args.currentSenderIsAuthorized ? { isAuthorizedSender: true } : {}),
+      role: args.currentSenderIsOwner ? 'owner' : args.currentSenderIsAdmin ? 'admin' : 'user',
+      displayName: args.currentSenderName,
+    };
+  }
   for (const entry of args.entries) {
     if (!entry.senderId || map[entry.senderId]) continue;
     const isBot = entry.role === 'assistant';
@@ -189,7 +193,13 @@ export async function buildBncrInboundTurnContext(args: {
         body: effectiveRawBody,
       })
     : prepared.body;
-  const senderIsOwner = parsed.isAdmin === true || Boolean(ownerAllowFrom?.length);
+  // A silent history carrier is a synthetic system turn. Its triggering
+  // message may have come from an admin, but that identity and authority do
+  // not transfer to the carrier or to any other context surface.
+  const effectiveOwnerAllowFrom = silentHistoryFlush ? undefined : ownerAllowFrom;
+  const senderIsOwner =
+    silentHistoryFlush === false &&
+    (parsed.isAdmin === true || Boolean(effectiveOwnerAllowFrom?.length));
   const senderIsAuthorized = senderIsOwner;
   const inboundHistory = undefined;
   const structuredContextEntries = shouldDispatch
@@ -223,10 +233,11 @@ export async function buildBncrInboundTurnContext(args: {
     ? buildBncrParticipantsMap({
         entries: contextEntries,
         parsed,
+        includeCurrentSender: !silentHistoryFlush,
         currentSenderId: effectiveSenderId,
         currentSenderName: effectiveSenderDisplayName,
-        currentSenderUsername: parsed.userName,
-        currentSenderIsAdmin: parsed.isAdmin === true,
+        currentSenderUsername: silentHistoryFlush ? undefined : parsed.userName,
+        currentSenderIsAdmin: silentHistoryFlush ? false : parsed.isAdmin === true,
         currentSenderIsOwner: senderIsOwner,
         currentSenderIsAuthorized: senderIsAuthorized,
       })
@@ -246,6 +257,7 @@ export async function buildBncrInboundTurnContext(args: {
     bridgeSenderName,
     senderIsOwner,
     senderIsAuthorized,
+    suppressSenderIdentity: silentHistoryFlush,
     conversationHistoryContext: structuredContextEntries,
     participants,
     isGroupChat,
@@ -269,7 +281,7 @@ export async function buildBncrInboundTurnContext(args: {
   ];
   const platformWantsReply = parsed.shouldRespond === true;
   const wasMentioned = parsed.isBotMentioned === true || platformWantsReply;
-  const isAuthorizedTextCommand = Boolean(ownerAllowFrom?.length);
+  const isAuthorizedTextCommand = Boolean(effectiveOwnerAllowFrom?.length);
   const bodyForAgent = typeof effectiveBody === 'string' ? effectiveBody : prepared.body;
   const currentTurnMedia = (silentHistoryFlush ? [] : prepared.mediaItems).flatMap((item) =>
     item.attachmentScope === 'current' && item.path
@@ -285,6 +297,24 @@ export async function buildBncrInboundTurnContext(args: {
       : [],
   );
   const media = dedupeBncrTurnMedia(currentTurnMedia);
+
+  // Hook-visible channel metadata. Kept separate from the prompt-visible
+  // facts above so plugins (people) can resolve the backend without parsing
+  // prompt text or sessionKey hex. A silent history carrier is a synthetic
+  // system turn, not a platform identity event; retaining the carrier's user
+  // ids here would let hooks record a system turn under the wrong account.
+  const hookChannelContext = silentHistoryFlush
+    ? undefined
+    : buildBncrHookChannelContext({
+        channelId,
+        platform: parsed.platform,
+        peer: { kind: peer.kind, id: peer.id },
+        groupName: parsed.groupName,
+        senderId: effectiveSenderId,
+        senderName: effectiveSenderDisplayName,
+        userId: parsed.userId,
+        userName: parsed.userName,
+      });
 
   return Promise.resolve(
     resolveBncrChannelInboundRuntime(api).buildContext({
@@ -345,6 +375,7 @@ export async function buildBncrInboundTurnContext(args: {
           }
         : {}),
       media,
+      ...(hookChannelContext ? { channelContext: hookChannelContext } : {}),
       access: {
         mentions: {
           canDetectMention: true,
@@ -368,7 +399,7 @@ export async function buildBncrInboundTurnContext(args: {
       extra: {
         OriginatingChannel: channelId,
         ...(parsed.isGroup === true && parsed.groupName ? { GroupSubject: parsed.groupName } : {}),
-        ...(ownerAllowFrom?.length ? { OwnerAllowFrom: ownerAllowFrom } : {}),
+        ...(effectiveOwnerAllowFrom?.length ? { OwnerAllowFrom: effectiveOwnerAllowFrom } : {}),
         BncrStructuredContextFacts: structuredContextFacts,
         StructuredContextFacts: structuredContextFacts,
       },
@@ -381,7 +412,7 @@ export async function buildBncrInboundTurnContext(args: {
       fromOverride: effectiveSenderId,
       resolution,
       rawBody: effectiveRawBody,
-      ownerAllowFrom,
+      ownerAllowFrom: effectiveOwnerAllowFrom,
       isAuthorizedTextCommand,
     }),
   );

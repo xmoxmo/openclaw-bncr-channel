@@ -2150,6 +2150,37 @@ test('createBncrStateStore restores terminal shard messages into the active wind
   await rm(dir, { recursive: true, force: true });
 });
 
+test('startup recovery can reclaim dead bridge owners while runtime lease recovery stays owner-scoped', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-state-sqlite-foreign-owner-'));
+  const statePath = join(dir, 'state.json');
+  const dbPath = join(dir, 'state.sqlite3');
+  const { runtime, store } = createStore();
+  runtime.getStatePath = () => statePath;
+  const sqlite = createBncrSqliteStateDatabase(dbPath);
+  runtime.sqliteState = sqlite;
+
+  await writeFile(
+    statePath,
+    JSON.stringify({ outbox: [], deadLetter: [], conversationHistories: [] }),
+  );
+  await store.loadState();
+  const { shardId } = store.createHistoryShard({
+    historyKey: 'Primary:tgBot:10001',
+    payloadJson: '{"version":3,"historyKey":"owner-test","dispatch":{}}',
+    messageIds: ['owner-test'],
+    bufferKeys: [],
+  });
+  store.historyShardQueue.markHistoryShardProcessing(shardId, '999999-dead:1700000000000:old');
+
+  assert.equal(await store.recoverInFlightHistoryShards(), 0);
+  assert.equal(sqlite.listHistoryShards()[0].status, 'processing');
+  assert.equal(await store.recoverInFlightHistoryShards([], { includeForeignOwners: true }), 1);
+  assert.equal(sqlite.listHistoryShards()[0].status, 'queued');
+
+  sqlite.close();
+  await rm(dir, { recursive: true, force: true });
+});
+
 test('createBncrStateStore persists outbound mutations into sqlite during flush', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-state-sqlite-outbox-flush-'));
   const statePath = join(dir, 'state.json');

@@ -1,5 +1,6 @@
 import type { GatewayRequestHandlerOptions } from 'openclaw/plugin-sdk/core';
 import { runDetachedWebhookWork } from 'openclaw/plugin-sdk/webhook-request-guards';
+import { buildBncrDebugJsonMessage } from '../core/logging.ts';
 import type { BncrConnection, BncrRoute } from '../core/types.ts';
 import type { BncrConversationHistoryMap } from '../messaging/inbound/conversation-history.ts';
 import type { BncrOutboundReplayCache } from '../messaging/inbound/outbound-replay-cache.ts';
@@ -265,7 +266,7 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
       );
       runtime.logInfo(
         'inbound',
-        JSON.stringify({
+        buildBncrDebugJsonMessage('inbound-accepted', {
           accountId,
           msgId: msgId ?? null,
           platform,
@@ -274,7 +275,7 @@ export function createBncrInboundHandlers(runtime: Omit<BncrInboundHandlersRunti
           sessionKey,
           msgType,
           textLen: inboundText.length,
-          textPreview: inboundText.slice(0, 120),
+          textPreview: inboundText,
           hasMedia,
         }),
         { debugOnly: true },

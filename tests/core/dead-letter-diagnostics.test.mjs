@@ -142,6 +142,31 @@ test('summarizeDeadLetterEntry formats stable inspect output without mutating en
   assert.equal(entry.payload.message.msg.includes('\n'), true);
 });
 
+test('dead-letter diagnostics redact URLs and credentials from error display fields', () => {
+  const entry = {
+    messageId: 'dead-secret',
+    accountId: 'Primary',
+    sessionKey: 'agent:main:bncr:direct:74673a313a32',
+    route: { platform: 'tg', groupId: '1', userId: '2' },
+    payload: {},
+    createdAt: 1,
+    retryCount: 0,
+    lastError: 'GET https://internal.example/private?access_token=secret failed',
+  };
+
+  const summary = summarizeDeadLetterEntry(entry);
+  const diagnostics = buildDeadLetterDiagnostics({
+    entries: [entry],
+    allAccountsTotal: 1,
+    sinceStart: 1,
+    cappedAt: 10,
+  });
+
+  assert.equal(summary.lastError, 'GET [redacted-url] failed');
+  assert.deepEqual(diagnostics.topReasons, [{ reason: 'GET [redacted-url] failed', count: 1 }]);
+  assert.equal(entry.lastError, 'GET https://internal.example/private?access_token=secret failed');
+});
+
 test('filterDeadLetterEntries filters by normalized account, reason, and olderThan', () => {
   assert.deepEqual(
     filterDeadLetterEntries({

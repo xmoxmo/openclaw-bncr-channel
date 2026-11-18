@@ -17,11 +17,21 @@ const TEXT_PAYLOAD_KEYS = new Set([
   'text',
   'textPreview',
 ]);
-const MEDIA_PAYLOAD_KEYS = new Set(['mediaUrl', 'path']);
+const DIAGNOSTIC_PAYLOAD_KEYS = new Set(['error', 'errorMessage', 'lastError']);
+const MEDIA_PAYLOAD_KEYS = new Set(['fileName', 'mediaUrl', 'path']);
 const MEDIA_LIST_PAYLOAD_KEYS = new Set(['mediaUrls', 'mediaList']);
-const SENSITIVE_DEBUG_KEY_PATTERN =
-  /(?:authorization|cookie|password|secret|token|api[-_]?key|access[-_]?key|refresh[-_]?key)/i;
+const SENSITIVE_KEY_CORE =
+  '(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|access[-_]?key|refresh[-_]?key|private[-_]?key)';
+const SENSITIVE_DEBUG_KEY_PATTERN = new RegExp(SENSITIVE_KEY_CORE, 'i');
 const REDACTED_DEBUG_VALUE = '[redacted]';
+const URL_IN_LOG_PATTERN = /\bhttps?:\/\/[^\s|"'<>]+/gi;
+const BEARER_IN_LOG_PATTERN = /\bBearer\s+[^\s|,;"']+/gi;
+const SENSITIVE_ASSIGNMENT_PATTERN = new RegExp(
+  '(\\b[A-Za-z0-9_.-]*' +
+    SENSITIVE_KEY_CORE +
+    '[A-Za-z0-9_.-]*\\s*[=:]\\s*)(?:"[^"]*"|\'[^\']*\'|[^\\s|,;&]+)',
+  'gi',
+);
 
 type DebugGate = () => boolean;
 
@@ -50,15 +60,22 @@ function emitConsole(method: ConsoleMethod, line: string) {
   console.log(line);
 }
 
+export function redactBncrLogText(raw: string | undefined) {
+  return String(raw || '')
+    .replace(URL_IN_LOG_PATTERN, '[redacted-url]')
+    .replace(BEARER_IN_LOG_PATTERN, 'Bearer [redacted]')
+    .replace(SENSITIVE_ASSIGNMENT_PATTERN, '$1[redacted]');
+}
+
 export function normalizeBncrLogLine(raw: string | undefined) {
-  const text = String(raw || '').trim();
+  const text = redactBncrLogText(raw).trim();
   if (!text) return BNCR_PREFIX;
   return text.startsWith(BNCR_PREFIX) ? text : `${BNCR_PREFIX} ${text}`;
 }
 
 export function formatBncrLogLine(scope: string | undefined, message: string | undefined) {
   const normalizedScope = String(scope || '').trim();
-  const normalizedMessage = String(message || '').trim();
+  const normalizedMessage = redactBncrLogText(message).trim();
   const prefix = normalizedScope ? `${BNCR_PREFIX} ${normalizedScope}` : BNCR_PREFIX;
   return normalizedMessage ? `${prefix} ${normalizedMessage}` : prefix;
 }
@@ -100,10 +117,21 @@ function summarizeDebugMediaValue(raw: string) {
   };
 }
 
+function summarizeDebugDiagnosticValue(raw: string) {
+  const compact = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return {
+    length: compact.length,
+    sha256: shortHash(compact),
+  };
+}
+
 function sanitizeDebugValue(key: string, value: unknown): unknown {
   if (SENSITIVE_DEBUG_KEY_PATTERN.test(key)) return REDACTED_DEBUG_VALUE;
   if (typeof value === 'string') {
     if (TEXT_PAYLOAD_KEYS.has(key)) return summarizeDebugTextValue(value);
+    if (DIAGNOSTIC_PAYLOAD_KEYS.has(key)) return summarizeDebugDiagnosticValue(value);
     if (MEDIA_PAYLOAD_KEYS.has(key)) return summarizeDebugMediaValue(value);
     return value;
   }

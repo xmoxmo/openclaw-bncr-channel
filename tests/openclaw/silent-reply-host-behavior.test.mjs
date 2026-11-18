@@ -16,7 +16,8 @@ import { isSilentReplyText } from 'openclaw/plugin-sdk/reply-runtime';
 test('[HostSilentReply] bare NO_REPLY is silent on the host', () => {
   assert.equal(isSilentReplyText('NO_REPLY'), true);
   assert.equal(isSilentReplyText('no_reply'), true);
-  assert.equal(isSilentReplyText('NO_REPLY.'), true);
+  // OpenClaw 2026.11.5 keeps punctuation-bearing text deliverable.
+  assert.equal(isSilentReplyText('NO_REPLY.'), false);
 });
 
 test('[HostSilentReply] NO_REPLY FROM AGENT marker is NOT silent on the host', () => {

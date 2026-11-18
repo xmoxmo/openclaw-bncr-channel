@@ -57,6 +57,7 @@ import {
 } from './messaging/inbound/conversation-history-serial.ts';
 import { dispatchBncrOutboundHistoryFlush } from './messaging/inbound/dispatch.ts';
 import {
+  BNCR_HISTORY_SHARD_PAYLOAD_VERSION,
   type BncrHistoryShardDispatchPayload,
   processBncrHistoryShardSlot,
 } from './messaging/inbound/history-shard-worker.ts';
@@ -1279,7 +1280,19 @@ class BncrBridgeRuntime {
       'runtime-restart',
       `${this.bridgeId}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`,
     );
-    await this.stateStore.recoverInFlightHistoryShards(activeHistoryKeys);
+    const discardedHistoryShards = await this.stateStore.discardHistoryShardsWithoutPayloadVersion(
+      BNCR_HISTORY_SHARD_PAYLOAD_VERSION,
+      activeHistoryKeys,
+    );
+    if (discardedHistoryShards > 0) {
+      this.logWarn(
+        'inbound',
+        `history shard incompatible payload discarded|count=${discardedHistoryShards}|requiredVersion=${BNCR_HISTORY_SHARD_PAYLOAD_VERSION}`,
+      );
+    }
+    await this.stateStore.recoverInFlightHistoryShards(activeHistoryKeys, {
+      includeForeignOwners: true,
+    });
     await this.stateStore.loadState(activeHistoryKeys);
   }
 

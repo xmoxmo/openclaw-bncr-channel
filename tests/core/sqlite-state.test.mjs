@@ -1244,6 +1244,82 @@ test('startup recovery only resets shards owned by the current bridge or legacy 
   }
 });
 
+test('startup payload contract discards incompatible shards but preserves active history keys', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-shard-payload-version-'));
+  try {
+    const db = createBncrSqliteStateDatabase(join(dir, 'bncr.sqlite3'));
+    db.importControlState(createEmptyBncrSqliteControlState(), { storeMode: 'dual' });
+    const fixture = buildHistoryState();
+    fixture.historyBuckets.push({
+      key: 'Primary:tgBot:20002',
+      entries: [
+        {
+          sender: 'alice',
+          senderId: '20002',
+          role: 'user',
+          body: 'preserved active history',
+          timestamp: 130,
+          messageId: 'legacy-active',
+        },
+      ],
+    });
+    db.importHistoryState(fixture.historyBuckets, fixture.replayBuckets);
+
+    db.createHistoryShard({
+      historyKey: 'Primary:tgBot:10001',
+      payloadJson: '{"version":2,"historyKey":"legacy","dispatch":{}}',
+      messageIds: ['h1', 'h2'],
+      bufferKeys: [],
+    });
+    db.createHistoryShard({
+      historyKey: 'Primary:tgBot:20002',
+      payloadJson: '{"version":2,"historyKey":"legacy-active","dispatch":{}}',
+      messageIds: ['legacy-active'],
+      bufferKeys: [],
+    });
+    db.createHistoryShard({
+      historyKey: 'Primary:tgBot:30003',
+      payloadJson: '{"version":3,"historyKey":"current","dispatch":{}}',
+      messageIds: ['current'],
+      bufferKeys: [],
+    });
+
+    assert.equal(db.discardHistoryShardsWithoutPayloadVersion(3, ['Primary:tgBot:20002']), 1);
+    assert.deepEqual(
+      db
+        .listHistoryShards()
+        .map((row) => row.historyKey)
+        .sort(),
+      ['Primary:tgBot:20002', 'Primary:tgBot:30003'],
+    );
+    const raw = new DatabaseSync(db.getPath());
+    try {
+      const discardedRows = raw
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM conversation_messages
+           WHERE history_key = 'Primary:tgBot:10001'`,
+        )
+        .get();
+      assert.equal(Number(discardedRows.count), 0);
+      const preservedRows = raw
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM conversation_messages
+           WHERE history_key = 'Primary:tgBot:20002'
+             AND message_id = 'legacy-active'`,
+        )
+        .get();
+      assert.equal(Number(preservedRows.count), 1);
+    } finally {
+      raw.close();
+    }
+    db.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('loadHistoryState recovery respects the active bridge owner', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bncr-sqlite-load-owner-'));
   let currentTime = 1_000;

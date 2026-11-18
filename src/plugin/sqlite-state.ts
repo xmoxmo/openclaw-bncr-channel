@@ -112,6 +112,7 @@ export type BncrHistoryShardQueue = {
   markHistoryShardCompleted: (shardId: number, owner?: string) => boolean;
   renewHistoryShardLease: (shardId: number, owner?: string) => boolean;
   completeHistoryShard: (shardId: number, owner?: string) => void;
+  discardHistoryShard: (shardId: number, owner?: string) => boolean;
 };
 
 export type BncrSqliteStateDatabase = {
@@ -169,6 +170,11 @@ export type BncrSqliteStateDatabase = {
   markHistoryShardCompleted: (shardId: number, owner?: string) => boolean;
   renewHistoryShardLease: (shardId: number, owner?: string) => boolean;
   completeHistoryShard: (shardId: number, owner?: string) => void;
+  discardHistoryShard: (shardId: number, owner?: string) => boolean;
+  discardHistoryShardsWithoutPayloadVersion: (
+    version: number,
+    skipHistoryKeys?: readonly string[],
+  ) => number;
   recoverHistoryShards: (skipHistoryKeys?: readonly string[], owner?: string) => number;
   recoverInFlightHistoryShards: (skipHistoryKeys?: readonly string[], owner?: string) => number;
   restoreTerminalHistoryShardsToActive: () => BncrSqliteHistoryState;
@@ -1709,15 +1715,20 @@ function cleanupCompletedHistoryShards(db: DatabaseSync, timestamp: number = Dat
     if (completed.length === 0) {
       return 0;
     }
-    const deleteMessages = db.prepare('DELETE FROM conversation_messages WHERE shard_id = ?');
-    const deleteShard = db.prepare('DELETE FROM history_shards WHERE id = ?');
     for (const id of completed) {
-      recordConsumedHistoryShardMessages(db, id, timestamp);
-      deleteMessages.run(id);
-      deleteShard.run(id);
+      finalizeHistoryShard(db, id, timestamp);
     }
     return completed.length;
   });
+}
+
+function finalizeHistoryShard(db: DatabaseSync, shardId: number, timestamp: number): void {
+  // A shard can end by successful upload or by an incompatible payload. Both
+  // terminal paths must leave the same durable result: tombstone consumed
+  // message ids, remove shard-owned message rows, then remove the shard.
+  recordConsumedHistoryShardMessages(db, shardId, timestamp);
+  db.prepare('DELETE FROM conversation_messages WHERE shard_id = ?').run(shardId);
+  db.prepare('DELETE FROM history_shards WHERE id = ?').run(shardId);
 }
 
 function recordConsumedHistoryShardMessages(
@@ -2853,9 +2864,7 @@ export function createBncrSqliteStateDatabase(
         ) {
           return;
         }
-        recordConsumedHistoryShardMessages(db, shardId, now());
-        db.prepare('DELETE FROM conversation_messages WHERE shard_id = ?').run(shardId);
-        db.prepare('DELETE FROM history_shards WHERE id = ?').run(shardId);
+        finalizeHistoryShard(db, shardId, now());
       });
     } catch (error) {
       if (!markedCompleted) {
@@ -2869,9 +2878,48 @@ export function createBncrSqliteStateDatabase(
     }
   }
 
+  function discardHistoryShard(shardId: number, owner?: string): boolean {
+    return runWriteTransaction(db, () => {
+      const row = db
+        .prepare('SELECT status, claim_owner FROM history_shards WHERE id = ?')
+        .get(shardId) as { status: string; claim_owner: string | null } | undefined;
+      if (!row || (owner && row.claim_owner && row.claim_owner !== owner)) return false;
+      finalizeHistoryShard(db, shardId, now());
+      return true;
+    });
+  }
+
   function recoverHistoryShards(skipHistoryKeys: readonly string[] = [], owner?: string): number {
     const skipped = normalizeHistoryKeySkipList(skipHistoryKeys);
     return recoverHistoryShardsWithSkip(skipped, owner);
+  }
+
+  function discardHistoryShardsWithoutPayloadVersion(
+    version: number,
+    skipHistoryKeys: readonly string[] = [],
+  ): number {
+    const skipped = normalizeHistoryKeySkipList(skipHistoryKeys);
+    const skipCondition = buildHistoryKeySkipCondition(skipped);
+    return runWriteTransaction(db, () => {
+      const rows = db
+        .prepare(`SELECT id, payload_json FROM history_shards WHERE 1 = 1${skipCondition}`)
+        .all(...skipped) as Array<{ id: number; payload_json: string }>;
+      const discardedIds = rows.flatMap((row) => {
+        let payloadVersion: unknown;
+        try {
+          payloadVersion = (JSON.parse(row.payload_json) as { version?: unknown }).version;
+        } catch {
+          return [row.id];
+        }
+        return payloadVersion === version ? [] : [row.id];
+      });
+      if (discardedIds.length === 0) return 0;
+      const timestamp = now();
+      for (const shardId of discardedIds) {
+        finalizeHistoryShard(db, shardId, timestamp);
+      }
+      return discardedIds.length;
+    });
   }
 
   function normalizeHistoryKeySkipList(skipHistoryKeys: readonly string[] | undefined): string[] {
@@ -3149,6 +3197,8 @@ export function createBncrSqliteStateDatabase(
     markHistoryShardCompleted,
     renewHistoryShardLease,
     completeHistoryShard,
+    discardHistoryShard,
+    discardHistoryShardsWithoutPayloadVersion,
     recoverHistoryShards,
     recoverInFlightHistoryShards,
     restoreTerminalHistoryShardsToActive: () => restoreTerminalHistoryShardsToActive(db, now()),

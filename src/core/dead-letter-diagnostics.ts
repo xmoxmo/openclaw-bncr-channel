@@ -1,4 +1,4 @@
-import { summarizeBncrTextPreview } from './logging.ts';
+import { redactBncrLogText as redactSensitiveText, summarizeBncrTextPreview } from './logging.ts';
 import { formatDisplayScope } from './targets.ts';
 import type {
   BncrDeadLetterDiagnosticsSummary,
@@ -31,7 +31,8 @@ export function buildDeadLetterDiagnostics(options: BuildDeadLetterDiagnosticsOp
   let newestAt: number | null = null;
 
   for (const entry of options.entries) {
-    const reason = asString(entry.lastError || 'unknown').trim() || 'unknown';
+    const reason =
+      redactSensitiveText(asString(entry.lastError || 'unknown').trim()).trim() || 'unknown';
     reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
     const createdAt = Number(entry.createdAt);
     if (Number.isFinite(createdAt)) {
@@ -92,7 +93,7 @@ export function summarizeDeadLetterEntry(entry: OutboxEntry) {
     kind: asString(msg.type || 'message'),
     createdAt: Number.isFinite(Number(entry.createdAt)) ? Number(entry.createdAt) : null,
     retryCount: Number.isFinite(Number(entry.retryCount)) ? Number(entry.retryCount) : 0,
-    lastError: entry.lastError || null,
+    lastError: entry.lastError ? redactSensitiveText(entry.lastError).trim() || null : null,
     textPreview: summarizeBncrTextPreview(text, 24),
   } satisfies BncrDeadLetterEntrySummary;
 }
